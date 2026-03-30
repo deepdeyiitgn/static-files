@@ -45,59 +45,16 @@ Go to your new Space's **Settings** -> **Variables and secrets** and add these S
 
 ---
 
-Bhai, tera `footer-extras.js` maine check kar liya! Usme tere saare social media aur project links (Instagram, GitHub, Discord, YouTube, Wiki, aur Study Clock) diye hue hain. 
-
-In sabhi links ke liye **308 Permanent Redirect** routes banana bohot aasan hai. Tujhe bas apne `main.py` file mein, jahan tere baaki UI/Static routes hain (sabse niche `@app.get("/")` se theek upar), ye naya code block paste karna hai.
-
-### 1. `main.py` mein ye code add kar:
-
-```python
-# ==========================================
-# 8. SOCIAL MEDIA & QUICK REDIRECTS (308)
-# ==========================================
-@app.get("/instagram")
-async def redirect_instagram():
-    return RedirectResponse(url="https://www.instagram.com/deepdey.official", status_code=308)
-
-@app.get("/github")
-async def redirect_github():
-    return RedirectResponse(url="https://github.com/deepdeyiitgn", status_code=308)
-
-@app.get("/discord")
-async def redirect_discord():
-    return RedirectResponse(url="https://discord.com/invite/t6ZKNw556n", status_code=308)
-
-@app.get("/youtube")
-async def redirect_youtube():
-    return RedirectResponse(url="https://youtube.com/channel/UCrh1Mx5CTTbbkgW5O6iS2Tw/", status_code=308)
-
-@app.get("/wiki")
-async def redirect_wiki():
-    return RedirectResponse(url="https://qlynk.vercel.app/wiki", status_code=308)
-
-@app.get("/clock")
-async def redirect_clock():
-    return RedirectResponse(url="https://clock.qlynk.me", status_code=308)
-```
-
-Is code ko daalne ke baad, jab bhi koi `teri-website.com/instagram` hit karega, toh backend usko direct tere original URL par 308 (Permanent Redirect) kar dega, jo SEO ke liye bhi best hota hai.
-
----
-
-### 2. Markdown Table (Tere saare Routes aur Links)
-
-Ye rahi tere saare redirect links ki summary table:
+### 2. Markdown Table (All Social Links)
 
 | Route Path | Redirect Type | Target Destination URL |
 | :--- | :---: | :--- |
-| `/instagram` | `308 Permanent` | [https://www.instagram.com/deepdey.official](https://www.instagram.com/deepdey.official) |
-| `/github` | `308 Permanent` | [https://github.com/deepdeyiitgn](https://github.com/deepdeyiitgn) |
-| `/discord` | `308 Permanent` | [https://discord.com/invite/t6ZKNw556n](https://discord.com/invite/t6ZKNw556n) |
-| `/youtube` | `308 Permanent` | [https://youtube.com/channel/UCrh1Mx5CTTbbkgW5O6iS2Tw/](https://youtube.com/channel/UCrh1Mx5CTTbbkgW5O6iS2Tw/) |
-| `/wiki` | `308 Permanent` | [https://qlynk.vercel.app/wiki](https://qlynk.vercel.app/wiki) |
-| `/clock` | `308 Permanent` | [https://clock.qlynk.me](https://clock.qlynk.me) |
-
-Bas ye routes apne `main.py` mein add karke update kar de, sab kuch perfectly redirect hone lagega!
+| `https://static.qlynk.me/instagram` | `308 Permanent` | [https://www.instagram.com/deepdey.official](https://www.instagram.com/deepdey.official) |
+| `https://static.qlynk.me/github` | `308 Permanent` | [https://github.com/deepdeyiitgn](https://github.com/deepdeyiitgn) |
+| `https://static.qlynk.me/discord` | `308 Permanent` | [https://discord.com/invite/t6ZKNw556n](https://discord.com/invite/t6ZKNw556n) |
+| `https://static.qlynk.me/youtube` | `308 Permanent` | [https://youtube.com/channel/UCrh1Mx5CTTbbkgW5O6iS2Tw/](https://youtube.com/channel/UCrh1Mx5CTTbbkgW5O6iS2Tw/) |
+| `https://static.qlynk.me/wiki` | `308 Permanent` | [https://qlynk.vercel.app/wiki](https://qlynk.vercel.app/wiki) |
+| `https://static.qlynk.me/clock` | `308 Permanent` | [https://clock.qlynk.me](https://clock.qlynk.me) |
 
 ---
 
