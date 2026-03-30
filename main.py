@@ -326,10 +326,15 @@ async def process_advanced_upload(
     db["files"] = files_list
     save_db(db)
     
-    if format.lower() == "redirect":
+     if format.lower() == "redirect":
         return RedirectResponse(url=f"/f/{final_slug}", status_code=308)
     
-    return {"status": "success", "message": "Asset Indexed", "metadata": file_record}
+    return {
+        "status": "success", 
+        "message": "File hosted securely.", 
+        "metadata": file_record,
+        "download_url": f"/f/{final_slug}"
+    }
     
 
 @app.put("/api/rest/{current_slug}")
