@@ -23,12 +23,14 @@
     <meta name="author" content="Deep Dey">
     <meta name="robots" content="index, follow">
     <meta name="theme-color" content="#0a0a0a">
+   <link rel="canonical" href="https://staic.qlynk.me/" />   
 
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://static.qlynk.me/">
     <meta property="og:title" content="Qlynk Host - Enterprise Storage Node">
     <meta property="og:description" content="Host files privately with unlimited capacity. Built with FastAPI and Hugging Face.">
     <meta property="og:image" content="https://qlynk.vercel.app/Quicklink-Banner.png">
+  
 
     <script type="application/ld+json">
     {
@@ -44,6 +46,7 @@
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
 
     <style>
         :root {
@@ -1163,58 +1166,79 @@ response = requests.post(
                 </div>
             </div>
 
-            <div class="card" style="border-top: 4px solid var(--accent);">
-                <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 1.5rem;">
-                    <div style="background: var(--bg-body); width: 50px; height: 50px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border);">
-                        <i class="fa-solid fa-cloud-arrow-up fa-lg" style="color: var(--accent);"></i>
-                    </div>
-                    <div>
-                        <h3 style="margin: 0;">Upload Engine</h3>
-                        <p style="margin: 0; font-size: 0.9rem;">Push new binaries directly to the dataset.</p>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <input type="file" id="uploadFileObj" title="Select a file to upload">
-                </div>
-                
-                <div class="grid-2">
-                    <div class="form-group">
-                        <label>File Title (Optional)</label>
-                        <input type="text" id="uploadTitle" placeholder="e.g., Qlynk Logo Vector">
-                    </div>
-                    <div class="form-group">
-                        <label>Custom Slug (Optional)</label>
-                        <input type="text" id="uploadSlug" placeholder="e.g., qlynk-main-logo">
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label>Thumbnail Image URL (Optional)</label>
-                    <input type="text" id="uploadThumb" placeholder="https://example.com/thumb.jpg">
-                </div>
-
-                <button class="btn btn-primary" id="btnUploadTrigger" onclick="processUpload()" style="width: 100%; padding: 1.2rem; font-size: 1.1rem; margin-top: 1rem;">
-                    <i class="fa-solid fa-rocket"></i> Execute API Upload
-                </button>
-                
-                <div class="progress-container" id="uploadProgressContainer">
-                    <div class="progress-header">
-                        <span style="color: var(--text-main);">Transmitting Data...</span>
-                        <span id="progressText" style="color: var(--accent);">0%</span>
-                    </div>
-                    <div class="progress-track">
-                        <div class="progress-fill" id="progressBar"></div>
-                    </div>
-                    <div class="progress-footer">
-                        <span id="progressSize">0.00 MB / 0.00 MB</span>
-                        <div style="display: flex; gap: 20px;">
-                            <span id="progressSpeed"><i class="fa-solid fa-gauge-high"></i> 0 KB/s</span>
-                            <span id="progressEta" style="color: var(--text-main);"><i class="fa-solid fa-stopwatch"></i> ETA: --</span>
-                        </div>
-                    </div>
-                </div>
+<div class="card" style="border-top: 4px solid var(--accent);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <div style="background: var(--bg-body); width: 50px; height: 50px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border);">
+                <i class="fa-solid fa-cloud-arrow-up fa-lg" style="color: var(--accent);"></i>
             </div>
+            <div>
+                <h3 style="margin: 0;">Upload Engine</h3>
+                <p style="margin: 0; font-size: 0.9rem;">Drag & drop, browse, or paste a link.</p>
+            </div>
+        </div>
+        <div style="background: var(--bg-body); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; display: flex;">
+            <button id="tabLocal" onclick="switchUploadMode('local')" class="btn" style="background: var(--bg-hover); color: var(--text-main); border-radius: 0; border: none; padding: 0.5rem 1rem;">Local File</button>
+            <button id="tabLink" onclick="switchUploadMode('link')" class="btn" style="background: transparent; color: var(--text-muted); border-radius: 0; border: none; padding: 0.5rem 1rem;">From URL</button>
+        </div>
+    </div>
+    
+    <div id="localUploadArea">
+        <div id="dropzone" style="background: var(--bg-main); padding: 3rem 1.5rem; border-radius: var(--radius-sm); border: 2px dashed var(--border-hover); margin: 1.5rem 0; text-align: center; cursor: pointer; transition: 0.3s; position: relative;">
+            <input type="file" id="uploadFileObj" style="position: absolute; width: 100%; height: 100%; top: 0; left: 0; opacity: 0; cursor: pointer;" onchange="handleFileSelect(event)">
+            <i class="fa-solid fa-file-arrow-up fa-3x" style="color: var(--text-muted); margin-bottom: 1rem;"></i>
+            <h4 style="margin: 0; color: var(--text-main);">Click or Drag & Drop File Here</h4>
+            <p id="fileNameDisplay" style="margin: 10px 0 0 0; color: var(--accent); font-weight: 600;"></p>
+        </div>
+    </div>
+
+    <div id="linkUploadArea" style="display: none; margin: 1.5rem 0;">
+        <div class="form-group">
+            <label>Direct File URL (May fail on strict CORS domains)</label>
+            <input type="text" id="uploadUrlObj" placeholder="https://example.com/image.png">
+        </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div class="form-group">
+            <label>File Title (Optional)</label>
+            <input type="text" id="uploadTitle" placeholder="e.g., Summer Vacation Photo">
+        </div>
+        <div class="form-group">
+            <label>Custom Slug (Optional)</label>
+            <input type="text" id="uploadSlug" placeholder="e.g., summer-2026">
+        </div>
+    </div>
+    
+    <div class="form-group">
+        <label>Thumbnail Image URL (Auto-generated for Audio/Video)</label>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" id="uploadThumb" placeholder="https://... or Base64 Data">
+            <img id="thumbPreview" src="" style="width: 40px; height: 40px; border-radius: 6px; object-fit: cover; display: none; border: 1px solid var(--border);">
+        </div>
+    </div>
+
+    <button class="btn btn-primary" id="btnUploadTrigger" onclick="processUpload()" style="width: 100%; padding: 1.2rem; font-size: 1.1rem; margin-top: 1rem;">
+        <i class="fa-solid fa-rocket"></i> Execute API Upload
+    </button>
+    
+    <div class="progress-container" id="uploadProgressContainer">
+        <div class="progress-header">
+            <span style="color: var(--text-main);" id="progressStatusText">Transmitting Data...</span>
+            <span id="progressText" style="color: var(--accent);">0%</span>
+        </div>
+        <div class="progress-track">
+            <div class="progress-fill" id="progressBar"></div>
+        </div>
+        <div class="progress-footer">
+            <span id="progressSize">0.00 MB / 0.00 MB</span>
+            <div style="display: flex; gap: 20px;">
+                <span id="progressSpeed"><i class="fa-solid fa-gauge-high"></i> 0 KB/s</span>
+                <span id="progressEta" style="color: var(--text-main);"><i class="fa-solid fa-stopwatch"></i> ETA: --</span>
+            </div>
+        </div>
+    </div>
+</div>
 
             <div class="card" style="padding: 0; overflow: hidden;">
                 <div style="padding: 2.5rem 2.5rem 1.5rem; border-bottom: 1px solid var(--border);">
@@ -1273,6 +1297,261 @@ response = requests.post(
     </div>
 
     <script>
+
+      // ==========================================
+        // UI TOGGLE: LOCAL VS LINK UPLOAD
+        // ==========================================
+        let uploadMode = 'local';
+        function switchUploadMode(mode) {
+            uploadMode = mode;
+            if (mode === 'local') {
+                document.getElementById('localUploadArea').style.display = 'block';
+                document.getElementById('linkUploadArea').style.display = 'none';
+                document.getElementById('tabLocal').style.background = 'var(--bg-hover)';
+                document.getElementById('tabLocal').style.color = 'var(--text-main)';
+                document.getElementById('tabLink').style.background = 'transparent';
+                document.getElementById('tabLink').style.color = 'var(--text-muted)';
+            } else {
+                document.getElementById('localUploadArea').style.display = 'none';
+                document.getElementById('linkUploadArea').style.display = 'block';
+                document.getElementById('tabLink').style.background = 'var(--bg-hover)';
+                document.getElementById('tabLink').style.color = 'var(--text-main)';
+                document.getElementById('tabLocal').style.background = 'transparent';
+                document.getElementById('tabLocal').style.color = 'var(--text-muted)';
+            }
+        }
+
+        // ==========================================
+        // DRAG & DROP + AUTO THUMBNAIL LOGIC
+        // ==========================================
+        const dropzone = document.getElementById('dropzone');
+        
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.style.borderColor = 'var(--accent)';
+            dropzone.style.background = 'rgba(0, 112, 243, 0.1)';
+        });
+        
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.style.borderColor = 'var(--border-hover)';
+            dropzone.style.background = 'var(--bg-main)';
+        });
+        
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.style.borderColor = 'var(--border-hover)';
+            dropzone.style.background = 'var(--bg-main)';
+            if (e.dataTransfer.files.length) {
+                document.getElementById('uploadFileObj').files = e.dataTransfer.files;
+                handleFileSelect({ target: { files: e.dataTransfer.files } });
+            }
+        });
+
+        async function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            document.getElementById('fileNameDisplay').innerText = `Selected: ${file.name} (${(file.size/(1024*1024)).toFixed(2)} MB)`;
+            document.getElementById('uploadTitle').value = file.name.split('.')[0]; // Auto-fill title
+
+            // Reset Thumbnail
+            document.getElementById('uploadThumb').value = "";
+            document.getElementById('thumbPreview').style.display = 'none';
+
+            // 🎥 VIDEO THUMBNAIL EXTRACTION
+            if (file.type.startsWith('video/')) {
+                triggerToast("Extracting Video Frame...");
+                try {
+                    const video = document.createElement('video');
+                    video.preload = 'metadata';
+                    video.src = URL.createObjectURL(file);
+                    
+                    video.onloadeddata = () => { video.currentTime = 1; }; // Capture at 1 second
+                    
+                    video.onseeked = () => {
+                        const canvas = document.createElement('canvas');
+                        // Scale down to save history.json space
+                        const scale = 300 / video.videoWidth; 
+                        canvas.width = 300;
+                        canvas.height = video.videoHeight * scale;
+                        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                        
+                        const base64Thumb = canvas.toDataURL('image/jpeg', 0.6);
+                        setThumbnail(base64Thumb);
+                    };
+                } catch(e) { console.error("Video thumb failed", e); }
+            }
+
+            // 🎵 AUDIO THUMBNAIL EXTRACTION (Needs jsmediatags)
+            if (file.type.startsWith('audio/')) {
+                if (window.jsmediatags) {
+                    triggerToast("Reading Audio Tags...");
+                    window.jsmediatags.read(file, {
+                        onSuccess: function(tag) {
+                            const picture = tag.tags.picture;
+                            if (picture) {
+                                let base64String = "";
+                                for (let i = 0; i < picture.data.length; i++) {
+                                    base64String += String.fromCharCode(picture.data[i]);
+                                }
+                                const base64Thumb = "data:" + picture.format + ";base64," + window.btoa(base64String);
+                                setThumbnail(base64Thumb);
+                            }
+                        },
+                        onError: function(error) { console.log("No audio cover found"); }
+                    });
+                }
+            }
+        }
+
+        function setThumbnail(base64String) {
+            document.getElementById('uploadThumb').value = base64String;
+            const preview = document.getElementById('thumbPreview');
+            preview.src = base64String;
+            preview.style.display = 'block';
+            triggerToast("Thumbnail Extracted!");
+        }
+
+        // ==========================================
+        // UPDATED PROCESS UPLOAD (Handles Both Modes)
+        // ==========================================
+        async function processUpload() {
+            let fileObj = null;
+
+            // Mode Logic
+            if (uploadMode === 'local') {
+                fileObj = document.getElementById('uploadFileObj').files[0];
+                if (!fileObj) return triggerToast("You must select a local file first", true);
+            } else {
+                const linkUrl = document.getElementById('uploadUrlObj').value.trim();
+                if (!linkUrl) return triggerToast("Please enter a valid URL", true);
+                
+                triggerToast("Fetching file from URL...");
+                document.getElementById('progressStatusText').innerText = "Downloading from Link...";
+                try {
+                    const res = await fetch(linkUrl);
+                    const blob = await res.blob();
+                    const filename = linkUrl.split('/').pop().split('?')[0] || 'url_upload';
+                    fileObj = new File([blob], filename, { type: blob.type });
+                } catch (e) {
+                    return triggerToast("CORS Error: Browser cannot fetch from this URL directly.", true);
+                }
+            }
+
+            const btn = document.getElementById('btnUploadTrigger');
+            const progContainer = document.getElementById('uploadProgressContainer');
+            const progBar = document.getElementById('progressBar');
+            const progText = document.getElementById('progressText');
+            const progSize = document.getElementById('progressSize');
+            const progSpeed = document.getElementById('progressSpeed');
+            const progEta = document.getElementById('progressEta');
+
+            document.getElementById('progressStatusText').innerText = "Transmitting to HF Storage...";
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
+            btn.disabled = true;
+            progContainer.style.display = 'block';
+            progBar.style.width = '0%';
+
+            const fd = new FormData();
+            fd.append('file', fileObj);
+            
+            const titleVal = document.getElementById('uploadTitle').value.trim();
+            const slugVal = document.getElementById('uploadSlug').value.trim();
+            const thumbVal = document.getElementById('uploadThumb').value.trim();
+
+            if (titleVal) fd.append('title', titleVal);
+            if (slugVal) fd.append('slug', slugVal);
+            if (thumbVal) fd.append('thumbnail', thumbVal);
+
+            const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/rest', true);
+            xhr.setRequestHeader('password', pwd);
+
+            let startTime = Date.now();
+            let lastLoaded = 0;
+            let lastTime = startTime;
+
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progBar.style.width = percentComplete + '%';
+                    progText.innerText = Math.round(percentComplete) + '%';
+
+                    const loadedMB = (e.loaded / (1024 * 1024)).toFixed(2);
+                    const totalMB = (e.total / (1024 * 1024)).toFixed(2);
+                    progSize.innerText = `${loadedMB} MB / ${totalMB} MB`;
+
+                    const currentTime = Date.now();
+                    const timeDiff = (currentTime - lastTime) / 1000; 
+                    
+                    if (timeDiff > 0.5) {
+                        const bytesLoadedInDiff = e.loaded - lastLoaded;
+                        const speedBps = bytesLoadedInDiff / timeDiff;
+                        
+                        if (speedBps > 1024 * 1024) {
+                            progSpeed.innerHTML = `<i class="fa-solid fa-truck-fast"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
+                        } else {
+                            progSpeed.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
+                        }
+
+                        const bytesRemaining = e.total - e.loaded;
+                        const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
+                        
+                        if (etaSeconds > 60) {
+                            progEta.innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
+                        } else {
+                            progEta.innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${etaSeconds}s`;
+                        }
+
+                        lastTime = currentTime;
+                        lastLoaded = e.loaded;
+                    }
+                }
+            };
+
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    triggerToast("Asset Transmitted & Indexed!");
+                    
+                    // Full Form Reset
+                    document.getElementById('uploadFileObj').value = "";
+                    document.getElementById('fileNameDisplay').innerText = "";
+                    document.getElementById('uploadUrlObj').value = "";
+                    document.getElementById('uploadTitle').value = "";
+                    document.getElementById('uploadSlug').value = "";
+                    document.getElementById('uploadThumb').value = "";
+                    document.getElementById('thumbPreview').style.display = 'none';
+                    
+                    progBar.style.width = '100%';
+                    progText.innerText = '100%';
+                    syncData(); 
+                } else {
+                    let err = "Transmission failed.";
+                    try { err = JSON.parse(xhr.responseText).detail || err; } catch(e){}
+                    triggerToast(`Error: ${err}`, true);
+                }
+                resetUI();
+            };
+
+            xhr.onerror = function() {
+                triggerToast("Connection interrupted by network.", true);
+                resetUI();
+            };
+
+            function resetUI() {
+                btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+                btn.disabled = false;
+                setTimeout(() => { 
+                    progContainer.style.display = 'none'; 
+                    progBar.style.width = '0%'; 
+                }, 3500);
+            }
+
+            xhr.send(fd);
+        }
         /**
          * QLYNK ENTERPRISE NODE - FRONTEND LOGIC
          * Engineered by Deep Dey
