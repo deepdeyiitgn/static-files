@@ -4,258 +4,597 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     
-    <title>Qlynk Host - Secure File Management</title>
+    <title>Qlynk Host - Unlimited Secure File Architecture</title>
     <meta name="title" content="Qlynk Host - Secure File Management">
     <meta name="description" content="A private, unlimited file hosting architecture powered by Hugging Face datasets. Features REST APIs, metadata editing, and smart redirects.">
-    <meta name="keywords" content="file hosting, cloud storage, private api, hugging face datasets, secure storage, Qlynk, REST API storage">
+    <meta name="keywords" content="file hosting, cloud storage, private api, hugging face datasets, secure storage, Qlynk, Deep Dey">
     <meta name="author" content="Deep Dey">
     <meta name="robots" content="index, follow">
-    <meta name="theme-color" content="#000000">
+    <meta name="theme-color" content="#0a0a0a">
 
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://static.qlynk.me/">
-    <meta property="og:title" content="Qlynk Host - Unlimited Secure Storage">
+    <meta property="og:title" content="Qlynk Host - Enterprise Storage Node">
     <meta property="og:description" content="Host files privately with unlimited capacity. Built with FastAPI and Hugging Face.">
     <meta property="og:image" content="https://qlynk.vercel.app/Quicklink-Banner.png">
-
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://static.qlynk.me/">
-    <meta property="twitter:title" content="Qlynk Host - Unlimited Secure Storage">
-    <meta property="twitter:description" content="Host files privately with unlimited capacity. Built with FastAPI and Hugging Face.">
-    <meta property="twitter:image" content="https://qlynk.vercel.app/Quicklink-Banner.png">
-    <link rel="canonical" href="https://static.qlynk.me/" /> 
 
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
-      "@type": "WebApplication",
+      "@type": "SoftwareApplication",
       "name": "Qlynk Host",
       "url": "https://static.qlynk.me/",
-      "description": "A fully customized API and dashboard to host files directly to Hugging Face datasets securely.",
-      "applicationCategory": "UtilityApplication",
-      "operatingSystem": "All",
-      "author": {
-        "@type": "Person",
-        "name": "Deep Dey"
-      },
-      "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "INR"
-      },
-      "featureList": [
-        "Unlimited File Hosting",
-        "REST API Integration",
-        "308 Smart Redirects",
-        "Custom Metadata Editing"
-      ]
+      "description": "Unlimited file hosting and REST API management system.",
+      "applicationCategory": "DeveloperApplication",
+      "author": {"@type": "Person", "name": "Deep Dey"}
     }
     </script>
 
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;900&display=swap" rel="stylesheet">
+
     <style>
-        /* ... tera baki ka CSS yahan rahega ... */
         :root {
-            --bg: #000000; --surface: #111111; --primary: #ffffff;
-            --accent: #0070f3; --text: #888888; --border: #333333;
-            --danger: #ff0000; --success: #00ff00;
+            /* Vercel inspired Dark Theme */
+            --bg-body: #000000;
+            --bg-surface: #0a0a0a;
+            --bg-card: #111111;
+            --bg-hover: #1f1f1f;
+            --border: #333333;
+            --border-hover: #444444;
+            --text-main: #ededed;
+            --text-muted: #888888;
+            --accent: #0070f3;
+            --accent-glow: rgba(0, 112, 243, 0.4);
+            --danger: #e00;
+            --success: #0070f3; /* Using blue for primary success to keep it sleek */
+            --font-main: 'Inter', sans-serif;
+            --radius-lg: 12px;
+            --radius-md: 8px;
+            --radius-sm: 4px;
         }
-        body {
-            font-family: 'Inter', -apple-system, sans-serif;
-            background-color: var(--bg); color: var(--primary);
-            margin: 0; padding: 2rem; display: flex; justify-content: center;
-        }
-        .app-container { width: 100%; max-width: 800px; }
-        .card {
-            background: var(--surface); border: 1px solid var(--border);
-            border-radius: 8px; padding: 2rem; margin-bottom: 2rem;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
-        }
-        h1, h2, h3 { margin-top: 0; font-weight: 600; letter-spacing: -0.05em; }
-        p { color: var(--text); line-height: 1.5; }
-        input[type="text"], input[type="password"] {
-            width: 100%; padding: 0.8rem; margin: 0.5rem 0 1rem;
-            background: var(--bg); border: 1px solid var(--border);
-            color: white; border-radius: 6px; box-sizing: border-box; outline: none;
-        }
-        input:focus { border-color: var(--accent); }
-        button {
-            background: var(--primary); color: var(--bg); border: none;
-            padding: 0.8rem 1.5rem; border-radius: 6px; font-weight: 600;
-            cursor: pointer; transition: 0.2s;
-        }
-        button:hover { opacity: 0.8; }
-        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--border); }
-        .btn-danger { background: var(--danger); color: white; padding: 0.5rem 1rem; font-size: 0.85rem;}
-        .btn-edit { background: var(--surface); border: 1px solid var(--border); color: var(--primary); padding: 0.5rem 1rem; font-size: 0.85rem;}
+
+        /* Base Resets */
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: var(--font-main); background: var(--bg-body); color: var(--text-main); line-height: 1.6; overflow-x: hidden; }
+        a { color: var(--accent); text-decoration: none; transition: 0.2s; }
+        a:hover { text-decoration: underline; }
+        ul { padding-left: 20px; }
+
+        /* Typography */
+        h1 { font-size: 3.5rem; font-weight: 900; letter-spacing: -0.05em; margin-bottom: 1rem; background: linear-gradient(to right, #fff, #888); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        h2 { font-size: 2rem; font-weight: 700; letter-spacing: -0.03em; margin-bottom: 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+        h3 { font-size: 1.5rem; font-weight: 600; margin-top: 1.5rem; margin-bottom: 0.5rem; }
+        p { margin-bottom: 1rem; color: var(--text-muted); }
+        .highlight { color: var(--text-main); font-weight: 600; }
+
+        /* Reusable Components */
+        .container { max-width: 1000px; margin: 0 auto; padding: 0 20px; }
+        .section { padding: 5rem 0; border-bottom: 1px solid var(--border); }
+        .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 2rem; margin-bottom: 2rem; transition: 0.3s; }
+        .card:hover { border-color: var(--border-hover); box-shadow: 0 8px 30px rgba(0,0,0,0.4); }
         
-        .file-grid { display: grid; gap: 1rem; margin-top: 1rem; }
-        .file-card {
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 1rem; border: 1px solid var(--border); border-radius: 8px; background: #0a0a0a;
+        /* Buttons */
+        .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 0.8rem 1.5rem; font-size: 1rem; font-weight: 600; border-radius: var(--radius-md); cursor: pointer; transition: 0.2s; border: none; outline: none; }
+        .btn-primary { background: var(--text-main); color: var(--bg-body); }
+        .btn-primary:hover { transform: translateY(-2px); background: #ffffff; box-shadow: 0 4px 15px rgba(255,255,255,0.2); }
+        .btn-accent { background: var(--accent); color: white; }
+        .btn-accent:hover { background: #005bb5; box-shadow: 0 0 15px var(--accent-glow); }
+        .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text-main); }
+        .btn-outline:hover { background: var(--bg-hover); border-color: var(--text-main); }
+        .btn-danger { background: rgba(238, 0, 0, 0.1); color: var(--danger); border: 1px solid rgba(238, 0, 0, 0.3); }
+        .btn-danger:hover { background: var(--danger); color: white; }
+
+        /* Forms & Inputs */
+        .input-group { margin-bottom: 1.5rem; }
+        .input-group label { display: block; margin-bottom: 0.5rem; font-size: 0.9rem; color: var(--text-muted); font-weight: 600; }
+        input[type="text"], input[type="password"] { width: 100%; padding: 1rem; background: var(--bg-body); border: 1px solid var(--border); color: var(--text-main); border-radius: var(--radius-md); font-family: var(--font-main); font-size: 1rem; transition: 0.2s; }
+        input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); }
+        input[type="file"] { width: 100%; padding: 2rem; background: var(--bg-hover); border: 2px dashed var(--border); border-radius: var(--radius-md); color: var(--text-main); cursor: pointer; text-align: center; }
+
+        /* Tables for Pros/Cons */
+        table { width: 100%; border-collapse: collapse; margin-bottom: 2rem; }
+        th, td { padding: 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+        th { background: var(--bg-surface); color: var(--text-main); font-weight: 600; }
+        td { color: var(--text-muted); }
+        tr:hover td { background: var(--bg-hover); }
+
+        /* Code Blocks */
+        pre { background: #000; padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border); overflow-x: auto; color: #00ffcc; font-family: monospace; margin-bottom: 1.5rem; }
+        code { background: var(--bg-hover); padding: 0.2rem 0.4rem; border-radius: var(--radius-sm); font-family: monospace; font-size: 0.9em; color: #ff00ff;}
+
+        /* Warnings & Alerts */
+        .alert-box { padding: 1.5rem; border-radius: var(--radius-md); border-left: 4px solid var(--danger); background: rgba(238, 0, 0, 0.05); margin: 2rem 0; }
+        .alert-box h3 { margin-top: 0; color: var(--danger); }
+
+        /* ==================== DASHBOARD SPECIFIC UI ==================== */
+        #appDashboard { display: none; padding-top: 2rem; }
+        
+        .top-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; padding-bottom: 1rem; border-bottom: 1px solid var(--border); }
+        
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+        .stat-card { background: var(--bg-surface); padding: 2rem; border-radius: var(--radius-lg); border: 1px solid var(--border); text-align: center; }
+        .stat-card h3 { font-size: 2.5rem; margin: 0; color: var(--text-main); }
+        
+        .file-grid { display: flex; flex-direction: column; gap: 1rem; }
+        .file-row { display: flex; align-items: center; padding: 1.5rem; background: var(--bg-surface); border: 1px solid var(--border); border-radius: var(--radius-lg); gap: 1.5rem; transition: 0.2s;}
+        .file-row:hover { background: var(--bg-hover); border-color: var(--border-hover); }
+        
+        .file-icon { width: 60px; height: 60px; border-radius: var(--radius-md); background: #000; display: flex; justify-content: center; align-items: center; border: 1px solid var(--border); overflow: hidden; flex-shrink: 0;}
+        .file-icon img { width: 100%; height: 100%; object-fit: cover; }
+        .file-icon i { font-size: 1.8rem; color: var(--text-muted); }
+        
+        .file-info { flex-grow: 1; min-width: 0; }
+        .file-name { font-size: 1.2rem; font-weight: 600; color: var(--text-main); margin-bottom: 0.3rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .file-meta { display: flex; gap: 1rem; font-size: 0.85rem; color: var(--text-muted); flex-wrap: wrap; }
+        
+        .file-actions { display: flex; gap: 0.5rem; }
+        .icon-btn { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-body); color: var(--text-main); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: 0.2s; }
+        .icon-btn:hover { background: var(--text-main); color: var(--bg-body); }
+        .icon-btn.delete:hover { background: var(--danger); border-color: var(--danger); color: white;}
+
+        /* Modals & Toasts */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: var(--bg-card); border: 1px solid var(--border); padding: 3rem; border-radius: var(--radius-lg); width: 100%; max-width: 450px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); transform: translateY(20px); opacity: 0; transition: all 0.3s; }
+        .modal-overlay.active { display: flex; }
+        .modal-overlay.active .modal-content { transform: translateY(0); opacity: 1; }
+
+        #toast { position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%) translateY(100px); background: var(--accent); color: white; padding: 1rem 2rem; border-radius: 50px; font-weight: 600; opacity: 0; transition: all 0.3s; z-index: 2000; box-shadow: 0 10px 30px rgba(0,112,243,0.3); }
+        #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+        #toast.error { background: var(--danger); box-shadow: 0 10px 30px rgba(238,0,0,0.3); }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            h1 { font-size: 2.5rem; }
+            .file-row { flex-direction: column; align-items: flex-start; }
+            .file-actions { width: 100%; justify-content: space-between; margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
         }
-        .file-info { display: flex; flex-direction: column; gap: 0.3rem;}
-        .file-info a { color: var(--accent); text-decoration: none; font-size: 0.9rem;}
-        .file-info a:hover { text-decoration: underline; }
-        .thumb { width: 50px; height: 50px; object-fit: cover; border-radius: 4px; background: var(--border); margin-right: 1rem; }
-        
-        .flex-row { display: flex; align-items: center; }
-        .actions { display: flex; gap: 0.5rem; }
-        
-        /* Modals */
-        #loginSection, #dashboardSection { display: none; }
     </style>
 </head>
 <body>
 
-    <div class="app-container">
+    <div id="landingPage">
         
-        <div id="loginSection" class="card">
-            <h1>Welcome to Qlynk Host 🚀</h1>
-            <p>This is a private, unlimited file hosting architecture powered by Hugging Face datasets. It features REST APIs, direct metadata editing, and 308 smart redirects.</p>
-            <hr style="border-color: var(--border); margin: 2rem 0;">
-            <h3>Access Secured Area</h3>
-            <p style="font-size: 0.9rem;">Enter the master password. A cookie will be saved for persistent login.</p>
-            <input type="password" id="pwd" placeholder="Enter Space Password...">
-            <button onclick="login()">Enter System</button>
-        </div>
-
-        <div id="dashboardSection">
-            <div class="card">
-                <h2>Upload New File</h2>
-                <input type="file" id="fileInput" style="margin-bottom: 1rem; display: block; color: var(--text);">
-                <input type="text" id="upSlug" placeholder="Custom Slug (Optional)">
-                <input type="text" id="upTitle" placeholder="File Title (Optional)">
-                <input type="text" id="upThumb" placeholder="Thumbnail URL (Optional)">
-                <button onclick="uploadFile()" id="upBtn">Upload via REST API</button>
-                <p id="upStatus" style="color: var(--success); display: none;">Upload Complete!</p>
+        <header class="section" style="text-align: center; padding-top: 8rem; padding-bottom: 4rem;">
+            <div class="container">
+                <h1>Qlynk Enterprise Node <i class="fa-solid fa-server" style="color: var(--accent); font-size: 2.5rem;"></i></h1>
+                <p style="font-size: 1.2rem; max-width: 600px; margin: 0 auto 2rem; color: #aaa;">
+                    A bottomless, highly-secure file hosting architecture bridging FastAPI and Hugging Face Datasets. Unlimited capacity. Zero cost.
+                </p>
+                <div style="display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap;">
+                    <button class="btn btn-primary" onclick="openLoginModal()" style="padding: 1rem 2.5rem; font-size: 1.1rem;">
+                        <i class="fa-solid fa-lock-open"></i> Access System
+                    </button>
+                    <a href="#docs" class="btn btn-outline" style="padding: 1rem 2.5rem; font-size: 1.1rem;">
+                        <i class="fa-solid fa-book"></i> Read Docs
+                    </a>
+                </div>
             </div>
+        </header>
 
-            <div class="card">
-                <h2>Hosted Files</h2>
-                <div class="file-grid" id="fileList">Loading...</div>
+        <section id="docs" class="section">
+            <div class="container">
+                <h2>What is Qlynk Host?</h2>
+                <p>Qlynk Host is an open-source project designed to bypass traditional cloud storage limits. By utilizing <span class="highlight">Hugging Face Datasets</span> as a backend storage bucket, it allows you to store files up to the maximum repo limit (approx 50GB per repo) for free. The backend is written in high-performance <span class="highlight">Python FastAPI</span> and includes an auto-scaling REST API.</p>
+                
+                <h3 style="margin-top: 3rem;">System Specifications</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Storage Backend</strong></td>
+                            <td>Hugging Face Datasets (Private Repository)</td>
+                        </tr>
+                        <tr>
+                            <td><strong>API Engine</strong></td>
+                            <td>FastAPI (Python 3.10) with Uvicorn</td>
+                        </tr>
+                        <tr>
+                            <td><strong>File Limits</strong></td>
+                            <td>No individual file size limit coded. Total repo limit applies.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Smart Routing</strong></td>
+                            <td>Supports 308 Permanent Redirects for direct media streaming.</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Security</strong></td>
+                            <td>Master Password protection + CORS Domain Whitelisting.</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 2rem; margin-top: 3rem;">
+                    <div class="card" style="border-top: 4px solid var(--success);">
+                        <h3><i class="fa-solid fa-circle-check" style="color: var(--success);"></i> Advantages (Pros)</h3>
+                        <ul style="color: var(--text-muted); margin-top: 1rem;">
+                            <li style="margin-bottom: 0.5rem;">Absolutely Free Unlimited Storage.</li>
+                            <li style="margin-bottom: 0.5rem;">Custom URL Slugs (e.g., <code>/f/my-image</code>).</li>
+                            <li style="margin-bottom: 0.5rem;">Direct File Editing (Change title/thumbnail later).</li>
+                            <li style="margin-bottom: 0.5rem;">Powerful REST API for external websites.</li>
+                            <li>Persistent Cookie login (No repeated typing).</li>
+                        </ul>
+                    </div>
+                    <div class="card" style="border-top: 4px solid var(--danger);">
+                        <h3><i class="fa-solid fa-triangle-exclamation" style="color: var(--danger);"></i> Limitations (Cons)</h3>
+                        <ul style="color: var(--text-muted); margin-top: 1rem;">
+                            <li style="margin-bottom: 0.5rem;">Hugging Face Space may sleep if inactive (Requires cold boot).</li>
+                            <li style="margin-bottom: 0.5rem;">Large file uploads (>1GB) might timeout depending on connection.</li>
+                            <li style="margin-bottom: 0.5rem;">Files are public if someone guesses the exact slug URL.</li>
+                            <li>No folder hierarchy (Flat file system).</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <h2 style="margin-top: 4rem;">Build Your Own Node (DIY)</h2>
+                <p>Want to deploy your own version of Qlynk Host? Follow these steps exactly:</p>
+                
+                <div class="card">
+                    <h3>Step 1: Create a Hugging Face Space</h3>
+                    <p>Go to Hugging Face, click "Create new Space". Choose <span class="highlight">Docker</span> as the SDK and Blank template.</p>
+                    
+                    <h3>Step 2: Upload Files</h3>
+                    <p>Upload the <code>main.py</code>, <code>index.html</code> (this file), and <code>Dockerfile</code> provided by the original developer.</p>
+                    
+                    <h3>Step 3: Configure Environment Secrets</h3>
+                    <p>Go to Space Settings -> Variables and Secrets. Add these under <strong>Secrets</strong>:</p>
+                    <pre>HF_TOKEN = "Your HF Access Token with Write permissions"
+SPACE_PASSWORD = "Your strong custom password"</pre>
+                    <p>The system will automatically generate a private dataset in your account upon the first boot.</p>
+                </div>
+
+                <div class="alert-box">
+                    <h3><i class="fa-solid fa-gavel"></i> STRICT LEGAL NOTICE & COPYRIGHT</h3>
+                    <p style="margin-bottom: 0; color: #ffcccc;">
+                        This architecture and codebase were designed and engineered by <strong>Deep Dey</strong>. 
+                        While the source code is provided for educational and personal use, <strong>ATTRIBUTION IS MANDATORY</strong>. 
+                        <br><br>
+                        If you fork, copy, host, or distribute this system publicly on any domain, you MUST leave the credits intact. 
+                        <strong>Failure to provide proper credit will result in an immediate DMCA Takedown and Legal Notice sent to your hosting provider (Cloudflare, Vercel, HF, etc.) for Intellectual Property Theft.</strong> Do not test this.
+                    </p>
+                </div>
+                
+                <p style="text-align: center; margin-top: 3rem; color: var(--border);">
+                    &copy; 2026 Deep Dey. All Systems Operational.<br>
+                    <a href="https://qlynk.me" target="_blank">https://qlynk.me</a>
+                </p>
+
             </div>
-
-            <div class="card">
-                <h2>API Documentation</h2>
-                <p>You can use this app externally. Direct GET request to <code>/api/rest</code> will return full JSON docs.</p>
-                <p><strong>Example cURL Upload:</strong></p>
-                <pre style="background: #000; padding: 1rem; border-radius: 6px; border: 1px solid var(--border); overflow-x: auto; color: var(--accent);">
-curl -X POST "https://YOUR_SPACE_URL/api/rest" \
-  -H "password: YOUR_PASSWORD" \
-  -F "file=@yourfile.mp4" \
-  -F "slug=myvideo" \
-  -F "format=redirect"</pre>
-                <p style="font-size: 0.85rem;">Setting <code>format=redirect</code> triggers a 308 permanent redirect to the file instantly.</p>
-            </div>
-        </div>
-
+        </section>
     </div>
 
+    <div class="modal-overlay" id="authModal">
+        <div class="modal-content">
+            <i class="fa-solid fa-shield-halved" style="font-size: 3rem; color: var(--accent); margin-bottom: 1rem;"></i>
+            <h2>Authentication Required</h2>
+            <p style="margin-bottom: 2rem;">Enter the master sequence to access the storage node.</p>
+            <div class="input-group" style="text-align: left;">
+                <input type="password" id="masterPwd" placeholder="Password..." onkeypress="if(event.key === 'Enter') executeLogin()">
+            </div>
+            <button class="btn btn-primary" style="width: 100%; padding: 1rem;" onclick="executeLogin()">
+                Authorize
+            </button>
+            <button class="btn btn-outline" style="width: 100%; padding: 1rem; margin-top: 1rem;" onclick="closeLoginModal()">
+                Cancel
+            </button>
+        </div>
+    </div>
+
+    <div id="appDashboard" class="container">
+        
+        <div class="top-nav">
+            <h2 style="border: none; margin: 0;"><i class="fa-solid fa-server" style="color: var(--accent);"></i> Node Control</h2>
+            <button class="btn btn-danger" onclick="logoutSystem()"><i class="fa-solid fa-power-off"></i> Disconnect</button>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3 id="uiTotalFiles">0</h3>
+                <p style="margin:0; color: var(--text-muted);">Hosted Assets</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="uiTotalSize">0 B</h3>
+                <p style="margin:0; color: var(--text-muted);">Storage Used</p>
+            </div>
+            <div class="stat-card" style="border-color: var(--accent);">
+                <h3 style="color: var(--accent);"><i class="fa-solid fa-satellite-dish"></i></h3>
+                <p style="margin:0; color: var(--accent);">API Online</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3><i class="fa-solid fa-upload"></i> Upload Interface</h3>
+            <p>Push new files securely to the Hugging Face private repository.</p>
+            
+            <div class="input-group">
+                <input type="file" id="uploadFileObj">
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="input-group">
+                    <label>File Title (Optional)</label>
+                    <input type="text" id="uploadTitle" placeholder="e.g., Summer Vacation Photo">
+                </div>
+                <div class="input-group">
+                    <label>Custom Slug (Optional)</label>
+                    <input type="text" id="uploadSlug" placeholder="e.g., summer-2026">
+                </div>
+            </div>
+            
+            <div class="input-group">
+                <label>Thumbnail Image URL (Optional)</label>
+                <input type="text" id="uploadThumb" placeholder="https://...">
+            </div>
+
+            <button class="btn btn-primary" id="btnUploadTrigger" onclick="processUpload()">
+                <i class="fa-solid fa-rocket"></i> Execute Upload
+            </button>
+        </div>
+
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 1rem;">
+                <h3 style="margin: 0;"><i class="fa-solid fa-database"></i> File Explorer</h3>
+                <div style="display: flex; gap: 10px; width: 100%; max-width: 400px;">
+                    <input type="text" id="searchInput" placeholder="Search by name or slug..." onkeyup="handleSearch()" style="margin:0;">
+                    <button class="btn btn-outline" onclick="syncData()"><i class="fa-solid fa-rotate"></i></button>
+                </div>
+            </div>
+
+            <div class="file-grid" id="explorerList">
+                <div style="text-align: center; padding: 3rem; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius-md);">
+                    <i class="fa-solid fa-circle-notch fa-spin fa-2x"></i><br><br>Syncing with HF Dataset...
+                </div>
+            </div>
+        </div>
+        
+        <p style="text-align: center; color: var(--border); margin-top: 3rem; padding-bottom: 3rem;">
+            Core Engine by Deep Dey
+        </p>
+    </div>
+
+    <div id="toast"></div>
+
     <script>
-        // Check Auth Cookie on load
-        window.onload = async () => {
-            const cookies = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
-            if (cookies) {
-                // Verify with backend
-                const res = await fetch('/api/verify');
-                if (res.ok) { showDashboard(); return; }
+        // DOM Elements
+        const elLanding = document.getElementById('landingPage');
+        const elDashboard = document.getElementById('appDashboard');
+        const elModal = document.getElementById('authModal');
+        const toast = document.getElementById('toast');
+
+        // Global State
+        let currentSearchTimer = null;
+
+        // --- Utility Functions ---
+        function triggerToast(msg, isErr = false) {
+            toast.innerText = msg;
+            toast.className = isErr ? "show error" : "show";
+            setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 3000);
+        }
+
+        async function copyURL(url) {
+            try {
+                await navigator.clipboard.writeText(url);
+                triggerToast("URL Copied to Clipboard!");
+            } catch (e) {
+                triggerToast("Failed to copy URL", true);
             }
-            document.getElementById('loginSection').style.display = 'block';
+        }
+
+        // --- Authentication Flow ---
+        window.onload = async () => {
+            // Check if cookie exists
+            const cookieVal = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            if (cookieVal) {
+                const res = await fetch('/api/verify');
+                if (res.ok) {
+                    transitionToApp();
+                    return;
+                }
+            }
+            // Stay on landing page
         };
 
-        async function login() {
-            const pwd = document.getElementById('pwd').value;
+        function openLoginModal() { elModal.classList.add('active'); }
+        function closeLoginModal() { elModal.classList.remove('active'); }
+
+        async function executeLogin() {
+            const pwd = document.getElementById('masterPwd').value;
+            if (!pwd) return triggerToast("Password required", true);
+
             const res = await fetch('/api/verify', { headers: { 'password': pwd } });
             if (res.ok) {
-                // Set cookie for 1 year
+                // Save cookie for 1 year
                 document.cookie = `auth_token=${pwd}; max-age=31536000; path=/; SameSite=Strict`;
-                showDashboard();
+                closeLoginModal();
+                transitionToApp();
+                triggerToast("System Unlocked Successfully");
             } else {
-                alert("Incorrect Password!");
+                triggerToast("Access Denied: Invalid Master Password", true);
             }
         }
 
-        function showDashboard() {
-            document.getElementById('loginSection').style.display = 'none';
-            document.getElementById('dashboardSection').style.display = 'block';
-            loadFiles();
+        function logoutSystem() {
+            document.cookie = "auth_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            window.location.reload();
         }
 
-        async function uploadFile() {
-            const file = document.getElementById('fileInput').files[0];
-            if (!file) return alert("Select a file");
+        function transitionToApp() {
+            elLanding.style.display = 'none';
+            elDashboard.style.display = 'block';
+            syncData(); // Load data immediately
+        }
 
-            const btn = document.getElementById('upBtn');
-            btn.innerText = "Uploading..."; btn.disabled = true;
+        // --- Core App Functions ---
+        async function syncData() {
+            fetchSystemStats();
+            fetchExplorerData();
+        }
 
-            const formData = new FormData();
-            formData.append('file', file);
-            if(document.getElementById('upSlug').value) formData.append('slug', document.getElementById('upSlug').value);
-            if(document.getElementById('upTitle').value) formData.append('title', document.getElementById('upTitle').value);
-            if(document.getElementById('upThumb').value) formData.append('thumbnail', document.getElementById('upThumb').value);
+        async function fetchSystemStats() {
+            try {
+                const res = await fetch('/api/stats');
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById('uiTotalFiles').innerText = data.total_files;
+                    document.getElementById('uiTotalSize').innerText = data.formatted_total_size || "0 B";
+                }
+            } catch (e) { console.error("Stats error", e); }
+        }
 
-            const res = await fetch('/api/rest', { method: 'POST', body: formData });
+        function handleSearch() {
+            clearTimeout(currentSearchTimer);
+            const query = document.getElementById('searchInput').value;
+            currentSearchTimer = setTimeout(() => { fetchExplorerData(query); }, 400);
+        }
+
+        async function fetchExplorerData(query = "") {
+            const listEl = document.getElementById('explorerList');
+            const url = query ? `/api/history?search=${encodeURIComponent(query)}` : '/api/history';
             
-            btn.innerText = "Upload via REST API"; btn.disabled = false;
-            
-            if (res.ok) {
-                document.getElementById('upStatus').style.display = 'block';
-                setTimeout(() => document.getElementById('upStatus').style.display = 'none', 3000);
-                loadFiles();
-            } else {
-                alert("Upload failed. Slug might exist.");
+            try {
+                const res = await fetch(url);
+                if (res.ok) {
+                    const files = await res.json();
+                    renderExplorer(files);
+                } else {
+                    listEl.innerHTML = `<div style="color:var(--danger); padding:2rem; text-align:center;">Failed to load data.</div>`;
+                }
+            } catch (e) {
+                listEl.innerHTML = `<div style="color:var(--danger); padding:2rem; text-align:center;">Network Error. Check console.</div>`;
             }
         }
 
-        async function loadFiles() {
-            const res = await fetch('/api/history');
-            if (res.ok) {
-                const data = await res.json();
-                const list = document.getElementById('fileList');
-                list.innerHTML = "";
-                data.reverse().forEach(item => {
-                    const url = `${window.location.origin}/f/${item.slug}`;
-                    const thumb = item.thumbnail ? `<img src="${item.thumbnail}" class="thumb">` : `<div class="thumb"></div>`;
-                    
-                    list.innerHTML += `
-                        <div class="file-card">
-                            <div class="flex-row">
-                                ${thumb}
-                                <div class="file-info">
-                                    <strong style="color: white;">${item.title || item.filename}</strong>
-                                    <span style="font-size: 0.8rem;">Slug: ${item.slug}</span>
-                                    <a href="${url}" target="_blank">🔗 ${url}</a>
-                                </div>
-                            </div>
-                            <div class="actions">
-                                <button class="btn-edit" onclick="editFile('${item.slug}', '${item.title}', '${item.thumbnail}')">Edit</button>
-                                <button class="btn-danger" onclick="deleteFile('${item.slug}')">Delete</button>
+        function renderExplorer(files) {
+            const listEl = document.getElementById('explorerList');
+            
+            if (files.length === 0) {
+                listEl.innerHTML = `
+                    <div style="text-align: center; padding: 3rem; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius-md);">
+                        <i class="fa-regular fa-folder-open fa-2x" style="margin-bottom:1rem;"></i><br>
+                        Database is empty. Upload a file to begin.
+                    </div>`;
+                return;
+            }
+
+            let htmlChunk = "";
+            files.forEach(f => {
+                const publicUrl = `${window.location.origin}/f/${f.slug}`;
+                
+                // Format Date nicely
+                let dateStr = "Unknown Date";
+                if (f.uploaded_at) {
+                    const d = new Date(f.uploaded_at);
+                    if (!isNaN(d)) dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+                }
+
+                // Handle Thumbnail vs Icon
+                let iconUI = f.thumbnail 
+                    ? `<img src="${f.thumbnail}" alt="thumb">` 
+                    : `<i class="fa-solid fa-file-code"></i>`;
+
+                htmlChunk += `
+                    <div class="file-row">
+                        <div class="file-icon">${iconUI}</div>
+                        <div class="file-info">
+                            <div class="file-name" title="${f.title}">${f.title}</div>
+                            <div class="file-meta">
+                                <span><i class="fa-solid fa-link"></i> ${f.slug}</span>
+                                <span style="color: var(--accent);"><i class="fa-solid fa-hard-drive"></i> ${f.formatted_size || 'Unknown'}</span>
+                                <span><i class="fa-regular fa-clock"></i> ${dateStr}</span>
                             </div>
                         </div>
-                    `;
-                });
+                        <div class="file-actions">
+                            <button class="icon-btn" onclick="copyURL('${publicUrl}')" title="Copy Direct Link"><i class="fa-solid fa-copy"></i></button>
+                            <button class="icon-btn" onclick="triggerEdit('${f.slug}', '${(f.title || '').replace(/'/g, "\\'")}', '${f.thumbnail || ''}')" title="Edit Metadata"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button class="icon-btn delete" onclick="triggerDelete('${f.slug}')" title="Delete Permanently"><i class="fa-solid fa-trash"></i></button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            listEl.innerHTML = htmlChunk;
+        }
+
+        // --- Data Mutations (Upload, Edit, Delete) ---
+
+        async function processUpload() {
+            const fileObj = document.getElementById('uploadFileObj').files[0];
+            if (!fileObj) return triggerToast("You must select a file first", true);
+
+            const btn = document.getElementById('btnUploadTrigger');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
+            btn.disabled = true;
+
+            const fd = new FormData();
+            fd.append('file', fileObj);
+            
+            const titleVal = document.getElementById('uploadTitle').value;
+            const slugVal = document.getElementById('uploadSlug').value;
+            const thumbVal = document.getElementById('uploadThumb').value;
+
+            if (titleVal) fd.append('title', titleVal);
+            if (slugVal) fd.append('slug', slugVal);
+            if (thumbVal) fd.append('thumbnail', thumbVal);
+
+            try {
+                const res = await fetch('/api/rest', { method: 'POST', body: fd });
+                const json = await res.json();
+
+                if (res.ok) {
+                    triggerToast("File Hosted Successfully!");
+                    // Reset Form
+                    document.getElementById('uploadFileObj').value = "";
+                    document.getElementById('uploadTitle').value = "";
+                    document.getElementById('uploadSlug').value = "";
+                    document.getElementById('uploadThumb').value = "";
+                    syncData(); // Refresh list
+                } else {
+                    triggerToast(json.detail || "Upload rejected by server", true);
+                }
+            } catch (e) {
+                triggerToast("Critical Network Error", true);
+            } finally {
+                btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute Upload';
+                btn.disabled = false;
             }
         }
 
-        async function editFile(oldSlug, oldTitle, oldThumb) {
-            const newSlug = prompt("New Slug:", oldSlug) || oldSlug;
-            const newTitle = prompt("New Title:", oldTitle !== 'undefined' ? oldTitle : "") || oldTitle;
-            const newThumb = prompt("New Thumbnail URL:", oldThumb !== 'undefined' ? oldThumb : "") || oldThumb;
+        async function triggerEdit(slug, currentTitle, currentThumb) {
+            const nTitle = prompt("Update Document Title:", currentTitle);
+            if (nTitle === null) return; // User cancelled
+            
+            const nThumb = prompt("Update Thumbnail URL (Leave empty for none):", currentThumb);
+            if (nThumb === null) return;
 
-            const formData = new FormData();
-            formData.append('new_slug', newSlug);
-            formData.append('title', newTitle);
-            formData.append('thumbnail', newThumb);
+            const fd = new FormData();
+            fd.append('title', nTitle);
+            fd.append('thumbnail', nThumb);
 
-            const res = await fetch(`/api/rest/${oldSlug}`, { method: 'PUT', body: formData });
-            if (res.ok) loadFiles();
-            else alert("Edit failed. Maybe slug already exists.");
+            const res = await fetch(`/api/rest/${slug}`, { method: 'PUT', body: fd });
+            if (res.ok) {
+                triggerToast("Metadata Synced");
+                fetchExplorerData(document.getElementById('searchInput').value);
+            } else {
+                triggerToast("Update Failed", true);
+            }
         }
 
-        async function deleteFile(slug) {
-            if (!confirm("Permanently delete?")) return;
+        async function triggerDelete(slug) {
+            const confirmed = confirm(`CRITICAL WARNING:\nAre you absolutely sure you want to permanently erase '${slug}' from the Hugging Face Dataset?\n\nThis action cannot be undone.`);
+            if (!confirmed) return;
+
             const res = await fetch(`/api/rest/${slug}`, { method: 'DELETE' });
-            if (res.ok) loadFiles();
+            if (res.ok) {
+                triggerToast("Asset Erased.");
+                syncData();
+            } else {
+                triggerToast("Deletion Failed", true);
+            }
         }
     </script>
 </body>
