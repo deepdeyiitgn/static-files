@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# 1. Bot ko background mein start karo
+# 1. Tere ping karne wale bot ko background mein start kar rahe hain
 python bot.py &
 
-# 2. Main FastAPI app ko foreground mein start karo
-uvicorn main:app --host 0.0.0.0 --port 7860
+# 2. Tera main app foreground mein chalega
+python main.py
