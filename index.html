@@ -334,6 +334,19 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
             <button class="btn btn-primary" id="btnUploadTrigger" onclick="processUpload()">
                 <i class="fa-solid fa-rocket"></i> Execute Upload
             </button>
+          <div id="uploadProgressContainer" style="display: none; margin-top: 1.5rem; background: var(--bg-body); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border);">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 0.8rem; font-size: 0.95rem; font-weight: 600;">
+                    <span id="progressText" style="color: var(--text-main);">0%</span>
+                    <span id="progressSize" style="color: var(--accent);">0 MB / 0 MB</span>
+                </div>
+                <div style="width: 100%; background: var(--bg-hover); border-radius: 20px; height: 10px; overflow: hidden; margin-bottom: 0.8rem;">
+                    <div id="progressBar" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.1s linear; box-shadow: 0 0 10px var(--accent-glow);"></div>
+                </div>
+                <div style="display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--text-muted);">
+                    <span id="progressSpeed"><i class="fa-solid fa-gauge-high"></i> 0 KB/s</span>
+                    <span id="progressEta"><i class="fa-solid fa-hourglass-half"></i> ETA: --</span>
+                </div>
+            </div>
         </div>
 
         <div class="card">
@@ -533,8 +546,16 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
             if (!fileObj) return triggerToast("You must select a file first", true);
 
             const btn = document.getElementById('btnUploadTrigger');
+            const progContainer = document.getElementById('uploadProgressContainer');
+            const progBar = document.getElementById('progressBar');
+            const progText = document.getElementById('progressText');
+            const progSize = document.getElementById('progressSize');
+            const progSpeed = document.getElementById('progressSpeed');
+            const progEta = document.getElementById('progressEta');
+
             btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Uploading...';
             btn.disabled = true;
+            progContainer.style.display = 'block';
 
             const fd = new FormData();
             fd.append('file', fileObj);
@@ -547,28 +568,93 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
             if (slugVal) fd.append('slug', slugVal);
             if (thumbVal) fd.append('thumbnail', thumbVal);
 
-            try {
-                // 🛠️ REST API call is already correct because it has body: fd (so it auto-POSTs)
-                const res = await fetch('/api/rest', { method: 'POST', body: fd });
-                const json = await res.json();
+            // Fetch password cookie to send in Headers
+            const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
 
-                if (res.ok) {
+            // Using XMLHttpRequest for Progress Tracking
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/rest', true);
+            xhr.setRequestHeader('password', pwd);
+
+            let startTime = Date.now();
+            let lastLoaded = 0;
+            let lastTime = startTime;
+
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    // 1. Calculate Percentage
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progBar.style.width = percentComplete + '%';
+                    progText.innerText = Math.round(percentComplete) + '%';
+
+                    // 2. Calculate MBs
+                    const loadedMB = (e.loaded / (1024 * 1024)).toFixed(2);
+                    const totalMB = (e.total / (1024 * 1024)).toFixed(2);
+                    progSize.innerText = `${loadedMB} MB / ${totalMB} MB`;
+
+                    // 3. Calculate Speed & ETA (Updates every 500ms)
+                    const currentTime = Date.now();
+                    const timeDiff = (currentTime - lastTime) / 1000; 
+                    
+                    if (timeDiff > 0.5) {
+                        const bytesLoadedInDiff = e.loaded - lastLoaded;
+                        const speedBps = bytesLoadedInDiff / timeDiff;
+                        
+                        // Speed Formatting
+                        if (speedBps > 1024 * 1024) {
+                            progSpeed.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
+                        } else {
+                            progSpeed.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
+                        }
+
+                        // ETA Formatting
+                        const bytesRemaining = e.total - e.loaded;
+                        const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
+                        
+                        if (etaSeconds > 60) {
+                            progEta.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
+                        } else {
+                            progEta.innerHTML = `<i class="fa-solid fa-hourglass-half"></i> ETA: ${etaSeconds}s`;
+                        }
+
+                        lastTime = currentTime;
+                        lastLoaded = e.loaded;
+                    }
+                }
+            };
+
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
                     triggerToast("File Hosted Successfully!");
-                    // Reset Form
                     document.getElementById('uploadFileObj').value = "";
                     document.getElementById('uploadTitle').value = "";
                     document.getElementById('uploadSlug').value = "";
                     document.getElementById('uploadThumb').value = "";
-                    syncData(); // Refresh list
+                    syncData(); 
                 } else {
-                    triggerToast(json.detail || "Upload rejected by server", true);
+                    let err = "Upload failed";
+                    try { err = JSON.parse(xhr.responseText).detail || err; } catch(e){}
+                    triggerToast(err, true);
                 }
-            } catch (e) {
+                resetUI();
+            };
+
+            xhr.onerror = function() {
                 triggerToast("Critical Network Error", true);
-            } finally {
+                resetUI();
+            };
+
+            function resetUI() {
                 btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute Upload';
                 btn.disabled = false;
+                setTimeout(() => { 
+                    progContainer.style.display = 'none'; 
+                    progBar.style.width = '0%'; 
+                }, 3000);
             }
+
+            xhr.send(fd);
         }
 
         async function triggerEdit(slug, currentTitle, currentThumb) {
