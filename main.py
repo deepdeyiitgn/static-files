@@ -403,6 +403,47 @@ async def serve_file_publicly(slug: str):
 async def verify_login_endpoint(token: str = Depends(verify_auth)):
     return {"status": "ok"}
 
+# ==========================================
+# 8. SOCIAL MEDIA & QUICK REDIRECTS (308)
+# ==========================================
+@app.get("/instagram")
+async def redirect_instagram():
+    return RedirectResponse(url="https://www.instagram.com/deepdey.official", status_code=308)
+
+@app.get("/github")
+async def redirect_github():
+    return RedirectResponse(url="https://github.com/deepdeyiitgn", status_code=308)
+
+@app.get("/discord")
+async def redirect_discord():
+    return RedirectResponse(url="https://discord.com/invite/t6ZKNw556n", status_code=308)
+
+@app.get("/youtube")
+async def redirect_youtube():
+    return RedirectResponse(url="https://youtube.com/channel/UCrh1Mx5CTTbbkgW5O6iS2Tw/", status_code=308)
+
+@app.get("/wiki")
+async def redirect_wiki():
+    return RedirectResponse(url="https://qlynk.vercel.app/wiki", status_code=308)
+
+@app.get("/clock")
+async def redirect_clock():
+    return RedirectResponse(url="https://clock.qlynk.me", status_code=308)
+
+    
+# --- Static JS Assets ---
+@app.get("/main.js")
+async def serve_main_js():
+    if os.path.exists("main.js"):
+        return FileResponse("main.js", media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="File not found")
+
+@app.get("/footer-extras.js")
+async def serve_footer_extras_js():
+    if os.path.exists("footer-extras.js"):
+        return FileResponse("footer-extras.js", media_type="application/javascript")
+    raise HTTPException(status_code=404, detail="File not found")    
+
 # --- UI Route ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend_ui():
