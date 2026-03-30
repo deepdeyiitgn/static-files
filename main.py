@@ -4,7 +4,7 @@ import shutil
 import uuid
 import mimetypes
 import logging
-import requests # <--- Ye top par imports mein check kar lena
+# import requests # <--- Ye top par imports mein check kar lena
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
