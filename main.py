@@ -218,12 +218,12 @@ async def serve_mega_api_docs():
         }
     }
 
-import requests # <--- Ye top par imports mein check kar lena
+# import requests # <--- Ye top par imports mein check kar lena
 
 @app.post("/api/rest")
 async def process_advanced_upload(
-    file: UploadFile = File(None), # Ab file optional hai
-    link_url: str = Form(None),    # Naya field link ke liye
+    file: UploadFile = File(None),
+    link_url: str = Form(None),
     slug: str = Form(None),
     title: str = Form(None),
     thumbnail: str = Form(""),
@@ -256,7 +256,6 @@ async def process_advanced_upload(
         temp_path = f"/tmp/{final_slug}_{filename}"
         
         try:
-            # Backend downloading the file directly
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
             r = requests.get(link_url, stream=True, headers=headers, timeout=15)
             r.raise_for_status()
@@ -276,7 +275,6 @@ async def process_advanced_upload(
             os.remove(temp_path)
             
         except Exception as e:
-            # Failsafe: Create a 308 Redirect Entry if download fails
             logger.warning(f"Backend fetch failed: {e}. Creating 308 redirect entry instead.")
             is_external = True
             external_url = link_url
@@ -318,15 +316,15 @@ async def process_advanced_upload(
         "mime_type": mime_type,
         "size_bytes": file_size,
         "uploaded_at": upload_timestamp,
-        "is_external": is_external,    # Tracking if it's a proxy 308 link
-        "external_url": external_url   # Storing original URL
+        "is_external": is_external,
+        "external_url": external_url
     }
     
     files_list.append(file_record)
     db["files"] = files_list
     save_db(db)
     
-     if format.lower() == "redirect":
+    if format.lower() == "redirect":
         return RedirectResponse(url=f"/f/{final_slug}", status_code=308)
     
     return {
