@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qlynk Host - Secure File Management</title>
+    <style>
+        :root {
+            --bg: #000000; --surface: #111111; --primary: #ffffff;
+            --accent: #0070f3; --text: #888888; --border: #333333;
+            --danger: #ff0000; --success: #00ff00;
+        }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background-color: var(--bg); color: var(--primary);
+            margin: 0; padding: 2rem; display: flex; justify-content: center;
+        }
+        .app-container { width: 100%; max-width: 800px; }
+        .card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 2rem; margin-bottom: 2rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+        }
+        h1, h2, h3 { margin-top: 0; font-weight: 600; letter-spacing: -0.05em; }
+        p { color: var(--text); line-height: 1.5; }
+        input[type="text"], input[type="password"] {
+            width: 100%; padding: 0.8rem; margin: 0.5rem 0 1rem;
+            background: var(--bg); border: 1px solid var(--border);
+            color: white; border-radius: 6px; box-sizing: border-box; outline: none;
+        }
+        input:focus { border-color: var(--accent); }
+        button {
+            background: var(--primary); color: var(--bg); border: none;
+            padding: 0.8rem 1.5rem; border-radius: 6px; font-weight: 600;
+            cursor: pointer; transition: 0.2s;
+        }
+        button:hover { opacity: 0.8; }
+        .btn-outline { background: transparent; color: var(--primary); border: 1px solid var(--border); }
+        .btn-danger { background: var(--danger); color: white; padding: 0.5rem 1rem; font-size: 0.85rem;}
+        .btn-edit { background: var(--surface); border: 1px solid var(--border); color: var(--primary); padding: 0.5rem 1rem; font-size: 0.85rem;}
+        
+        .file-grid { display: grid; gap: 1rem; margin-top: 1rem; }
+        .file-card {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 1rem; border: 1px solid var(--border); border-radius: 8px; background: #0a0a0a;
+        }
+        .file-info { display: flex; flex-direction: column; gap: 0.3rem;}
+        .file-info a { color: var(--accent); text-decoration: none; font-size: 0.9rem;}
+        .file-info a:hover { text-decoration: underline; }
+        .thumb { width: 50px; height: 50px; object-fit: cover; border-radius: 4px; background: var(--border); margin-right: 1rem; }
+        
+        .flex-row { display: flex; align-items: center; }
+        .actions { display: flex; gap: 0.5rem; }
+        
+        /* Modals */
+        #loginSection, #dashboardSection { display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="app-container">
+        
+        <div id="loginSection" class="card">
+            <h1>Welcome to Qlynk Host 🚀</h1>
+            <p>This is a private, unlimited file hosting architecture powered by Hugging Face datasets. It features REST APIs, direct metadata editing, and 308 smart redirects.</p>
+            <hr style="border-color: var(--border); margin: 2rem 0;">
+            <h3>Access Secured Area</h3>
+            <p style="font-size: 0.9rem;">Enter the master password. A cookie will be saved for persistent login.</p>
+            <input type="password" id="pwd" placeholder="Enter Space Password...">
+            <button onclick="login()">Enter System</button>
+        </div>
+
+        <div id="dashboardSection">
+            <div class="card">
+                <h2>Upload New File</h2>
+                <input type="file" id="fileInput" style="margin-bottom: 1rem; display: block; color: var(--text);">
+                <input type="text" id="upSlug" placeholder="Custom Slug (Optional)">
+                <input type="text" id="upTitle" placeholder="File Title (Optional)">
+                <input type="text" id="upThumb" placeholder="Thumbnail URL (Optional)">
+                <button onclick="uploadFile()" id="upBtn">Upload via REST API</button>
+                <p id="upStatus" style="color: var(--success); display: none;">Upload Complete!</p>
+            </div>
+
+            <div class="card">
+                <h2>Hosted Files</h2>
+                <div class="file-grid" id="fileList">Loading...</div>
+            </div>
+
+            <div class="card">
+                <h2>API Documentation</h2>
+                <p>You can use this app externally. Direct GET request to <code>/api/rest</code> will return full JSON docs.</p>
+                <p><strong>Example cURL Upload:</strong></p>
+                <pre style="background: #000; padding: 1rem; border-radius: 6px; border: 1px solid var(--border); overflow-x: auto; color: var(--accent);">
+curl -X POST "https://YOUR_SPACE_URL/api/rest" \
+  -H "password: YOUR_PASSWORD" \
+  -F "file=@yourfile.mp4" \
+  -F "slug=myvideo" \
+  -F "format=redirect"</pre>
+                <p style="font-size: 0.85rem;">Setting <code>format=redirect</code> triggers a 308 permanent redirect to the file instantly.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Check Auth Cookie on load
+        window.onload = async () => {
+            const cookies = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            if (cookies) {
+                // Verify with backend
+                const res = await fetch('/api/verify');
+                if (res.ok) { showDashboard(); return; }
+            }
+            document.getElementById('loginSection').style.display = 'block';
+        };
+
+        async function login() {
+            const pwd = document.getElementById('pwd').value;
+            const res = await fetch('/api/verify', { headers: { 'password': pwd } });
+            if (res.ok) {
+                // Set cookie for 1 year
+                document.cookie = `auth_token=${pwd}; max-age=31536000; path=/; SameSite=Strict`;
+                showDashboard();
+            } else {
+                alert("Incorrect Password!");
+            }
+        }
+
+        function showDashboard() {
+            document.getElementById('loginSection').style.display = 'none';
+            document.getElementById('dashboardSection').style.display = 'block';
+            loadFiles();
+        }
+
+        async function uploadFile() {
+            const file = document.getElementById('fileInput').files[0];
+            if (!file) return alert("Select a file");
+
+            const btn = document.getElementById('upBtn');
+            btn.innerText = "Uploading..."; btn.disabled = true;
+
+            const formData = new FormData();
+            formData.append('file', file);
+            if(document.getElementById('upSlug').value) formData.append('slug', document.getElementById('upSlug').value);
+            if(document.getElementById('upTitle').value) formData.append('title', document.getElementById('upTitle').value);
+            if(document.getElementById('upThumb').value) formData.append('thumbnail', document.getElementById('upThumb').value);
+
+            const res = await fetch('/api/rest', { method: 'POST', body: formData });
+            
+            btn.innerText = "Upload via REST API"; btn.disabled = false;
+            
+            if (res.ok) {
+                document.getElementById('upStatus').style.display = 'block';
+                setTimeout(() => document.getElementById('upStatus').style.display = 'none', 3000);
+                loadFiles();
+            } else {
+                alert("Upload failed. Slug might exist.");
+            }
+        }
+
+        async function loadFiles() {
+            const res = await fetch('/api/history');
+            if (res.ok) {
+                const data = await res.json();
+                const list = document.getElementById('fileList');
+                list.innerHTML = "";
+                data.reverse().forEach(item => {
+                    const url = `${window.location.origin}/f/${item.slug}`;
+                    const thumb = item.thumbnail ? `<img src="${item.thumbnail}" class="thumb">` : `<div class="thumb"></div>`;
+                    
+                    list.innerHTML += `
+                        <div class="file-card">
+                            <div class="flex-row">
+                                ${thumb}
+                                <div class="file-info">
+                                    <strong style="color: white;">${item.title || item.filename}</strong>
+                                    <span style="font-size: 0.8rem;">Slug: ${item.slug}</span>
+                                    <a href="${url}" target="_blank">🔗 ${url}</a>
+                                </div>
+                            </div>
+                            <div class="actions">
+                                <button class="btn-edit" onclick="editFile('${item.slug}', '${item.title}', '${item.thumbnail}')">Edit</button>
+                                <button class="btn-danger" onclick="deleteFile('${item.slug}')">Delete</button>
+                            </div>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        async function editFile(oldSlug, oldTitle, oldThumb) {
+            const newSlug = prompt("New Slug:", oldSlug) || oldSlug;
+            const newTitle = prompt("New Title:", oldTitle !== 'undefined' ? oldTitle : "") || oldTitle;
+            const newThumb = prompt("New Thumbnail URL:", oldThumb !== 'undefined' ? oldThumb : "") || oldThumb;
+
+            const formData = new FormData();
+            formData.append('new_slug', newSlug);
+            formData.append('title', newTitle);
+            formData.append('thumbnail', newThumb);
+
+            const res = await fetch(`/api/rest/${oldSlug}`, { method: 'PUT', body: formData });
+            if (res.ok) loadFiles();
+            else alert("Edit failed. Maybe slug already exists.");
+        }
+
+        async function deleteFile(slug) {
+            if (!confirm("Permanently delete?")) return;
+            const res = await fetch(`/api/rest/${slug}`, { method: 'DELETE' });
+            if (res.ok) loadFiles();
+        }
+    </script>
+</body>
+</html>
