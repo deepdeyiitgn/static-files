@@ -217,50 +217,97 @@ async def serve_mega_api_docs():
         }
     }
 
+import requests # <--- Ye top par imports mein check kar lena
+
 @app.post("/api/rest")
 async def process_advanced_upload(
-    file: UploadFile = File(...),
+    file: UploadFile = File(None), # Ab file optional hai
+    link_url: str = Form(None),    # Naya field link ke liye
     slug: str = Form(None),
     title: str = Form(None),
     thumbnail: str = Form(""),
     format: str = Form("json"),
     token: str = Depends(verify_auth)
 ):
-    """File upload logic with deep metadata extraction"""
+    """File upload logic with deep metadata extraction & Backend Proxy"""
     db = get_db()
     files_list = db.get("files", [])
     
-    # URL Slug checking
     final_slug = slug.strip() if slug and slug.strip() != "" else str(uuid.uuid4())[:8]
     if any(item["slug"] == final_slug for item in files_list):
-        raise HTTPException(status_code=409, detail=f"ERROR: The slug '{final_slug}' is already assigned to another file.")
+        raise HTTPException(status_code=409, detail=f"ERROR: The slug '{final_slug}' is already assigned.")
 
-    filename = file.filename
-    repo_path = f"files/{final_slug}_{filename}"
-    temp_path = f"/tmp/{final_slug}_{filename}"
-    
-    # 1. Save locally temporarily
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    # 2. Extract Metadata
-    file_size = os.path.getsize(temp_path)
-    mime_type, _ = mimetypes.guess_type(temp_path)
-    if not mime_type:
-        mime_type = "application/octet-stream"
+    repo_path = ""
+    filename = ""
+    file_size = 0
+    mime_type = "application/octet-stream"
+    is_external = False
+    external_url = ""
+
+    # ==========================================
+    # LOGIC 1: UPLOAD FROM URL (BACKEND PROXY)
+    # ==========================================
+    if link_url:
+        filename = link_url.split('/')[-1].split('?')[0]
+        if not filename or '.' not in filename:
+            filename = "downloaded_file.bin"
+        
+        temp_path = f"/tmp/{final_slug}_{filename}"
+        
+        try:
+            # Backend downloading the file directly
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+            r = requests.get(link_url, stream=True, headers=headers, timeout=15)
+            r.raise_for_status()
+            
+            with open(temp_path, 'wb') as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            file_size = os.path.getsize(temp_path)
+            mime_type, _ = mimetypes.guess_type(temp_path)
+            if not mime_type:
+                mime_type = r.headers.get('Content-Type', 'application/octet-stream')
+            
+            repo_path = f"files/{final_slug}_{filename}"
+            logger.info(f"Uploading fetched file {filename} to {DATASET_REPO}...")
+            api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+            os.remove(temp_path)
+            
+        except Exception as e:
+            # Failsafe: Create a 308 Redirect Entry if download fails
+            logger.warning(f"Backend fetch failed: {e}. Creating 308 redirect entry instead.")
+            is_external = True
+            external_url = link_url
+            filename = "External_Link"
+
+    # ==========================================
+    # LOGIC 2: STANDARD LOCAL FILE UPLOAD
+    # ==========================================
+    elif file:
+        filename = file.filename
+        temp_path = f"/tmp/{final_slug}_{filename}"
+        repo_path = f"files/{final_slug}_{filename}"
+        
+        with open(temp_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        file_size = os.path.getsize(temp_path)
+        mime_type, _ = mimetypes.guess_type(temp_path)
+        if not mime_type:
+            mime_type = "application/octet-stream"
+            
+        api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+        os.remove(temp_path)
+        
+    else:
+        raise HTTPException(status_code=400, detail="Must provide either a 'file' or 'link_url'.")
+
+    # ==========================================
+    # SAVE METADATA
+    # ==========================================
     upload_timestamp = datetime.utcnow().isoformat() + "Z"
     
-    # 3. Upload to HF
-    logger.info(f"Uploading {filename} ({format_size(file_size)}) to {DATASET_REPO}...")
-    api.upload_file(
-        path_or_fileobj=temp_path, 
-        path_in_repo=repo_path, 
-        repo_id=DATASET_REPO, 
-        repo_type="dataset"
-    )
-    os.remove(temp_path) # Clean up memory
-    
-    # 4. Save Database Record
     file_record = {
         "slug": final_slug,
         "filename": filename,
@@ -269,24 +316,20 @@ async def process_advanced_upload(
         "thumbnail": thumbnail,
         "mime_type": mime_type,
         "size_bytes": file_size,
-        "uploaded_at": upload_timestamp
+        "uploaded_at": upload_timestamp,
+        "is_external": is_external,    # Tracking if it's a proxy 308 link
+        "external_url": external_url   # Storing original URL
     }
     
     files_list.append(file_record)
     db["files"] = files_list
     save_db(db)
-    logger.info(f"Upload successful. Slug: {final_slug}")
     
-    # 5. Handle Redirection logic
     if format.lower() == "redirect":
         return RedirectResponse(url=f"/f/{final_slug}", status_code=308)
     
-    return {
-        "status": "success", 
-        "message": "File hosted securely.", 
-        "metadata": file_record,
-        "download_url": f"/f/{final_slug}"
-    }
+    return {"status": "success", "message": "Asset Indexed", "metadata": file_record}
+    
 
 @app.put("/api/rest/{current_slug}")
 async def update_file_metadata(
@@ -371,15 +414,18 @@ async def get_server_stats(token: str = Depends(verify_auth)):
 # ==========================================
 @app.get("/f/{slug}")
 async def serve_file_publicly(slug: str):
-    """Yeh public route hai. No password required. Browsers aur APIs idhar se data read karte hain."""
+    """Yeh public route hai. External redirect fail-safe included."""
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
     
     if not file_record:
         raise HTTPException(status_code=404, detail="404: The requested resource could not be found.")
         
+    # 🛠️ NAYA: FAILSAFE 308 REDIRECT
+    if file_record.get("is_external") and file_record.get("external_url"):
+        return RedirectResponse(url=file_record["external_url"], status_code=308)
+        
     try:
-        # File HF Datasets se runtime par cache hoti hai
         file_path = hf_hub_download(
             repo_id=DATASET_REPO, 
             filename=file_record["path"], 
@@ -390,7 +436,7 @@ async def serve_file_publicly(slug: str):
             path=file_path, 
             filename=file_record["filename"],
             media_type=file_record.get("mime_type", "application/octet-stream"),
-            content_disposition_type="inline" # 🛠️ YEH LINE FILE KO BROWSER MEIN OPEN KAREGI
+            content_disposition_type="inline" 
         )
     except Exception as e:
         logger.error(f"Error serving file '{slug}': {e}")
