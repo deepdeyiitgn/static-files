@@ -1417,73 +1417,34 @@ response = requests.post(
         // ==========================================
 // --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
 // --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
-        async function processUpload() {
-            let fileObj = null;
+async function processUpload() {
+            const fd = new FormData();
 
-            // 1. MODE CHECK (Yeh main bhool gaya tha)
+            // 1. DYNAMIC PAYLOAD BUILDER
             if (uploadMode === 'local') {
-                fileObj = document.getElementById('uploadFileObj').files[0];
+                const fileObj = document.getElementById('uploadFileObj').files[0];
                 if (!fileObj) return triggerToast("Target binary is missing. Select a file.", true);
+                fd.append('file', fileObj);
             } else {
                 const linkUrl = document.getElementById('uploadUrlObj').value.trim();
                 if (!linkUrl) return triggerToast("Please enter a valid URL", true);
-                
-                triggerToast("Downloading file from URL...");
-                document.getElementById('progressStatusText').innerText = "Fetching from Link...";
-                
-                const btn = document.getElementById('btnUploadTrigger');
-                btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Fetching...';
-                btn.disabled = true;
-
-                try {
-                    // Attempt 1: Direct Fetch
-                    let res;
-                    try {
-                        res = await fetch(linkUrl);
-                        if (!res.ok) throw new Error("Direct fetch blocked");
-                    } catch(e) {
-                        // Attempt 2: CORS Proxy Bypass
-                        triggerToast("Bypassing CORS Security...");
-                        res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(linkUrl));
-                        if (!res.ok) throw new Error("Proxy fetch blocked");
-                    }
-
-                    const blob = await res.blob();
-                    if (blob.size === 0) throw new Error("File is empty");
-
-                    let filename = linkUrl.split('/').pop().split('?')[0];
-                    if (!filename || !filename.includes('.')) filename = "url_upload.bin"; 
-
-                    fileObj = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
-                } catch (e) {
-                    const btn = document.getElementById('btnUploadTrigger');
-                    btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
-                    btn.disabled = false;
-                    document.getElementById('progressStatusText').innerText = "Transmitting Data...";
-                    return triggerToast("URL fetch failed. Server strictly blocked access.", true);
-                }
+                fd.append('link_url', linkUrl); // Backend proxy zindabad!
             }
 
-            // 2. UPLOAD TO BACKEND (Dono modes ke liye)
             const btn = document.getElementById('btnUploadTrigger');
             const progContainer = document.getElementById('uploadProgressContainer');
             const progBar = document.getElementById('progressBar');
             const progText = document.getElementById('progressText');
-            const progSize = document.getElementById('progressSize');
-            const progSpeed = document.getElementById('progressSpeed');
-            const progEta = document.getElementById('progressEta');
+            
+            document.getElementById('progressStatusText').innerText = uploadMode === 'link' 
+                ? "Backend Proxy is fetching & uploading..." 
+                : "Transmitting to Node...";
 
-            // UI Locks
-            document.getElementById('progressStatusText').innerText = "Transmitting to Node...";
-            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
             btn.disabled = true;
             progContainer.style.display = 'block';
             progBar.style.width = '0%';
 
-            // Data Assembly
-            const fd = new FormData();
-            fd.append('file', fileObj);
-            
             const titleVal = document.getElementById('uploadTitle').value.trim();
             const slugVal = document.getElementById('uploadSlug').value.trim();
             const thumbVal = document.getElementById('uploadThumb').value.trim();
@@ -1492,65 +1453,38 @@ response = requests.post(
             if (slugVal) fd.append('slug', slugVal);
             if (thumbVal) fd.append('thumbnail', thumbVal);
 
-            // Auth Injection
             const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
             const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
 
-            // Advanced XHR Configuration
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/api/rest', true);
             xhr.setRequestHeader('password', pwd);
 
-            // Metrics Trackers
-            let startTime = Date.now();
-            let lastLoaded = 0;
-            let lastTime = startTime;
-
-            // The Progress Listener
+            // Progress Listener (Only tracks browser-to-backend transfer)
             xhr.upload.onprogress = function(e) {
                 if (e.lengthComputable) {
                     const percentComplete = (e.loaded / e.total) * 100;
                     progBar.style.width = percentComplete + '%';
                     progText.innerText = Math.round(percentComplete) + '%';
-
-                    const loadedMB = (e.loaded / (1024 * 1024)).toFixed(2);
-                    const totalMB = (e.total / (1024 * 1024)).toFixed(2);
-                    progSize.innerText = `${loadedMB} MB / ${totalMB} MB`;
-
-                    const currentTime = Date.now();
-                    const timeDiff = (currentTime - lastTime) / 1000; 
                     
-                    if (timeDiff > 0.5) {
-                        const bytesLoadedInDiff = e.loaded - lastLoaded;
-                        const speedBps = bytesLoadedInDiff / timeDiff;
-                        
-                        if (speedBps > 1024 * 1024) {
-                            progSpeed.innerHTML = `<i class="fa-solid fa-truck-fast"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
-                        } else {
-                            progSpeed.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
-                        }
-
-                        const bytesRemaining = e.total - e.loaded;
-                        const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
-                        
-                        if (etaSeconds > 60) {
-                            progEta.innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
-                        } else {
-                            progEta.innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${etaSeconds}s`;
-                        }
-
-                        lastTime = currentTime;
-                        lastLoaded = e.loaded;
+                    // If link mode, transfer is instant. Tell user backend is working.
+                    if (uploadMode === 'link' && percentComplete === 100) {
+                        document.getElementById('progressStatusText').innerText = "Backend downloading file, please wait...";
                     }
                 }
             };
 
-            // Upload Complete Listener
             xhr.onload = function() {
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    triggerToast("Asset Transmitted & Indexed!");
+                    const resp = JSON.parse(xhr.responseText);
+                    // Check if failsafe was triggered
+                    if (resp.metadata && resp.metadata.is_external) {
+                        triggerToast("File blocked by source. 308 Smart Redirect created instead!");
+                    } else {
+                        triggerToast("Asset Transmitted & Indexed Successfully!");
+                    }
                     
-                    // Clean Form
+                    // Reset
                     if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
                     if(document.getElementById('uploadUrlObj')) document.getElementById('uploadUrlObj').value = "";
                     document.getElementById('uploadTitle').value = "";
@@ -1558,9 +1492,6 @@ response = requests.post(
                     document.getElementById('uploadThumb').value = "";
                     if(document.getElementById('thumbPreview')) document.getElementById('thumbPreview').style.display = 'none';
                     if(document.getElementById('fileNameDisplay')) document.getElementById('fileNameDisplay').innerText = "";
-                    
-                    progBar.style.width = '100%';
-                    progText.innerText = '100%';
                     
                     syncData(); 
                 } else {
@@ -1585,7 +1516,6 @@ response = requests.post(
                 }, 3500);
             }
 
-            // Execute Payload
             xhr.send(fd);
         }
         
