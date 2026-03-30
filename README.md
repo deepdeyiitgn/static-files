@@ -4,7 +4,10 @@ emoji: ⚡
 colorFrom: blue
 colorTo: purple
 sdk: docker
-pinned: false
+pinned: true
+license: mit
+thumbnail: >-
+  https://cdn-uploads.huggingface.co/production/uploads/6820305a563dbc18490b0f2f/qUx3-yyReb5Tzbnx5IFwQ.png
 ---
 
 # 🚀 Ultimate Private File Hosting System
