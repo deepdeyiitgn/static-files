@@ -359,7 +359,7 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
 
     <div id="toast"></div>
 
-    <script>
+<script>
         // DOM Elements
         const elLanding = document.getElementById('landingPage');
         const elDashboard = document.getElementById('appDashboard');
@@ -390,7 +390,8 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
             // Check if cookie exists
             const cookieVal = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
             if (cookieVal) {
-                const res = await fetch('/api/verify');
+                // 🛠️ FIX: Added method: 'POST'
+                const res = await fetch('/api/verify', { method: 'POST' }); 
                 if (res.ok) {
                     transitionToApp();
                     return;
@@ -406,7 +407,12 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
             const pwd = document.getElementById('masterPwd').value;
             if (!pwd) return triggerToast("Password required", true);
 
-            const res = await fetch('/api/verify', { headers: { 'password': pwd } });
+            // 🛠️ FIX: Added method: 'POST' here too
+            const res = await fetch('/api/verify', { 
+                method: 'POST', 
+                headers: { 'password': pwd } 
+            });
+            
             if (res.ok) {
                 // Save cookie for 1 year
                 document.cookie = `auth_token=${pwd}; max-age=31536000; path=/; SameSite=Strict`;
@@ -542,6 +548,7 @@ SPACE_PASSWORD = "Your strong custom password"</pre>
             if (thumbVal) fd.append('thumbnail', thumbVal);
 
             try {
+                // 🛠️ REST API call is already correct because it has body: fd (so it auto-POSTs)
                 const res = await fetch('/api/rest', { method: 'POST', body: fd });
                 const json = await res.json();
 
