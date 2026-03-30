@@ -1415,6 +1415,7 @@ response = requests.post(
         // ==========================================
         // UPDATED PROCESS UPLOAD (Handles Both Modes)
         // ==========================================
+// --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
         async function processUpload() {
             let fileObj = null;
 
@@ -1426,15 +1427,48 @@ response = requests.post(
                 const linkUrl = document.getElementById('uploadUrlObj').value.trim();
                 if (!linkUrl) return triggerToast("Please enter a valid URL", true);
                 
-                triggerToast("Fetching file from URL...");
-                document.getElementById('progressStatusText').innerText = "Downloading from Link...";
+                triggerToast("Downloading file from URL...");
+                document.getElementById('progressStatusText').innerText = "Fetching from Link...";
+                
+                const btn = document.getElementById('btnUploadTrigger');
+                btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Fetching...';
+                btn.disabled = true;
+
                 try {
-                    const res = await fetch(linkUrl);
+                    // 🛠️ FIX: CORS Bypassing Strategy
+                    let res;
+                    try {
+                        // Attempt 1: Direct Fetch
+                        res = await fetch(linkUrl);
+                        if (!res.ok) throw new Error("Direct fetch blocked");
+                    } catch(e) {
+                        // Attempt 2: Use CORS Proxy
+                        triggerToast("Bypassing CORS Security...");
+                        res = await fetch('https://api.allorigins.win/raw?url=' + encodeURIComponent(linkUrl));
+                        if (!res.ok) throw new Error("Proxy fetch blocked");
+                    }
+
                     const blob = await res.blob();
-                    const filename = linkUrl.split('/').pop().split('?')[0] || 'url_upload';
-                    fileObj = new File([blob], filename, { type: blob.type });
+                    
+                    // Safety check: Is the file empty?
+                    if (blob.size === 0) {
+                        btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+                        btn.disabled = false;
+                        return triggerToast("Error: The target URL returned an empty file.", true);
+                    }
+
+                    // Create a valid filename and File object
+                    let filename = linkUrl.split('/').pop().split('?')[0];
+                    if (!filename || !filename.includes('.')) {
+                        filename = "url_upload.bin"; 
+                    }
+
+                    fileObj = new File([blob], filename, { type: blob.type || 'application/octet-stream' });
+
                 } catch (e) {
-                    return triggerToast("CORS Error: Browser cannot fetch from this URL directly.", true);
+                    btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+                    btn.disabled = false;
+                    return triggerToast("CORS Error: The target website is strictly blocking access.", true);
                 }
             }
 
@@ -1446,7 +1480,7 @@ response = requests.post(
             const progSpeed = document.getElementById('progressSpeed');
             const progEta = document.getElementById('progressEta');
 
-            document.getElementById('progressStatusText').innerText = "Transmitting to HF Storage...";
+            document.getElementById('progressStatusText').innerText = "Transmitting to Node...";
             btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
             btn.disabled = true;
             progContainer.style.display = 'block';
@@ -1516,14 +1550,12 @@ response = requests.post(
                 if (xhr.status >= 200 && xhr.status < 300) {
                     triggerToast("Asset Transmitted & Indexed!");
                     
-                    // Full Form Reset
-                    document.getElementById('uploadFileObj').value = "";
-                    document.getElementById('fileNameDisplay').innerText = "";
-                    document.getElementById('uploadUrlObj').value = "";
+                    // Reset UI
+                    if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
+                    if(document.getElementById('uploadUrlObj')) document.getElementById('uploadUrlObj').value = "";
                     document.getElementById('uploadTitle').value = "";
                     document.getElementById('uploadSlug').value = "";
                     document.getElementById('uploadThumb').value = "";
-                    document.getElementById('thumbPreview').style.display = 'none';
                     
                     progBar.style.width = '100%';
                     progText.innerText = '100%';
@@ -1552,6 +1584,7 @@ response = requests.post(
 
             xhr.send(fd);
         }
+        
         /**
          * QLYNK ENTERPRISE NODE - FRONTEND LOGIC
          * Engineered by Deep Dey
