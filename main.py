@@ -4,7 +4,7 @@ import shutil
 import uuid
 import mimetypes
 import logging
-# import requests # <--- Ye top par imports mein check kar lena
+import requests # <--- Ye top par imports mein check kar lena
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
@@ -495,9 +495,9 @@ async def serve_footer_extras_js():
     raise HTTPException(status_code=404, detail="File not found")    
 
 # --- UI Route ---
+# --- UI Route ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend_ui():
     with open("index.html", "r", encoding="utf-8") as f:
-        return f.read()
-        
+        html_content = f.read()
     return HTMLResponse(content=html_content)
