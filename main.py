@@ -402,7 +402,13 @@ async def serve_file_publicly(slug: str):
 async def verify_login_endpoint(token: str = Depends(verify_auth)):
     return {"status": "ok"}
 
+# --- UI Route ---
 @app.get("/", response_class=HTMLResponse)
+async def serve_frontend_ui():
+    with open("index.html", "r", encoding="utf-8") as f:
+        return f.read()
+        
+@app.get("/dashboard", response_class=HTMLResponse)
 async def serve_frontend_ui():
     html_content = """
     <!DOCTYPE html>
