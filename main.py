@@ -389,7 +389,8 @@ async def serve_file_publicly(slug: str):
         return FileResponse(
             path=file_path, 
             filename=file_record["filename"],
-            media_type=file_record.get("mime_type", "application/octet-stream")
+            media_type=file_record.get("mime_type", "application/octet-stream"),
+            content_disposition_type="inline" # 🛠️ YEH LINE FILE KO BROWSER MEIN OPEN KAREGI
         )
     except Exception as e:
         logger.error(f"Error serving file '{slug}': {e}")
