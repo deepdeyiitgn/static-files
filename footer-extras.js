@@ -491,12 +491,12 @@
       + '      I\'m a <strong>Class 11 Student</strong> and a self-taught '
       + '      <strong>AI &amp; Prompt Engineer</strong> (3+ Years). \uD83E\uDD16'
       + '      <br><br>'
-      + '      I created <span class="deep-highlight">Transparent Clock</span> — '
-      + '      a minimal, privacy-first clock overlay &amp; focus companion for students. \u23F0'
-      + '      <br><i>Source-Available • Zero Data Collection • Always-On-Top</i>'
+      + '      I created <span class="deep-highlight">QLYNK Storage</span> — '
+      + '      a minimal, unliited storage server &amp; free and dont need paid server. \u23F0'
+      + '      <br><i>Source-Available • Give Credit • Use and Make your own sever free</i>'
       + '    </p>'
       + '    <p style="font-size: 11px; color: #999; margin-top: 18px; border-top: 1px solid #eee; padding-top: 12px;">'
-      + '      &copy; ' + new Date().getFullYear() + ' Deep Dey | All Rights Reserved | QuickLink &times; Transparent Clock'
+      + '      &copy; ' + new Date().getFullYear() + ' Deep Dey | All Rights Reserved | QuickLink &times; QLYNK Storage'
       + '    </p>'
       + '    <div class="deep-btn-container">'
       + '      <div onclick="openDeepLink(\'wiki\')" class="deep-cta-button deep-btn-wiki">More Info</div>'
@@ -513,7 +513,7 @@
     var copyrightBar = document.createElement("div");
     copyrightBar.id = "deep-copyright-bar";
     copyrightBar.style.cssText = "text-align:center; padding:18px 10px; font-size:12px; color:#888; background:#111; border-top:1px solid #222; letter-spacing:0.3px;";
-    copyrightBar.innerHTML = '&copy; ' + new Date().getFullYear() + ' Deep Dey | All Rights Reserved | QuickLink &times; Transparent Clock';
+    copyrightBar.innerHTML = '&copy; ' + new Date().getFullYear() + ' Deep Dey | All Rights Reserved | QuickLink &times; QLYNK Storage';
 
     // Insert watermarks + copyright after footer
     if (footer) {
