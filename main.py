@@ -279,6 +279,7 @@ async def process_advanced_upload(
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+                        # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["video", "audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
@@ -316,7 +317,7 @@ async def process_advanced_upload(
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                                if media_format == "audio":
+                if media_format == "audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
@@ -328,8 +329,6 @@ async def process_advanced_upload(
                     # 1. 1080p -> 2. Best Available -> 3. Universal Best
                     ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
-                    
-                    # Note: Agar 'format_sort' wali line likhi thi pichle code mein, toh use HATA DENA (Delete kar dena).
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -348,6 +347,11 @@ async def process_advanced_upload(
                 ext = os.path.splitext(temp_path)[1]
                 safe_title = "".join(x for x in (title or "Downloaded_Media") if x.isalnum() or x in " _-")
                 filename = f"{safe_title[:45]}{ext}"
+
+           
+
+
+                    
                 
             # --- ENGINE B: STANDARD DIRECT PROXY ---
             else:
