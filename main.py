@@ -241,23 +241,16 @@ async def process_advanced_upload(
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # PERFECTLY INDENTED FORMAT ENGINE
+                # 🎬 FIX: Terminal "Default" Mode
                 if media_format == "audio":
-                    ydl_opts['format'] = 'ba/bestaudio/best'
+                    ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
-                else:
-                    # 🎬 FIX: The "God Mode" Format Selector
-                    # bv* = best video (with or without audio)
-                    # ba = best audio
-                    # b = best single merged file
-                    ydl_opts['format'] = 'bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b/best'
-                    ydl_opts['merge_output_format'] = 'mp4'
-
-
+                # Agar video hai toh hum format specify hi nahi karenge!
+                # Isse yt-dlp apne aap best file (MKV, WEBM ya MP4) nikal lega bina crash hue.
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
