@@ -7,6 +7,8 @@ import logging
 import requests # <--- Ye top par imports mein check kar lena
 import asyncio
 import aiofiles
+import aiohttp
+import urllib.parse
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
@@ -222,6 +224,15 @@ async def serve_mega_api_docs():
 
 # import requests # <--- Ye top par imports mein check kar lena
 
+# Yeh line apne @app.post("/api/rest") se theek upar daal
+url_progress_tracker = {}
+
+@app.get("/api/progress/{upload_id}")
+async def get_url_progress(upload_id: str, token: str = Depends(verify_auth)):
+    """Frontend ko batayega ki backend kitna download kar chuka hai"""
+    return url_progress_tracker.get(upload_id, {"status": "idle", "loaded": 0, "total": 0})
+
+
 @app.post("/api/rest")
 async def process_advanced_upload(
     file: UploadFile = File(None),
@@ -230,7 +241,7 @@ async def process_advanced_upload(
     title: str = Form(None),
     thumbnail: str = Form(""),
     format: str = Form("json"),
-    chunk_index: int = Form(0),       # CHUNKING PARAMETERS
+    chunk_index: int = Form(0),
     total_chunks: int = Form(1),
     upload_id: str = Form(None),
     token: str = Depends(verify_auth)
@@ -239,10 +250,8 @@ async def process_advanced_upload(
     db = get_db()
     files_list = db.get("files", [])
     
-    # 1. Final Slug Generation
     final_slug = slug.strip() if slug and slug.strip() != "" else str(uuid.uuid4())[:8]
     
-    # Slug conflict sirf first chunk pe check karo
     if chunk_index == 0:
         if any(item["slug"] == final_slug for item in files_list):
             raise HTTPException(status_code=409, detail=f"ERROR: The slug '{final_slug}' is already assigned.")
@@ -255,37 +264,70 @@ async def process_advanced_upload(
     external_url = ""
 
     # ==========================================
-    # LOGIC 1: UPLOAD FROM URL (BACKEND PROXY)
+    # LOGIC 1: UPLOAD FROM URL (ASYNC STREAMING & SMART FILENAME)
     # ==========================================
     if link_url:
-        filename = link_url.split('/')[-1].split('?')[0]
-        if not filename or '.' not in filename:
-            filename = "downloaded_file.bin"
-        temp_path = f"/tmp/{final_slug}_{filename}"
+        tracker_id = upload_id if upload_id else final_slug
+        url_progress_tracker[tracker_id] = {"status": "initializing", "loaded": 0, "total": 0}
         
         try:
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-            r = requests.get(link_url, stream=True, headers=headers, timeout=15)
-            r.raise_for_status()
-            
-            with open(temp_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(link_url, timeout=30) as r:
+                    r.raise_for_status()
+                    
+                    # 1. Filename Extractor (Bina .bin wala problem fix)
+                    cd = r.headers.get('Content-Disposition', '')
+                    if 'filename=' in cd:
+                        filename = cd.split('filename=')[1].strip('"\' ')
+                    else:
+                        parsed_url = urllib.parse.urlparse(link_url)
+                        filename = os.path.basename(parsed_url.path)
+                        if not filename or '.' not in filename:
+                            content_type = r.headers.get('Content-Type', '').split(';')[0]
+                            ext = mimetypes.guess_extension(content_type) or '.bin'
+                            if ext == '.jpe': ext = '.jpg' # Common bug fix
+                            filename = f"downloaded_media_{final_slug}{ext}"
+                    
+                    temp_path = f"/tmp/{final_slug}_{filename}"
+                    total_size = int(r.headers.get('Content-Length', 0))
+                    
+                    url_progress_tracker[tracker_id]["total"] = total_size
+                    url_progress_tracker[tracker_id]["status"] = "downloading"
+                    
+                    # 2. Async Chunk Streaming (Update UI tracker)
+                    async with aiofiles.open(temp_path, 'wb') as f:
+                        loaded_bytes = 0
+                        async for chunk_data in r.content.iter_chunked(1024 * 256): # 256KB chunks
+                            await f.write(chunk_data)
+                            loaded_bytes += len(chunk_data)
+                            url_progress_tracker[tracker_id]["loaded"] = loaded_bytes
+
+            # Download Complete, Ab HF pe bhejenge
             file_size = os.path.getsize(temp_path)
             mime_type, _ = mimetypes.guess_type(temp_path)
             if not mime_type:
-                mime_type = r.headers.get('Content-Type', 'application/octet-stream')
-            
+                mime_type = "application/octet-stream"
+                
+            url_progress_tracker[tracker_id]["status"] = "uploading_to_hf"
             repo_path = f"files/{final_slug}_{filename}"
-            api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+            
+            await asyncio.to_thread(
+                api.upload_file, path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
+            )
             os.remove(temp_path)
+            url_progress_tracker[tracker_id]["status"] = "done"
             
         except Exception as e:
-            logger.warning(f"Backend fetch failed: {e}. Creating 308 redirect instead.")
+            logger.warning(f"Backend fetch failed: {e}")
             is_external = True
             external_url = link_url
             filename = "External_Link"
+            url_progress_tracker[tracker_id]["status"] = "error"
+
+    # ==========================================
+    # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD
+    # ==========================================
+    # ... (Baaki poora logic same rahega jaisa pichle message mein tha)
 
     # ==========================================
     # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD
