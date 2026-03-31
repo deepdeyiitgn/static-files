@@ -316,7 +316,7 @@ async def process_advanced_upload(
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                if media_format == "audio":
+                                if media_format == "audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
@@ -324,11 +324,12 @@ async def process_advanced_upload(
                         'preferredquality': '256',
                     }]
                 else:
-                    # 🎬 FIX: The Modern "Format Sort" System
-                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
-                    # Ye yt-dlp ko force karega ki maximum 1080p hi chunna hai, usse zyada nahi
-                    ydl_opts['format_sort'] = ['res:1080', 'ext:mp4:m4a']
+                    # 🎬 FIX: The "Zero-Crash" Ultimate Fallback Engine
+                    # 1. 1080p -> 2. Best Available -> 3. Universal Best
+                    ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
+                    
+                    # Note: Agar 'format_sort' wali line likhi thi pichle code mein, toh use HATA DENA (Delete kar dena).
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
