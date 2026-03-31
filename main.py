@@ -148,12 +148,73 @@ def verify_auth(password: str = Header(None), auth_token: str = Cookie(None)):
 # ==========================================
 @app.get("/api/rest", response_class=JSONResponse)
 async def serve_mega_api_docs():
+    """
+    Direct API hit karne par (GET request) yeh JSON documentation reply mein aayega.
+    """
     return {
-        "system_info": {
-            "name": "Qlynk Enterprise Storage Node",
-            "version": "2.0.0",
-            "status": "Online & Operational"
-        }
+        "status": "info",
+        "version": "v2.0.0",
+        "name": "Qlynk Host Enterprise API",
+        "maker": "Deep Dey",
+        "description": "Enterprise-grade private file hosting architecture API. Upload files directly or via URL, process media using yt-dlp, and manage metadata. JSON responses available by default.",
+        "endpoints": [
+            {"method": "GET", "path": "/api/rest", "description": "Fetch this API documentation (JSON response)"},
+            {"method": "POST", "path": "/api/rest", "description": "Upload a new file or download from external URL"},
+            {"method": "PUT", "path": "/api/rest/{slug}", "description": "Update metadata (title, thumbnail, slug) of an existing file"},
+            {"method": "DELETE", "path": "/api/rest/{slug}", "description": "Permanently delete a file from Hugging Face dataset"},
+            {"method": "GET", "path": "/api/history", "description": "Fetch history of all uploaded files"},
+            {"method": "GET", "path": "/api/stats", "description": "Get total files count and storage usage details"}
+        ],
+        "authentication": {
+            "scheme": "Custom Headers & Cookies",
+            "header": "password: YOUR_SPACE_PASSWORD",
+            "alt": "Or use Browser Cookie: auth_token=YOUR_SPACE_PASSWORD"
+        },
+        "parameters": {
+            "POST_body_FormData": {
+                "file": "binary, optional if link_url is provided (Direct Local Upload)",
+                "link_url": "string, optional if file is provided (URL to download from)",
+                "slug": "string, optional; custom alias for the file url",
+                "title": "string, optional; human readable file title",
+                "thumbnail": "string (Base64 or URL), optional; custom thumbnail image",
+                "media_format": "string, default 'direct'. Set to 'video' or 'audio' to trigger yt-dlp media extraction"
+            }
+        },
+        "behavior": {
+            "mediaExtraction": "Automatically uses yt-dlp default terminal mode for YouTube/Insta links when media_format is 'video' or 'audio'.",
+            "slugCollision": "409 error when custom slug is already taken.",
+            "storage": "Files are stored directly in your private HF Dataset securely.",
+            "thumbnails": "Base64 thumbnails are automatically converted and hosted as separate image files."
+        },
+        "examples": {
+            "curlUploadLocalFile": "curl -X POST 'https://your-space.hf.space/api/rest' \\\n  -H 'password: YOUR_SPACE_PASSWORD' \\\n  -F 'file=@/path/to/local/image.jpg' \\\n  -F 'slug=my-custom-image'",
+            "curlUploadFromYoutube": "curl -X POST 'https://your-space.hf.space/api/rest' \\\n  -H 'password: YOUR_SPACE_PASSWORD' \\\n  -F 'link_url=https://youtube.com/watch?v=LxPrOsI3Mvw' \\\n  -F 'media_format=video'",
+            "fetchJsExample": "const formData = new FormData();\nformData.append('link_url', 'https://example.com/file.zip');\nfetch('https://your-space.hf.space/api/rest', { method: 'POST', headers: { 'password': 'YOUR_SPACE_PASSWORD' }, body: formData }).then(r => r.json());",
+            "responseExample": {
+                "status": "success",
+                "message": "File hosted securely.",
+                "metadata": {
+                    "slug": "my-custom-image",
+                    "filename": "image.jpg",
+                    "path": "files/my-custom-image_image.jpg",
+                    "title": "image.jpg",
+                    "thumbnail": "/f/my-custom-image",
+                    "mime_type": "image/jpeg",
+                    "size_bytes": 102400,
+                    "uploaded_at": "2026-03-31T12:00:00.000Z",
+                    "is_external": False,
+                    "external_url": ""
+                },
+                "download_url": "/f/my-custom-image"
+            }
+        },
+        "errors": [
+            {"code": 400, "message": "Must provide either a 'file' or 'link_url'"},
+            {"code": 401, "message": "UNAUTHORIZED: Access denied. Invalid Master Password"},
+            {"code": 404, "message": "File record not found for update or deletion"},
+            {"code": 409, "message": "The slug is already assigned to another file"}
+        ],
+        "docs": "Send a GET request to /api/rest at any time to view this JSON documentation."
     }
 
 url_progress_tracker = {}
