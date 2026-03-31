@@ -8,3 +8,4 @@ aiohttp
 huggingface_hub
 python-multipart
 aiofiles
+yt-dlp
