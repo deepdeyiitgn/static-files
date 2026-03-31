@@ -289,6 +289,7 @@ async def process_advanced_upload(
                         url_progress_tracker[tracker_id]["status"] = "processing_media"
 
                 # 🌟 FIX 1: Network Engine Configured to Bypass IPv6 DNS Crash
+                # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -296,9 +297,15 @@ async def process_advanced_upload(
                     'no_warnings': True,
                     'nocheckcertificate': True,
                     'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-                    'source_address': '0.0.0.0', # Force binding to IPv4
-                    'force_ipv4': True           # Disables broken Docker IPv6
+                    'force_ipv4': True,
+                    'socket_timeout': 60, # Safety timeout
                 }
+
+                # 🌟 THE SECURE PROXY INJECTION 🌟
+                # Yeh Hugging Face ki settings se tera private URL uthayega
+                proxy_url = os.environ.get("PROXY_URL")
+                if proxy_url:
+                    ydl_opts['proxy'] = proxy_url
 
                 if media_format == "audio":
                     ydl_opts['format'] = 'bestaudio/best'
