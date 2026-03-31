@@ -278,6 +278,7 @@ async def process_advanced_upload(
         
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["video", "audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
@@ -288,8 +289,13 @@ async def process_advanced_upload(
                     elif d['status'] == 'finished':
                         url_progress_tracker[tracker_id]["status"] = "processing_media"
 
-                # 🌟 FIX 1: Network Engine Configured to Bypass IPv6 DNS Crash
-                # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+                # 🌟 THE COOKIE INJECTION 🌟
+                yt_cookies = os.environ.get("YT_COOKIES")
+                cookie_path = "/tmp/yt_cookies.txt"
+                if yt_cookies:
+                    with open(cookie_path, "w") as f:
+                        f.write(yt_cookies)
+
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -298,39 +304,48 @@ async def process_advanced_upload(
                     'nocheckcertificate': True,
                     'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
                     'force_ipv4': True,
-                    'socket_timeout': 60, # Safety timeout
+                    'socket_timeout': 60,
                 }
 
-                # 🌟 THE SECURE PROXY INJECTION 🌟
-                # Yeh Hugging Face ki settings se tera private URL uthayega
+                # Proxy Injection
                 proxy_url = os.environ.get("PROXY_URL")
                 if proxy_url:
                     ydl_opts['proxy'] = proxy_url
+                
+                # Cookie File Injection
+                if yt_cookies:
+                    ydl_opts['cookiefile'] = cookie_path
 
                 if media_format == "audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
-                        'preferredquality': '320',
+                        'preferredquality': '256', # 🎵 FIX: Locked to 256kbps
                     }]
                 else:
-                    ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                    # 🎬 FIX: Locked to Maximum 1080p Resolution (MP4)
+                    ydl_opts['format'] = 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]/best'
                     ydl_opts['merge_output_format'] = 'mp4'
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(link_url, download=True)
-                        return info.get('thumbnail') # Extract original thumbnail
+                        return info.get('thumbnail'), info.get('title')
                 
-                extracted_thumb = await asyncio.to_thread(download_yt)
+                extracted_thumb, extracted_title = await asyncio.to_thread(download_yt)
+                if extracted_title and not title:
+                    title = extracted_title
                 
-                downloaded_files = glob.glob(f"/tmp/{final_slug}_*.*")
+                downloaded_files = glob.glob(f"/tmp/{final_slug}_media.*")
                 if not downloaded_files:
                     raise Exception("YT-DLP Failed to generate file.")
+                
                 temp_path = downloaded_files[0]
-                filename = os.path.basename(temp_path)
-
+                ext = os.path.splitext(temp_path)[1]
+                safe_title = "".join(x for x in (title or "Downloaded_Media") if x.isalnum() or x in " _-")
+                filename = f"{safe_title[:45]}{ext}"
+                
             # --- ENGINE B: STANDARD DIRECT PROXY ---
             else:
                 headers = {
