@@ -288,12 +288,16 @@ async def process_advanced_upload(
                     elif d['status'] == 'finished':
                         url_progress_tracker[tracker_id]["status"] = "processing_media"
 
+                # 🌟 FIX 1: Network Engine Configured to Bypass IPv6 DNS Crash
                 ydl_opts = {
-                    'outtmpl': f'/tmp/{final_slug}_%(title)s.%(ext)s',
+                    'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
                     'quiet': True,
                     'no_warnings': True,
-                    'nocheckcertificate': True, # Bypass SSL issues
+                    'nocheckcertificate': True,
+                    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+                    'source_address': '0.0.0.0', # Force binding to IPv4
+                    'force_ipv4': True           # Disables broken Docker IPv6
                 }
 
                 if media_format == "audio":
@@ -410,8 +414,8 @@ async def process_advanced_upload(
     # 🌟 NEW SMART THUMBNAIL & METADATA LOGIC
     # ==========================================
     final_thumbnail_url = thumbnail
+    upload_timestamp = datetime.utcnow().isoformat() + "Z"
     
-    # 🌟 FIX 2: Base64 Decoding ab Aakhri Step pe hoga (Chunking bug fixed)
     is_final_step = bool(link_url) or (file and chunk_index == total_chunks - 1)
     
     if is_final_step and thumbnail and thumbnail.startswith("data:image/"):
@@ -433,22 +437,37 @@ async def process_advanced_upload(
                     api.upload_file, path_or_fileobj=thumb_temp_path, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset"
                 )
                 os.remove(thumb_temp_path)
+                
                 final_thumbnail_url = f"/f/{thumb_filename}" 
+                
+                # 🌟 FIX 2: Create a metadata entry so the thumbnail can be served by the backend
+                thumb_record = {
+                    "slug": thumb_filename,
+                    "filename": f"thumbnail_{final_slug}.{img_ext}",
+                    "path": thumb_repo_path,
+                    "title": "Auto-Generated Thumbnail",
+                    "thumbnail": "",
+                    "mime_type": f"image/{img_ext}",
+                    "size_bytes": len(img_data),
+                    "uploaded_at": upload_timestamp,
+                    "is_external": False,
+                    "external_url": ""
+                }
+                files_list.append(thumb_record) # Add thumbnail to database!
+
         except Exception as e:
             logger.warning(f"Base64 processing failed: {e}")
             final_thumbnail_url = ""
 
-    # 🌟 FIX 3: Agar direct proxy image hai, toh wahi image thumbnail ban jayegi
     if not final_thumbnail_url and mime_type and mime_type.startswith("image/") and not is_external:
         final_thumbnail_url = f"/f/{final_slug}"
         
-    # 🌟 FIX 4: YT-DLP Auto Thumbnail assign karo agar available hai
     if not final_thumbnail_url and extracted_thumb:
         final_thumbnail_url = extracted_thumb
 
-    # METADATA SAVING
-    upload_timestamp = datetime.utcnow().isoformat() + "Z"
-    
+    # ==========================================
+    # SAVE MAIN FILE METADATA
+    # ==========================================
     file_record = {
         "slug": final_slug,
         "filename": filename,
