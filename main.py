@@ -5,6 +5,8 @@ import uuid
 import mimetypes
 import logging
 import requests # <--- Ye top par imports mein check kar lena
+import base64
+import re
 import glob
 import yt_dlp
 import asyncio
@@ -240,10 +242,9 @@ async def process_advanced_upload(
     chunk_index: int = Form(0),
     total_chunks: int = Form(1),
     upload_id: str = Form(None),
-    media_format: str = Form("direct"), # NAYA PARAMETER: direct, video, ya audio
+    media_format: str = Form("direct"),
     token: str = Depends(verify_auth)
 ):
-    """File upload logic with Advanced Chunking, Backend Proxy & YT-DLP Engine"""
     db = get_db()
     files_list = db.get("files", [])
     
@@ -259,9 +260,41 @@ async def process_advanced_upload(
     mime_type = "application/octet-stream"
     is_external = False
     external_url = ""
+    
+    # ==========================================
+    # 🌟 NEW: BASE64 THUMBNAIL TO FILE CONVERTER
+    # ==========================================
+    final_thumbnail_url = thumbnail
+    if chunk_index == 0 and thumbnail and thumbnail.startswith("data:image/"):
+        try:
+            match = re.match(r'data:(image/\w+);base64,(.*)', thumbnail)
+            if match:
+                img_ext = match.group(1).split('/')[1]
+                if img_ext == 'jpeg': img_ext = 'jpg'
+                img_data = base64.b64decode(match.group(2))
+                
+                thumb_filename = f"{final_slug}_thumb.{img_ext}"
+                thumb_temp_path = f"/tmp/{thumb_filename}"
+                thumb_repo_path = f"files/{thumb_filename}"
+                
+                # Disk pe temporary save karo
+                with open(thumb_temp_path, "wb") as f:
+                    f.write(img_data)
+                
+                # Hugging Face pe upload kardo as an actual image
+                await asyncio.to_thread(
+                    api.upload_file, path_or_fileobj=thumb_temp_path, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset"
+                )
+                os.remove(thumb_temp_path)
+                
+                # Ab base64 ki jagah tera khudka clean URL use hoga
+                final_thumbnail_url = f"/f/{thumb_filename}" 
+        except Exception as e:
+            logger.warning(f"Base64 Thumbnail processing failed: {e}")
+            final_thumbnail_url = ""
 
     # ==========================================
-    # LOGIC 1: UPLOAD FROM URL
+    # LOGIC 1: UPLOAD FROM URL (WITH BROWSER HEADERS)
     # ==========================================
     if link_url:
         tracker_id = upload_id if upload_id else final_slug
@@ -291,7 +324,7 @@ async def process_advanced_upload(
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
-                        'preferredquality': '320', # Best MP3 quality
+                        'preferredquality': '320',
                     }]
                 else:
                     ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
@@ -299,22 +332,31 @@ async def process_advanced_upload(
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                        ydl.extract_info(link_url, download=True)
+                        info = ydl.extract_info(link_url, download=True)
+                        return info.get('thumbnail') # Auto-detect YT Thumbnail
                 
-                await asyncio.to_thread(download_yt)
+                extracted_thumb = await asyncio.to_thread(download_yt)
                 
-                # File dhoondho (kyunki yt-dlp naam automatic banata hai)
+                # Agar user ne custom thumbnail nahi diya, toh YT wala use karlo
+                if extracted_thumb and not final_thumbnail_url:
+                    final_thumbnail_url = extracted_thumb
+                
                 downloaded_files = glob.glob(f"/tmp/{final_slug}_*.*")
                 if not downloaded_files:
-                    raise Exception("YT-DLP Processing Failed.")
+                    raise Exception("YT-DLP Processing Failed. No file output.")
                 temp_path = downloaded_files[0]
                 filename = os.path.basename(temp_path)
 
             # --- ENGINE B: STANDARD DIRECT PROXY ---
             else:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(link_url, timeout=30) as r:
-                        r.raise_for_status()
+                # 🌟 FIX: Browser headers add kiye taaki 403 Forbidden na aaye
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': '*/*'
+                }
+                async with aiohttp.ClientSession(headers=headers) as session:
+                    async with session.get(link_url, timeout=45) as r:
+                        r.raise_for_status() # Agar block hoga toh yahan pata chalega
                         
                         cd = r.headers.get('Content-Disposition', '')
                         if 'filename=' in cd:
@@ -326,7 +368,7 @@ async def process_advanced_upload(
                                 content_type = r.headers.get('Content-Type', '').split(';')[0]
                                 ext = mimetypes.guess_extension(content_type) or '.bin'
                                 if ext == '.jpe': ext = '.jpg'
-                                filename = f"proxy_dl_{final_slug}{ext}"
+                                filename = f"download_{final_slug}{ext}"
                         
                         temp_path = f"/tmp/{final_slug}_{filename}"
                         url_progress_tracker[tracker_id]["total"] = int(r.headers.get('Content-Length', 0))
@@ -334,7 +376,7 @@ async def process_advanced_upload(
                         
                         async with aiofiles.open(temp_path, 'wb') as f:
                             loaded_bytes = 0
-                            async for chunk_data in r.content.iter_chunked(1024 * 256):
+                            async for chunk_data in r.content.iter_chunked(1024 * 512): # 512KB fast chunks
                                 await f.write(chunk_data)
                                 loaded_bytes += len(chunk_data)
                                 url_progress_tracker[tracker_id]["loaded"] = loaded_bytes
@@ -355,61 +397,45 @@ async def process_advanced_upload(
             url_progress_tracker[tracker_id]["status"] = "done"
             
         except Exception as e:
-            logger.warning(f"Backend URL fetch failed: {e}")
+            logger.warning(f"Backend URL fetch failed (Falling back to 308): {e}")
             is_external = True
             external_url = link_url
             filename = "External_Media_Link"
             url_progress_tracker[tracker_id]["status"] = "error"
 
     # ==========================================
-    # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD (Aage ka code same as before...)
-
-    # ==========================================
-    # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD
-    # ==========================================
-    # ... (Baaki poora logic same rahega jaisa pichle message mein tha)
-
-    # ==========================================
     # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD
     # ==========================================
     elif file:
         filename = file.filename
-        # Temporary file name ko unique rakhne ke liye upload_id use karte hain
         temp_identifier = upload_id if upload_id else final_slug
         temp_path = f"/tmp/{temp_identifier}_{filename}"
         repo_path = f"files/{final_slug}_{filename}"
         
-        # Mode: 'ab' = Append (Chunks jodna), 'wb' = Naya banana (First chunk)
         mode = "ab" if chunk_index > 0 else "wb"
         
         async with aiofiles.open(temp_path, mode) as buffer:
             while chunk_data := await file.read(1024 * 1024):
                 await buffer.write(chunk_data)
         
-        # Agar saare chunks abhi tak nahi aaye, toh yahin se success return kardo
         if chunk_index < total_chunks - 1:
-            return {"status": "uploading", "message": f"Chunk {chunk_index + 1}/{total_chunks} received securely."}
+            return {"status": "uploading", "message": f"Chunk {chunk_index + 1}/{total_chunks} received."}
             
-        # Jab AAKHRI chunk aa jaye, tab HF pe bhejo
         file_size = os.path.getsize(temp_path)
         mime_type, _ = mimetypes.guess_type(temp_path)
         if not mime_type:
             mime_type = "application/octet-stream"
             
         await asyncio.to_thread(
-            api.upload_file,
-            path_or_fileobj=temp_path, 
-            path_in_repo=repo_path, 
-            repo_id=DATASET_REPO, 
-            repo_type="dataset"
+            api.upload_file, path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
         )
-        os.remove(temp_path) # HF pe jane ke baad local disk clean kardo
+        os.remove(temp_path)
         
     else:
         raise HTTPException(status_code=400, detail="Must provide either a 'file' or 'link_url'.")
 
     # ==========================================
-    # SAVE METADATA (Sirf aakhri chunk pe chalega)
+    # SAVE METADATA
     # ==========================================
     upload_timestamp = datetime.utcnow().isoformat() + "Z"
     
@@ -418,7 +444,7 @@ async def process_advanced_upload(
         "filename": filename,
         "path": repo_path,
         "title": title if title else filename,
-        "thumbnail": thumbnail,
+        "thumbnail": final_thumbnail_url, # 🌟 Clean URL save hoga, lamba base64 nahi
         "mime_type": mime_type,
         "size_bytes": file_size,
         "uploaded_at": upload_timestamp,
