@@ -321,11 +321,11 @@ async def process_advanced_upload(
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
-                        'preferredquality': '256', # 🎵 FIX: Locked to 256kbps
+                        'preferredquality': '256',
                     }]
                 else:
-                    # 🎬 FIX: Locked to Maximum 1080p Resolution (MP4)
-                    ydl_opts['format'] = 'bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/best[ext=mp4][height<=1080]/best'
+                    # 🎬 FIX: Download best quality up to 1080p (any format) and FORCE FFmpeg to make it MP4
+                    ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best'
                     ydl_opts['merge_output_format'] = 'mp4'
 
                 def download_yt():
