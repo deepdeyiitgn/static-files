@@ -5,6 +5,8 @@ import uuid
 import mimetypes
 import logging
 import requests # <--- Ye top par imports mein check kar lena
+import glob
+import yt_dlp
 import asyncio
 import aiofiles
 import aiohttp
@@ -227,12 +229,6 @@ async def serve_mega_api_docs():
 # Yeh line apne @app.post("/api/rest") se theek upar daal
 url_progress_tracker = {}
 
-@app.get("/api/progress/{upload_id}")
-async def get_url_progress(upload_id: str, token: str = Depends(verify_auth)):
-    """Frontend ko batayega ki backend kitna download kar chuka hai"""
-    return url_progress_tracker.get(upload_id, {"status": "idle", "loaded": 0, "total": 0})
-
-
 @app.post("/api/rest")
 async def process_advanced_upload(
     file: UploadFile = File(None),
@@ -244,9 +240,10 @@ async def process_advanced_upload(
     chunk_index: int = Form(0),
     total_chunks: int = Form(1),
     upload_id: str = Form(None),
+    media_format: str = Form("direct"), # NAYA PARAMETER: direct, video, ya audio
     token: str = Depends(verify_auth)
 ):
-    """File upload logic with Advanced Chunking & Backend Proxy"""
+    """File upload logic with Advanced Chunking, Backend Proxy & YT-DLP Engine"""
     db = get_db()
     files_list = db.get("files", [])
     
@@ -264,49 +261,89 @@ async def process_advanced_upload(
     external_url = ""
 
     # ==========================================
-    # LOGIC 1: UPLOAD FROM URL (ASYNC STREAMING & SMART FILENAME)
+    # LOGIC 1: UPLOAD FROM URL
     # ==========================================
     if link_url:
         tracker_id = upload_id if upload_id else final_slug
         url_progress_tracker[tracker_id] = {"status": "initializing", "loaded": 0, "total": 0}
         
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(link_url, timeout=30) as r:
-                    r.raise_for_status()
-                    
-                    # 1. Filename Extractor (Bina .bin wala problem fix)
-                    cd = r.headers.get('Content-Disposition', '')
-                    if 'filename=' in cd:
-                        filename = cd.split('filename=')[1].strip('"\' ')
-                    else:
-                        parsed_url = urllib.parse.urlparse(link_url)
-                        filename = os.path.basename(parsed_url.path)
-                        if not filename or '.' not in filename:
-                            content_type = r.headers.get('Content-Type', '').split(';')[0]
-                            ext = mimetypes.guess_extension(content_type) or '.bin'
-                            if ext == '.jpe': ext = '.jpg' # Common bug fix
-                            filename = f"downloaded_media_{final_slug}{ext}"
-                    
-                    temp_path = f"/tmp/{final_slug}_{filename}"
-                    total_size = int(r.headers.get('Content-Length', 0))
-                    
-                    url_progress_tracker[tracker_id]["total"] = total_size
-                    url_progress_tracker[tracker_id]["status"] = "downloading"
-                    
-                    # 2. Async Chunk Streaming (Update UI tracker)
-                    async with aiofiles.open(temp_path, 'wb') as f:
-                        loaded_bytes = 0
-                        async for chunk_data in r.content.iter_chunked(1024 * 256): # 256KB chunks
-                            await f.write(chunk_data)
-                            loaded_bytes += len(chunk_data)
-                            url_progress_tracker[tracker_id]["loaded"] = loaded_bytes
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            if media_format in ["video", "audio"]:
+                def ytdl_progress_hook(d):
+                    if d['status'] == 'downloading':
+                        total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                        url_progress_tracker[tracker_id]["total"] = total
+                        url_progress_tracker[tracker_id]["loaded"] = d.get('downloaded_bytes', 0)
+                        url_progress_tracker[tracker_id]["status"] = "downloading"
+                    elif d['status'] == 'finished':
+                        url_progress_tracker[tracker_id]["status"] = "processing_media"
 
-            # Download Complete, Ab HF pe bhejenge
+                ydl_opts = {
+                    'outtmpl': f'/tmp/{final_slug}_%(title)s.%(ext)s',
+                    'progress_hooks': [ytdl_progress_hook],
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+
+                if media_format == "audio":
+                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['postprocessors'] = [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '320', # Best MP3 quality
+                    }]
+                else:
+                    ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best'
+                    ydl_opts['merge_output_format'] = 'mp4'
+
+                def download_yt():
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        ydl.extract_info(link_url, download=True)
+                
+                await asyncio.to_thread(download_yt)
+                
+                # File dhoondho (kyunki yt-dlp naam automatic banata hai)
+                downloaded_files = glob.glob(f"/tmp/{final_slug}_*.*")
+                if not downloaded_files:
+                    raise Exception("YT-DLP Processing Failed.")
+                temp_path = downloaded_files[0]
+                filename = os.path.basename(temp_path)
+
+            # --- ENGINE B: STANDARD DIRECT PROXY ---
+            else:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(link_url, timeout=30) as r:
+                        r.raise_for_status()
+                        
+                        cd = r.headers.get('Content-Disposition', '')
+                        if 'filename=' in cd:
+                            filename = cd.split('filename=')[1].strip('"\' ')
+                        else:
+                            parsed_url = urllib.parse.urlparse(link_url)
+                            filename = os.path.basename(parsed_url.path)
+                            if not filename or '.' not in filename:
+                                content_type = r.headers.get('Content-Type', '').split(';')[0]
+                                ext = mimetypes.guess_extension(content_type) or '.bin'
+                                if ext == '.jpe': ext = '.jpg'
+                                filename = f"proxy_dl_{final_slug}{ext}"
+                        
+                        temp_path = f"/tmp/{final_slug}_{filename}"
+                        url_progress_tracker[tracker_id]["total"] = int(r.headers.get('Content-Length', 0))
+                        url_progress_tracker[tracker_id]["status"] = "downloading"
+                        
+                        async with aiofiles.open(temp_path, 'wb') as f:
+                            loaded_bytes = 0
+                            async for chunk_data in r.content.iter_chunked(1024 * 256):
+                                await f.write(chunk_data)
+                                loaded_bytes += len(chunk_data)
+                                url_progress_tracker[tracker_id]["loaded"] = loaded_bytes
+
+            # --- COMMON: UPLOAD TO HUGGING FACE ---
             file_size = os.path.getsize(temp_path)
             mime_type, _ = mimetypes.guess_type(temp_path)
             if not mime_type:
-                mime_type = "application/octet-stream"
+                mime_type = "video/mp4" if media_format == "video" else "audio/mpeg"
                 
             url_progress_tracker[tracker_id]["status"] = "uploading_to_hf"
             repo_path = f"files/{final_slug}_{filename}"
@@ -318,11 +355,14 @@ async def process_advanced_upload(
             url_progress_tracker[tracker_id]["status"] = "done"
             
         except Exception as e:
-            logger.warning(f"Backend fetch failed: {e}")
+            logger.warning(f"Backend URL fetch failed: {e}")
             is_external = True
             external_url = link_url
-            filename = "External_Link"
+            filename = "External_Media_Link"
             url_progress_tracker[tracker_id]["status"] = "error"
+
+    # ==========================================
+    # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD (Aage ka code same as before...)
 
     # ==========================================
     # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD
