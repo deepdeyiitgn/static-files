@@ -1311,31 +1311,31 @@ response = requests.post(
         <span id="toastMsg">Notification System Ready</span>
     </div>
 
-    <script>
-
-      // ==========================================
+<script>
+        // ==========================================
         // UI TOGGLE: LOCAL VS LINK UPLOAD
         // ==========================================
         let uploadMode = 'local';
+
         function checkSmartUrl() {
             const url = document.getElementById('uploadUrlObj').value.toLowerCase();
             const mediaSelector = document.getElementById('mediaFormatSelector');
             const formatSelect = document.getElementById('linkMediaFormat');
             
-            // Media platforms detect karne ki list
+            // Media platforms detect
             const isMedia = url.includes('youtube.com') || url.includes('youtu.be') || 
                             url.includes('instagram.com') || url.includes('twitter.com') || 
                             url.includes('x.com') || url.includes('facebook.com') || url.includes('tiktok.com');
             
             if (isMedia) {
                 mediaSelector.style.display = 'block';
-                formatSelect.value = 'video'; // Default best video on media links
+                formatSelect.value = 'video';
             } else {
                 mediaSelector.style.display = 'none';
                 formatSelect.value = 'direct';
             }
         }
-      
+
         function switchUploadMode(mode) {
             uploadMode = mode;
             if (mode === 'local') {
@@ -1386,7 +1386,7 @@ response = requests.post(
             if (!file) return;
             
             document.getElementById('fileNameDisplay').innerText = `Selected: ${file.name} (${(file.size/(1024*1024)).toFixed(2)} MB)`;
-            document.getElementById('uploadTitle').value = file.name.split('.')[0]; // Auto-fill title
+            document.getElementById('uploadTitle').value = file.name.split('.')[0]; 
 
             // Reset Thumbnail
             document.getElementById('uploadThumb').value = "";
@@ -1400,11 +1400,10 @@ response = requests.post(
                     video.preload = 'metadata';
                     video.src = URL.createObjectURL(file);
                     
-                    video.onloadeddata = () => { video.currentTime = 1; }; // Capture at 1 second
+                    video.onloadeddata = () => { video.currentTime = 1; };
                     
                     video.onseeked = () => {
                         const canvas = document.createElement('canvas');
-                        // Scale down to save history.json space
                         const scale = 300 / video.videoWidth; 
                         canvas.width = 300;
                         canvas.height = video.videoHeight * scale;
@@ -1416,7 +1415,7 @@ response = requests.post(
                 } catch(e) { console.error("Video thumb failed", e); }
             }
 
-            // 🎵 AUDIO THUMBNAIL EXTRACTION (Needs jsmediatags)
+            // 🎵 AUDIO THUMBNAIL EXTRACTION
             if (file.type.startsWith('audio/')) {
                 if (window.jsmediatags) {
                     triggerToast("Reading Audio Tags...");
@@ -1447,252 +1446,261 @@ response = requests.post(
         }
 
         // ==========================================
-        // UPDATED PROCESS UPLOAD (Handles Both Modes)
+        // ADVANCED UPLOAD ENGINE (Unified & Cleaned)
         // ==========================================
-// --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
-// --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
-// ==========================================
-// ADVANCED CHUNKING UPLOAD ENGINE
-// ==========================================
-const generateUploadId = () => Math.random().toString(36).substring(2, 12);
+        const generateUploadId = () => Math.random().toString(36).substring(2, 12);
 
-async function processUpload() {
-    const isLinkMode = (uploadMode === 'link');
-    const fileObj = isLinkMode ? null : document.getElementById('uploadFileObj').files[0];
-    const linkUrl = isLinkMode ? document.getElementById('uploadUrlObj').value.trim() : null;
+        async function processUpload() {
+            const isLinkMode = (uploadMode === 'link');
+            const fileObj = isLinkMode ? null : document.getElementById('uploadFileObj').files[0];
+            const linkUrl = isLinkMode ? document.getElementById('uploadUrlObj').value.trim() : null;
 
-    if (!isLinkMode && !fileObj) return triggerToast("Target binary is missing. Select a file.", true);
-    if (isLinkMode && !linkUrl) return triggerToast("Please enter a valid URL", true);
+            if (!isLinkMode && !fileObj) return triggerToast("Target binary is missing. Select a file.", true);
+            if (isLinkMode && !linkUrl) return triggerToast("Please enter a valid URL", true);
 
-    const btn = document.getElementById('btnUploadTrigger');
-    const progContainer = document.getElementById('uploadProgressContainer');
-    const chunkRow = document.getElementById('chunkInfoRow');
-    const progBar = document.getElementById('progressBar');
-    const progText = document.getElementById('progressText');
+            const btn = document.getElementById('btnUploadTrigger');
+            const progContainer = document.getElementById('uploadProgressContainer');
+            const chunkRow = document.getElementById('chunkInfoRow');
+            const progBar = document.getElementById('progressBar');
+            const progText = document.getElementById('progressText');
 
-    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
-    btn.disabled = true;
-    progContainer.style.display = 'block';
-    progBar.style.width = '0%';
-    
-    const titleVal = document.getElementById('uploadTitle').value.trim();
-    const slugVal = document.getElementById('uploadSlug').value.trim();
-    const thumbVal = document.getElementById('uploadThumb').value.trim();
-    const uploadId = generateUploadId(); // Backend ko batane ke liye ki konsi file ke tukde hain
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
+            btn.disabled = true;
+            progContainer.style.display = 'block';
+            progBar.style.width = '0%';
+            
+            const titleVal = document.getElementById('uploadTitle').value.trim();
+            const slugVal = document.getElementById('uploadSlug').value.trim();
+            const thumbVal = document.getElementById('uploadThumb').value.trim();
+            const uploadId = generateUploadId(); 
 
-    const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
-    const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
+            const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
 
-    // URL Mode Handling (No Chunking required for backend proxy)
-    // URL Mode Handling (Realtime Backend Polling)
-    // URL Mode Handling (Realtime Backend Polling)
-    if (isLinkMode) {
-        chunkRow.style.display = 'none';
-        document.getElementById('progressStatusText').innerText = "Backend Server is analyzing URL...";
-        const fd = new FormData();
-        fd.append('link_url', linkUrl);
-        fd.append('upload_id', uploadId);
-        
-        // BHEJ RAHE HAIN SELECTED FORMAT!
-        const mediaFormat = document.getElementById('mediaFormatSelector').style.display === 'block' 
-                            ? document.getElementById('linkMediaFormat').value : 'direct';
-        fd.append('media_format', mediaFormat);
-        
-        if (titleVal) fd.append('title', titleVal);
-        if (slugVal) fd.append('slug', slugVal);
-        if (thumbVal) fd.append('thumbnail', thumbVal);
-        
-        const pollInterval = setInterval(async () => {
-            try {
-                const res = await fetch(`/api/progress/${uploadId}`, { headers: {'password': pwd} });
-                const data = await res.json();
+            // ------------------------------------------
+            // 1. URL MODE HANDLING
+            // ------------------------------------------
+            if (isLinkMode) {
+                if (chunkRow) chunkRow.style.display = 'none';
+                document.getElementById('progressStatusText').innerText = "Backend Server is analyzing URL...";
+                const fd = new FormData();
+                fd.append('link_url', linkUrl);
+                fd.append('upload_id', uploadId);
                 
-                if (data.status === 'downloading') {
-                    document.getElementById('progressStatusText').innerText = mediaFormat !== 'direct' ? "Media Engine Extracting Stream..." : "Backend is downloading file...";
-                    if (data.total > 0) {
-                        const percent = (data.loaded / data.total) * 100;
-                        progBar.style.width = percent + '%';
-                        progText.innerText = Math.round(percent) + '%';
-                        const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
-                        const totalMB = (data.total / (1024 * 1024)).toFixed(2);
-                        document.getElementById('progressSize').innerText = `${loadedMB} MB / ${totalMB} MB`;
-                    } else {
-                        const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
-                        document.getElementById('progressSize').innerText = `${loadedMB} MB Downloaded...`;
-                    }
-                } else if (data.status === 'processing_media') {
-                    // NAYA: FFMPEG PROCESSING STATUS
-                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--warning)'><i class='fa-solid fa-microchip fa-spin'></i> Rendering & Merging Quality (FFmpeg)...</span>";
-                    progBar.style.width = '100%';
-                    progText.innerText = 'Wait...';
-                } else if (data.status === 'uploading_to_hf') {
-                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>Media Processed. Syncing to HF Hub...</span>";
-                    progBar.style.width = '100%';
-                    progText.innerText = '100%';
-                } else if (data.status === 'done' || data.status === 'error') {
+                const mediaFormat = document.getElementById('mediaFormatSelector').style.display === 'block' 
+                                    ? document.getElementById('linkMediaFormat').value : 'direct';
+                fd.append('media_format', mediaFormat);
+                
+                if (titleVal) fd.append('title', titleVal);
+                if (slugVal) fd.append('slug', slugVal);
+                if (thumbVal) fd.append('thumbnail', thumbVal);
+                
+                const pollInterval = setInterval(async () => {
+                    try {
+                        const res = await fetch(`/api/progress/${uploadId}`, { headers: {'password': pwd} });
+                        const data = await res.json();
+                        
+                        if (data.status === 'downloading') {
+                            document.getElementById('progressStatusText').innerText = mediaFormat !== 'direct' ? "Media Engine Extracting Stream..." : "Backend is downloading file...";
+                            if (data.total > 0) {
+                                const percent = (data.loaded / data.total) * 100;
+                                progBar.style.width = percent + '%';
+                                progText.innerText = Math.round(percent) + '%';
+                                const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
+                                const totalMB = (data.total / (1024 * 1024)).toFixed(2);
+                                document.getElementById('progressSize').innerText = `${loadedMB} MB / ${totalMB} MB`;
+                            } else {
+                                const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
+                                document.getElementById('progressSize').innerText = `${loadedMB} MB Downloaded...`;
+                            }
+                        } else if (data.status === 'processing_media') {
+                            document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--warning)'><i class='fa-solid fa-microchip fa-spin'></i> Rendering & Merging Quality (FFmpeg)...</span>";
+                            progBar.style.width = '100%';
+                            progText.innerText = 'Wait...';
+                        } else if (data.status === 'uploading_to_hf') {
+                            document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>Media Processed. Syncing to HF Hub...</span>";
+                            progBar.style.width = '100%';
+                            progText.innerText = '100%';
+                        } else if (data.status === 'done' || data.status === 'error') {
+                            clearInterval(pollInterval);
+                        }
+                    } catch(e) {}
+                }, 500);
+
+                try {
+                    await sendSingleRequest(fd, pwd);
+                } finally {
                     clearInterval(pollInterval);
                 }
-            } catch(e) {}
-        }, 500);
+                return;
+            }
 
-        try {
-            await sendSingleRequest(fd, pwd);
-        } finally {
-            clearInterval(pollInterval);
-        }
-        return;
-    }
-
-    // 🚀 LOCAL FILE CHUNKING LOGIC 🚀
-    const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB per chunk
-    const totalChunks = Math.ceil(fileObj.size / CHUNK_SIZE);
-    
-    // UI Setup
-    chunkRow.style.display = totalChunks > 1 ? 'flex' : 'none';
-    document.getElementById('progressStatusText').innerText = "Transmitting Data in Chunks...";
-    
-    let overallLoaded = 0;
-
-    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
-        const start = chunkIndex * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, fileObj.size);
-        const chunkBlob = fileObj.slice(start, end);
-
-        const fd = new FormData();
-        fd.append('file', chunkBlob, fileObj.name);
-        fd.append('chunk_index', chunkIndex);
-        fd.append('total_chunks', totalChunks);
-        fd.append('upload_id', uploadId);
-        
-        if (titleVal) fd.append('title', titleVal);
-        if (slugVal) fd.append('slug', slugVal);
-        if (thumbVal) fd.append('thumbnail', thumbVal);
-
-        try {
-            await new Promise((resolve, reject) => {
-                const xhr = new XMLHttpRequest();
-                xhr.open('POST', '/api/rest', true);
-                xhr.setRequestHeader('password', pwd);
-
-                let chunkLastLoaded = 0;
-                let chunkLastTime = Date.now();
-
-                xhr.upload.onprogress = function(e) {
-                    if (e.lengthComputable) {
-                        // 1. Current Chunk Updates
-                        const chunkMB = (e.loaded / (1024 * 1024)).toFixed(2);
-                        const chunkTotalMB = (e.total / (1024 * 1024)).toFixed(2);
-                        document.getElementById('chunkSize').innerText = `${chunkMB} MB / ${chunkTotalMB} MB`;
-                        document.getElementById('chunkText').innerText = `Uploading Part: ${chunkIndex + 1} / ${totalChunks}`;
-
-                        // 2. Overall Progress Updates
-                        const currentOverallLoaded = overallLoaded + e.loaded;
-                        const percentComplete = (currentOverallLoaded / fileObj.size) * 100;
-                        
-                        progBar.style.width = percentComplete + '%';
-                        progText.innerText = Math.round(percentComplete) + '%';
-                        
-                        const totalLoadedMB = (currentOverallLoaded / (1024 * 1024)).toFixed(2);
-                        const totalSizeMB = (fileObj.size / (1024 * 1024)).toFixed(2);
-                        document.getElementById('progressSize').innerText = `${totalLoadedMB} MB / ${totalSizeMB} MB`;
-
-                        // 3. Speed & ETA Math
-                        const currentTime = Date.now();
-                        const timeDiff = (currentTime - chunkLastTime) / 1000;
-                        
-                        if (timeDiff > 0.5) {
-                            const bytesLoadedInDiff = e.loaded - chunkLastLoaded;
-                            const speedBps = bytesLoadedInDiff / timeDiff;
-                            
-                            if (speedBps > 1024 * 1024) {
-                                document.getElementById('progressSpeed').innerHTML = `<i class="fa-solid fa-truck-fast"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
-                            } else {
-                                document.getElementById('progressSpeed').innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
-                            }
-
-                            const bytesRemaining = fileObj.size - currentOverallLoaded;
-                            const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
-                            if (etaSeconds > 60) {
-                                document.getElementById('progressEta').innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
-                            } else {
-                                document.getElementById('progressEta').innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${etaSeconds}s`;
-                            }
-
-                            chunkLastTime = currentTime;
-                            chunkLastLoaded = e.loaded;
-                        }
-                    }
-                };
-
-                xhr.onload = function() {
-                    if (xhr.status >= 200 && xhr.status < 300) {
-                        overallLoaded += chunkBlob.size;
-                        // Agar aakhri chunk hai, toh HF upload start ho jayega backend mein
-                        if (chunkIndex === totalChunks - 1) {
-                            document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>Compiling & Syncing to HF Hub (Please wait)...</span>";
-                            document.getElementById('chunkInfoRow').style.display = 'none'; // Hide chunk row at end
-                        }
-                        resolve(JSON.parse(xhr.responseText));
-                    } else {
-                        reject(xhr.responseText);
-                    }
-                };
-                xhr.onerror = () => reject("Network Error");
-                xhr.send(fd);
-            });
-        } catch (error) {
-            triggerToast("Transmission interrupted or failed.", true);
-            resetUploadUI();
-            return;
-        }
-    }
-
-    triggerToast("Asset Transmitted & Indexed Successfully!");
-    cleanForm();
-    syncData();
-    resetUploadUI();
-
-    // Helper functions
-    function resetUploadUI() {
-        btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
-        btn.disabled = false;
-        setTimeout(() => { progContainer.style.display = 'none'; progBar.style.width = '0%'; }, 4000);
-    }
-    
-    function cleanForm() {
-        if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
-        document.getElementById('uploadTitle').value = "";
-        document.getElementById('uploadSlug').value = "";
-        document.getElementById('uploadThumb').value = "";
-        if(document.getElementById('thumbPreview')) document.getElementById('thumbPreview').style.display = 'none';
-        if(document.getElementById('fileNameDisplay')) document.getElementById('fileNameDisplay').innerText = "";
-    }
-    
-    function sendSingleRequest(fd, pwd) {
-        // Simple XHR wrapper for URL links (from your original code)
-        return new Promise((resolve, reject) => {
-            const xhr = new XMLHttpRequest();
-            xhr.open('POST', '/api/rest', true);
-            xhr.setRequestHeader('password', pwd);
-            xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    triggerToast("URL Asset Fetched & Hosted!");
-                    cleanForm(); syncData(); resolve();
-                } else reject();
+            // ------------------------------------------
+            // 2. LOCAL FILE CHUNKING LOGIC
+            // ------------------------------------------
+            if (fileObj.size === 0) {
+                triggerToast("File is empty (0 bytes). Cannot upload.", true);
                 resetUploadUI();
-            };
-            xhr.send(fd);
-        });
-    }
-}
-        
-        /**
-         * QLYNK ENTERPRISE NODE - FRONTEND LOGIC
-         * Engineered by Deep Dey
-         * Features: Pagination, Smart Routing, XHR Progress, Secure Auth
-         */
+                return;
+            }
 
-        // --- DOM Element References ---
+            const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB per chunk
+            const totalChunks = Math.ceil(fileObj.size / CHUNK_SIZE);
+            
+            if (chunkRow) chunkRow.style.display = totalChunks > 1 ? 'flex' : 'none';
+            document.getElementById('progressStatusText').innerText = totalChunks > 1 ? "Transmitting Data in Chunks..." : "Transmitting Data...";
+            
+            let overallLoaded = 0;
+
+            for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                const start = chunkIndex * CHUNK_SIZE;
+                const end = Math.min(start + CHUNK_SIZE, fileObj.size);
+                const chunkBlob = fileObj.slice(start, end);
+
+                const fd = new FormData();
+                fd.append('file', chunkBlob, fileObj.name);
+                fd.append('chunk_index', chunkIndex);
+                fd.append('total_chunks', totalChunks);
+                fd.append('upload_id', uploadId);
+                
+                if (titleVal) fd.append('title', titleVal);
+                if (slugVal) fd.append('slug', slugVal);
+                if (thumbVal) fd.append('thumbnail', thumbVal);
+
+                try {
+                    await new Promise((resolve, reject) => {
+                        const xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/api/rest', true);
+                        xhr.setRequestHeader('password', pwd);
+
+                        let chunkLastLoaded = 0;
+                        let chunkLastTime = Date.now();
+
+                        xhr.upload.onprogress = function(e) {
+                            if (e.lengthComputable) {
+                                if (document.getElementById('chunkSize')) {
+                                    const chunkMB = (e.loaded / (1024 * 1024)).toFixed(2);
+                                    const chunkTotalMB = (e.total / (1024 * 1024)).toFixed(2);
+                                    document.getElementById('chunkSize').innerText = `${chunkMB} MB / ${chunkTotalMB} MB`;
+                                    document.getElementById('chunkText').innerText = `Uploading Part: ${chunkIndex + 1} / ${totalChunks}`;
+                                }
+
+                                const currentOverallLoaded = overallLoaded + e.loaded;
+                                const percentComplete = (currentOverallLoaded / fileObj.size) * 100;
+                                
+                                progBar.style.width = percentComplete + '%';
+                                progText.innerText = Math.round(percentComplete) + '%';
+                                
+                                const totalLoadedMB = (currentOverallLoaded / (1024 * 1024)).toFixed(2);
+                                const totalSizeMB = (fileObj.size / (1024 * 1024)).toFixed(2);
+                                document.getElementById('progressSize').innerText = `${totalLoadedMB} MB / ${totalSizeMB} MB`;
+
+                                const currentTime = Date.now();
+                                const timeDiff = (currentTime - chunkLastTime) / 1000;
+                                
+                                if (timeDiff > 0.5) {
+                                    const bytesLoadedInDiff = e.loaded - chunkLastLoaded;
+                                    const speedBps = bytesLoadedInDiff / timeDiff;
+                                    
+                                    if (speedBps > 1024 * 1024) {
+                                        document.getElementById('progressSpeed').innerHTML = `<i class="fa-solid fa-truck-fast"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
+                                    } else {
+                                        document.getElementById('progressSpeed').innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
+                                    }
+
+                                    const bytesRemaining = fileObj.size - currentOverallLoaded;
+                                    const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
+                                    if (etaSeconds > 60) {
+                                        document.getElementById('progressEta').innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
+                                    } else {
+                                        document.getElementById('progressEta').innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${etaSeconds}s`;
+                                    }
+
+                                    chunkLastTime = currentTime;
+                                    chunkLastLoaded = e.loaded;
+                                }
+                            }
+                        };
+
+                        xhr.onload = function() {
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                overallLoaded += chunkBlob.size;
+                                if (chunkIndex === totalChunks - 1) {
+                                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>Compiling & Syncing to HF Hub (Please wait)...</span>";
+                                    if (chunkRow) chunkRow.style.display = 'none';
+                                }
+                                resolve(JSON.parse(xhr.responseText));
+                            } else {
+                                reject(xhr.responseText);
+                            }
+                        };
+                        xhr.onerror = () => reject("Network Error");
+                        xhr.send(fd);
+                    });
+                } catch (error) {
+                    let errStr = "Transmission interrupted or failed.";
+                    try { errStr = JSON.parse(error).detail || errStr; } catch(e){}
+                    triggerToast(errStr, true);
+                    resetUploadUI();
+                    return;
+                }
+            }
+
+            triggerToast("Asset Transmitted & Indexed Successfully!");
+            cleanForm();
+            syncData();
+            resetUploadUI();
+
+            function resetUploadUI() {
+                btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+                btn.disabled = false;
+                setTimeout(() => { 
+                    progContainer.style.display = 'none'; 
+                    progBar.style.width = '0%'; 
+                    if (chunkRow) chunkRow.style.display = 'none';
+                }, 4000);
+            }
+            
+            function cleanForm() {
+                if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
+                if(document.getElementById('uploadUrlObj')) document.getElementById('uploadUrlObj').value = "";
+                document.getElementById('uploadTitle').value = "";
+                document.getElementById('uploadSlug').value = "";
+                document.getElementById('uploadThumb').value = "";
+                if(document.getElementById('thumbPreview')) document.getElementById('thumbPreview').style.display = 'none';
+                if(document.getElementById('fileNameDisplay')) document.getElementById('fileNameDisplay').innerText = "";
+            }
+            
+            function sendSingleRequest(fd, pwd) {
+                return new Promise((resolve, reject) => {
+                    const xhr = new XMLHttpRequest();
+                    xhr.open('POST', '/api/rest', true);
+                    xhr.setRequestHeader('password', pwd);
+                    xhr.onload = () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            triggerToast("URL Asset Fetched & Hosted!");
+                            cleanForm(); syncData(); resolve();
+                        } else {
+                            let errStr = "Fetch failed.";
+                            try { errStr = JSON.parse(xhr.responseText).detail || errStr; } catch(e){}
+                            triggerToast(errStr, true);
+                            reject();
+                        }
+                        resetUploadUI();
+                    };
+                    xhr.onerror = () => {
+                        triggerToast("Network error during fetch.", true);
+                        reject();
+                        resetUploadUI();
+                    }
+                    xhr.send(fd);
+                });
+            }
+        }
+
+        // ==========================================
+        // SYSTEM NAVIGATION, AUTH, & DATA FETCHING
+        // ==========================================
         const elLanding = document.getElementById('landingPage');
         const elDashboard = document.getElementById('appDashboard');
         const elModal = document.getElementById('authModal');
@@ -1700,35 +1708,21 @@ async function processUpload() {
         const toastMsg = document.getElementById('toastMsg');
         const navActionArea = document.getElementById('navActionArea');
 
-        // --- Global Application State ---
         let currentSearchTimer = null;
         let isLoggedIn = false;
 
-        // --- Pagination Architecture State ---
-        let allFilesData = [];          // Holds the master copy of fetched files
-        let filteredData = [];          // Holds search-filtered files
-        let currentPage = 1;            // Current active page index
-        const itemsPerPage = 5;         // STANDARD SETTING: Top 5 files per page
+        let allFilesData = [];
+        let filteredData = [];
+        let currentPage = 1;
+        const itemsPerPage = 5;
 
-        /**
-         * Toast Notification System
-         * @param {string} msg - Message to display
-         * @param {boolean} isErr - If true, styles as danger alert
-         */
         function triggerToast(msg, isErr = false) {
             toastMsg.innerText = msg;
             toast.className = isErr ? "show error" : "show";
             document.getElementById('toastIcon').className = isErr ? "fa-solid fa-triangle-exclamation" : "fa-solid fa-circle-check";
-            
-            setTimeout(() => { 
-                toast.className = toast.className.replace("show", ""); 
-            }, 3500);
+            setTimeout(() => { toast.className = toast.className.replace("show", ""); }, 3500);
         }
 
-        /**
-         * Clipboard API Wrapper
-         * @param {string} url - The public URL to copy
-         */
         async function copyURL(url) {
             try {
                 await navigator.clipboard.writeText(url);
@@ -1737,58 +1731,32 @@ async function processUpload() {
                 triggerToast("Clipboard access denied by browser", true);
             }
         }
-
-        // --- Authentication & Routing Engine ---
         
         window.onload = async () => {
-            // Validate secure cookie on initial load
             const cookieVal = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
             if (cookieVal) {
                 try {
-                    // Send POST request to verify token validity with backend
                     const res = await fetch('/api/verify', { method: 'POST' }); 
                     if (res.ok) {
                         isLoggedIn = true;
                         updateNavbarUI();
-                        // Optional: Automatically jump to dashboard if previously logged in
-                        // transitionToApp(); 
                         return;
                     }
-                } catch(e) {
-                    console.error("Backend unreachable on boot.");
-                }
+                } catch(e) {}
             }
-            updateNavbarUI(); // Setup default landing page UI
+            updateNavbarUI();
         };
 
-        /**
-         * Dynamic Navbar Builder
-         */
         function updateNavbarUI() {
             if(isLoggedIn) {
-                navActionArea.innerHTML = `
-                    <button class="btn btn-outline btn-sm" onclick="toggleView('dashboard')">
-                        <i class="fa-solid fa-gauge"></i> Enter Dashboard
-                    </button>
-                `;
-                // Update hero button as well
+                navActionArea.innerHTML = `<button class="btn btn-outline btn-sm" onclick="toggleView('dashboard')"><i class="fa-solid fa-gauge"></i> Enter Dashboard</button>`;
                 const heroBtn = document.getElementById('btnHeroAccess');
-                if(heroBtn) {
-                    heroBtn.innerHTML = '<i class="fa-solid fa-gauge"></i> Go to Dashboard';
-                }
+                if(heroBtn) heroBtn.innerHTML = '<i class="fa-solid fa-gauge"></i> Go to Dashboard';
             } else {
-                navActionArea.innerHTML = `
-                    <button class="btn btn-primary btn-sm" onclick="openLoginModal()">
-                        <i class="fa-solid fa-lock"></i> Node Login
-                    </button>
-                `;
+                navActionArea.innerHTML = `<button class="btn btn-primary btn-sm" onclick="openLoginModal()"><i class="fa-solid fa-lock"></i> Node Login</button>`;
             }
         }
 
-        /**
-         * View Controller (Smart Navigation without Logout)
-         * @param {string} view - Target view ('docs' or 'dashboard')
-         */
         function toggleView(view) {
             if (view === 'docs') {
                 elDashboard.style.display = 'none';
@@ -1798,17 +1766,13 @@ async function processUpload() {
                 if(!isLoggedIn) return openLoginModal();
                 elLanding.style.display = 'none';
                 elDashboard.style.display = 'block';
-                syncData(); // Always refresh data when entering dashboard
+                syncData();
                 window.scrollTo(0,0);
             }
         }
 
         function handleAccessSystem() {
-            if (isLoggedIn) {
-                toggleView('dashboard');
-            } else {
-                openLoginModal();
-            }
+            if (isLoggedIn) toggleView('dashboard'); else openLoginModal();
         }
 
         function openLoginModal() { 
@@ -1821,9 +1785,6 @@ async function processUpload() {
             document.getElementById('masterPwd').value = '';
         }
 
-        /**
-         * Master Login Execution
-         */
         async function executeLogin() {
             const pwd = document.getElementById('masterPwd').value;
             if (!pwd) return triggerToast("Authentication sequence required.", true);
@@ -1834,13 +1795,8 @@ async function processUpload() {
             btn.disabled = true;
 
             try {
-                const res = await fetch('/api/verify', { 
-                    method: 'POST', 
-                    headers: { 'password': pwd } 
-                });
-                
+                const res = await fetch('/api/verify', { method: 'POST', headers: { 'password': pwd } });
                 if (res.ok) {
-                    // Inject strict 1-year persistent cookie
                     document.cookie = `auth_token=${pwd}; max-age=31536000; path=/; SameSite=Strict`;
                     isLoggedIn = true;
                     updateNavbarUI();
@@ -1850,22 +1806,15 @@ async function processUpload() {
                 } else {
                     triggerToast("Access Denied: Invalid Master Sequence", true);
                 }
-            } catch(e) {
-                triggerToast("Connection to host failed.", true);
-            } finally {
-                btn.innerHTML = originalText;
-                btn.disabled = false;
-            }
+            } catch(e) { triggerToast("Connection to host failed.", true); } 
+            finally { btn.innerHTML = originalText; btn.disabled = false; }
         }
 
         function logoutSystem() {
-            // Destroy cookie
             document.cookie = "auth_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
             window.location.reload();
         }
 
-        // --- Data Synchronization Pipeline ---
-        
         async function syncData() {
             fetchSystemStats();
             fetchExplorerData();
@@ -1876,27 +1825,19 @@ async function processUpload() {
                 const res = await fetch('/api/stats');
                 if (res.ok) {
                     const data = await res.json();
-                    
-                    // Animate numbers for premium feel
                     document.getElementById('uiTotalFiles').innerText = data.total_files;
                     document.getElementById('uiTotalSize').innerText = data.formatted_total_size || "0 B";
                 }
-            } catch (e) { 
-                console.error("Telemetry failure", e); 
-            }
+            } catch (e) {}
         }
 
-        /**
-         * Advanced Search Handler with Debounce
-         */
         function handleSearch() {
             clearTimeout(currentSearchTimer);
             const query = document.getElementById('searchInput').value.toLowerCase().trim();
             
-            // Debounce for performance
             currentSearchTimer = setTimeout(() => { 
                 if (query === "") {
-                    filteredData = [...allFilesData]; // Reset to all
+                    filteredData = [...allFilesData];
                 } else {
                     filteredData = allFilesData.filter(f => 
                         (f.title && f.title.toLowerCase().includes(query)) || 
@@ -1904,19 +1845,15 @@ async function processUpload() {
                         (f.filename && f.filename.toLowerCase().includes(query))
                     );
                 }
-                currentPage = 1; // Always return to page 1 on search
+                currentPage = 1;
                 renderExplorer();
             }, 300);
         }
 
-        /**
-         * Fetch Master Dataset from HF
-         */
         async function fetchExplorerData() {
             const listEl = document.getElementById('explorerList');
             const paginationEl = document.getElementById('paginationControls');
             
-            // Show loader
             listEl.innerHTML = `
                 <div style="text-align: center; padding: 4rem 2rem; color: var(--text-muted);">
                     <i class="fa-solid fa-circle-notch fa-spin fa-3x" style="margin-bottom: 1.5rem; color: var(--accent);"></i>
@@ -1929,13 +1866,9 @@ async function processUpload() {
                 const res = await fetch('/api/history');
                 if (res.ok) {
                     allFilesData = await res.json();
-                    // Initialize filtered data as full data
                     filteredData = [...allFilesData];
                     currentPage = 1; 
-                    
-                    // Clear search input on fresh sync
                     document.getElementById('searchInput').value = "";
-                    
                     renderExplorer();
                 } else {
                     listEl.innerHTML = `<div class="alert-box"><h3>Sync Failed</h3><p>Server rejected the request.</p></div>`;
@@ -1947,9 +1880,6 @@ async function processUpload() {
             }
         }
 
-        /**
-         * Intelligent File Type Icon Mapper
-         */
         function getFileIcon(mime, filename) {
             const m = mime ? mime.toLowerCase() : "";
             const fn = filename ? filename.toLowerCase() : "";
@@ -1962,11 +1892,9 @@ async function processUpload() {
             if (m.includes('json') || fn.match(/\.json$/)) return '<i class="fa-brands fa-node-js" style="color: #17c964;"></i>';
             if (fn.match(/\.(py|js|html|css|ts|tsx|jsx)$/)) return '<i class="fa-solid fa-code" style="color: #0070f3;"></i>';
             
-            return '<i class="fa-solid fa-file-lines"></i>'; // Default
+            return '<i class="fa-solid fa-file-lines"></i>';
         }
 
-        // --- Core Render & Pagination Engine ---
-        
         function renderExplorer() {
             const listEl = document.getElementById('explorerList');
             const paginationEl = document.getElementById('paginationControls');
@@ -1982,7 +1910,6 @@ async function processUpload() {
                 return;
             }
 
-            // Math for Pagination Segment
             const totalPages = Math.ceil(filteredData.length / itemsPerPage);
             if (currentPage > totalPages) currentPage = totalPages;
             if (currentPage < 1) currentPage = 1;
@@ -1990,23 +1917,18 @@ async function processUpload() {
             const startIndex = (currentPage - 1) * itemsPerPage;
             const currentSegment = filteredData.slice(startIndex, startIndex + itemsPerPage);
 
-            // Construct DOM string
             let htmlChunk = "";
             currentSegment.forEach(f => {
                 const publicUrl = `${window.location.origin}/f/${f.slug}`;
-                
-                // Format Date safely
                 let dateStr = "N/A";
                 if (f.uploaded_at) {
                     const d = new Date(f.uploaded_at);
                     if (!isNaN(d)) {
-                        // e.g., "15 Mar 2026, 14:30"
                         const timeOpts = { hour: '2-digit', minute:'2-digit' };
                         dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + " " + d.toLocaleTimeString([], timeOpts);
                     }
                 }
 
-                // Determine Icon or Thumbnail
                 let iconUI = f.thumbnail 
                     ? `<img src="${f.thumbnail}" alt="Thumbnail" loading="lazy">` 
                     : getFileIcon(f.mime_type, f.filename);
@@ -2026,29 +1948,17 @@ async function processUpload() {
                             </div>
                         </div>
                         <div class="file-actions">
-                            <button class="icon-btn" onclick="copyURL('${publicUrl}')" title="Copy Public Link">
-                                <i class="fa-solid fa-copy"></i>
-                            </button>
-                            
-                            <a href="${publicUrl}" target="_blank" class="icon-btn new-tab" title="Open File in New Tab">
-                                <i class="fa-solid fa-arrow-up-right-from-square"></i>
-                            </a>
-                            
-                            <button class="icon-btn" onclick="triggerEdit('${f.slug}', '${safeTitle}', '${safeThumb}')" title="Edit Metadata">
-                                <i class="fa-solid fa-pen-to-square"></i>
-                            </button>
-                            <button class="icon-btn delete" onclick="triggerDelete('${f.slug}')" title="Permanently Erase">
-                                <i class="fa-solid fa-trash-can"></i>
-                            </button>
+                            <button class="icon-btn" onclick="copyURL('${publicUrl}')" title="Copy Public Link"><i class="fa-solid fa-copy"></i></button>
+                            <a href="${publicUrl}" target="_blank" class="icon-btn new-tab" title="Open File in New Tab"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>
+                            <button class="icon-btn" onclick="triggerEdit('${f.slug}', '${safeTitle}', '${safeThumb}')" title="Edit Metadata"><i class="fa-solid fa-pen-to-square"></i></button>
+                            <button class="icon-btn delete" onclick="triggerDelete('${f.slug}')" title="Permanently Erase"><i class="fa-solid fa-trash-can"></i></button>
                         </div>
                     </div>
                 `;
             });
             
-            // Inject to DOM
             listEl.innerHTML = htmlChunk;
 
-            // Handle Pagination State & UI
             if (totalPages > 1) {
                 paginationEl.style.display = 'flex';
                 document.getElementById('pageIndicator').innerText = `Page ${currentPage} of ${totalPages} (Total: ${filteredData.length})`;
@@ -2059,27 +1969,19 @@ async function processUpload() {
             }
         }
 
-        // Pagination Controllers
         function prevPage() {
             if (currentPage > 1) { 
-                currentPage--; 
-                renderExplorer(); 
-                document.getElementById('explorerList').scrollIntoView({behavior: 'smooth', block: 'start'});
+                currentPage--; renderExplorer(); document.getElementById('explorerList').scrollIntoView({behavior: 'smooth', block: 'start'});
             }
         }
         
         function nextPage() {
             const totalPages = Math.ceil(filteredData.length / itemsPerPage);
             if (currentPage < totalPages) { 
-                currentPage++; 
-                renderExplorer(); 
-                document.getElementById('explorerList').scrollIntoView({behavior: 'smooth', block: 'start'});
+                currentPage++; renderExplorer(); document.getElementById('explorerList').scrollIntoView({behavior: 'smooth', block: 'start'});
             }
         }
 
-
-        // --- Data Mutators ---
-        
         async function triggerEdit(slug, currentTitle, currentThumb) {
             const nTitle = prompt("Update Title (Leave as is to keep current):", currentTitle);
             if (nTitle === null) return;
@@ -2095,13 +1997,11 @@ async function processUpload() {
                 const res = await fetch(`/api/rest/${slug}`, { method: 'PUT', body: fd });
                 if (res.ok) {
                     triggerToast("Metadata Synced to Node.");
-                    fetchExplorerData(document.getElementById('searchInput').value);
+                    fetchExplorerData();
                 } else {
                     triggerToast("Update Failed. Slug might conflict.", true);
                 }
-            } catch(e) {
-                triggerToast("Network error during update.", true);
-            }
+            } catch(e) { triggerToast("Network error during update.", true); }
         }
 
         async function triggerDelete(slug) {
@@ -2110,15 +2010,9 @@ async function processUpload() {
 
             try {
                 const res = await fetch(`/api/rest/${slug}`, { method: 'DELETE' });
-                if (res.ok) {
-                    triggerToast("Asset Permanently Purged.");
-                    syncData();
-                } else {
-                    triggerToast("Deletion Failed at Node Level.", true);
-                }
-            } catch(e) {
-                triggerToast("Network error during deletion.", true);
-            }
+                if (res.ok) { triggerToast("Asset Permanently Purged."); syncData(); } 
+                else { triggerToast("Deletion Failed at Node Level.", true); }
+            } catch(e) { triggerToast("Network error during deletion.", true); }
         }
     </script>
 
