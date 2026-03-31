@@ -1235,6 +1235,11 @@ response = requests.post(
             <div style="display: flex; gap: 20px;">
                 <span id="progressSpeed"><i class="fa-solid fa-gauge-high"></i> 0 KB/s</span>
                 <span id="progressEta" style="color: var(--text-main);"><i class="fa-solid fa-stopwatch"></i> ETA: --</span>
+
+        <div class="progress-footer" id="chunkInfoRow" style="display: none; margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; font-weight: 600;">
+            <span id="chunkText" style="color: var(--warning);">Uploading Part: 1 / 1</span>
+            <span id="chunkSize" style="color: var(--accent);">0.00 MB / 10.00 MB</span>
+        </div>      
             </div>
         </div>
     </div>
@@ -1417,107 +1422,195 @@ response = requests.post(
         // ==========================================
 // --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
 // --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
+// ==========================================
+// ADVANCED CHUNKING UPLOAD ENGINE
+// ==========================================
+const generateUploadId = () => Math.random().toString(36).substring(2, 12);
+
 async function processUpload() {
-            const fd = new FormData();
+    const isLinkMode = (uploadMode === 'link');
+    const fileObj = isLinkMode ? null : document.getElementById('uploadFileObj').files[0];
+    const linkUrl = isLinkMode ? document.getElementById('uploadUrlObj').value.trim() : null;
 
-            // 1. DYNAMIC PAYLOAD BUILDER
-            if (uploadMode === 'local') {
-                const fileObj = document.getElementById('uploadFileObj').files[0];
-                if (!fileObj) return triggerToast("Target binary is missing. Select a file.", true);
-                fd.append('file', fileObj);
-            } else {
-                const linkUrl = document.getElementById('uploadUrlObj').value.trim();
-                if (!linkUrl) return triggerToast("Please enter a valid URL", true);
-                fd.append('link_url', linkUrl); // Backend proxy zindabad!
-            }
+    if (!isLinkMode && !fileObj) return triggerToast("Target binary is missing. Select a file.", true);
+    if (isLinkMode && !linkUrl) return triggerToast("Please enter a valid URL", true);
 
-            const btn = document.getElementById('btnUploadTrigger');
-            const progContainer = document.getElementById('uploadProgressContainer');
-            const progBar = document.getElementById('progressBar');
-            const progText = document.getElementById('progressText');
-            
-            document.getElementById('progressStatusText').innerText = uploadMode === 'link' 
-                ? "Backend Proxy is fetching & uploading..." 
-                : "Transmitting to Node...";
+    const btn = document.getElementById('btnUploadTrigger');
+    const progContainer = document.getElementById('uploadProgressContainer');
+    const chunkRow = document.getElementById('chunkInfoRow');
+    const progBar = document.getElementById('progressBar');
+    const progText = document.getElementById('progressText');
 
-            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
-            btn.disabled = true;
-            progContainer.style.display = 'block';
-            progBar.style.width = '0%';
+    btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
+    btn.disabled = true;
+    progContainer.style.display = 'block';
+    progBar.style.width = '0%';
+    
+    const titleVal = document.getElementById('uploadTitle').value.trim();
+    const slugVal = document.getElementById('uploadSlug').value.trim();
+    const thumbVal = document.getElementById('uploadThumb').value.trim();
+    const uploadId = generateUploadId(); // Backend ko batane ke liye ki konsi file ke tukde hain
 
-            const titleVal = document.getElementById('uploadTitle').value.trim();
-            const slugVal = document.getElementById('uploadSlug').value.trim();
-            const thumbVal = document.getElementById('uploadThumb').value.trim();
+    const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+    const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
 
-            if (titleVal) fd.append('title', titleVal);
-            if (slugVal) fd.append('slug', slugVal);
-            if (thumbVal) fd.append('thumbnail', thumbVal);
+    // URL Mode Handling (No Chunking required for backend proxy)
+    if (isLinkMode) {
+        chunkRow.style.display = 'none';
+        document.getElementById('progressStatusText').innerText = "Backend Proxy is fetching & uploading...";
+        const fd = new FormData();
+        fd.append('link_url', linkUrl);
+        if (titleVal) fd.append('title', titleVal);
+        if (slugVal) fd.append('slug', slugVal);
+        if (thumbVal) fd.append('thumbnail', thumbVal);
+        
+        // ... Normal fetch logic for link (you can use your existing XHR here)
+        await sendSingleRequest(fd, pwd);
+        return;
+    }
 
-            const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
-            const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
+    // 🚀 LOCAL FILE CHUNKING LOGIC 🚀
+    const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB per chunk
+    const totalChunks = Math.ceil(fileObj.size / CHUNK_SIZE);
+    
+    // UI Setup
+    chunkRow.style.display = totalChunks > 1 ? 'flex' : 'none';
+    document.getElementById('progressStatusText').innerText = "Transmitting Data in Chunks...";
+    
+    let overallLoaded = 0;
 
+    for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        const start = chunkIndex * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, fileObj.size);
+        const chunkBlob = fileObj.slice(start, end);
+
+        const fd = new FormData();
+        fd.append('file', chunkBlob, fileObj.name);
+        fd.append('chunk_index', chunkIndex);
+        fd.append('total_chunks', totalChunks);
+        fd.append('upload_id', uploadId);
+        
+        if (titleVal) fd.append('title', titleVal);
+        if (slugVal) fd.append('slug', slugVal);
+        if (thumbVal) fd.append('thumbnail', thumbVal);
+
+        try {
+            await new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('POST', '/api/rest', true);
+                xhr.setRequestHeader('password', pwd);
+
+                let chunkLastLoaded = 0;
+                let chunkLastTime = Date.now();
+
+                xhr.upload.onprogress = function(e) {
+                    if (e.lengthComputable) {
+                        // 1. Current Chunk Updates
+                        const chunkMB = (e.loaded / (1024 * 1024)).toFixed(2);
+                        const chunkTotalMB = (e.total / (1024 * 1024)).toFixed(2);
+                        document.getElementById('chunkSize').innerText = `${chunkMB} MB / ${chunkTotalMB} MB`;
+                        document.getElementById('chunkText').innerText = `Uploading Part: ${chunkIndex + 1} / ${totalChunks}`;
+
+                        // 2. Overall Progress Updates
+                        const currentOverallLoaded = overallLoaded + e.loaded;
+                        const percentComplete = (currentOverallLoaded / fileObj.size) * 100;
+                        
+                        progBar.style.width = percentComplete + '%';
+                        progText.innerText = Math.round(percentComplete) + '%';
+                        
+                        const totalLoadedMB = (currentOverallLoaded / (1024 * 1024)).toFixed(2);
+                        const totalSizeMB = (fileObj.size / (1024 * 1024)).toFixed(2);
+                        document.getElementById('progressSize').innerText = `${totalLoadedMB} MB / ${totalSizeMB} MB`;
+
+                        // 3. Speed & ETA Math
+                        const currentTime = Date.now();
+                        const timeDiff = (currentTime - chunkLastTime) / 1000;
+                        
+                        if (timeDiff > 0.5) {
+                            const bytesLoadedInDiff = e.loaded - chunkLastLoaded;
+                            const speedBps = bytesLoadedInDiff / timeDiff;
+                            
+                            if (speedBps > 1024 * 1024) {
+                                document.getElementById('progressSpeed').innerHTML = `<i class="fa-solid fa-truck-fast"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
+                            } else {
+                                document.getElementById('progressSpeed').innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
+                            }
+
+                            const bytesRemaining = fileObj.size - currentOverallLoaded;
+                            const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
+                            if (etaSeconds > 60) {
+                                document.getElementById('progressEta').innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
+                            } else {
+                                document.getElementById('progressEta').innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${etaSeconds}s`;
+                            }
+
+                            chunkLastTime = currentTime;
+                            chunkLastLoaded = e.loaded;
+                        }
+                    }
+                };
+
+                xhr.onload = function() {
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        overallLoaded += chunkBlob.size;
+                        // Agar aakhri chunk hai, toh HF upload start ho jayega backend mein
+                        if (chunkIndex === totalChunks - 1) {
+                            document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>Compiling & Syncing to HF Hub (Please wait)...</span>";
+                            document.getElementById('chunkInfoRow').style.display = 'none'; // Hide chunk row at end
+                        }
+                        resolve(JSON.parse(xhr.responseText));
+                    } else {
+                        reject(xhr.responseText);
+                    }
+                };
+                xhr.onerror = () => reject("Network Error");
+                xhr.send(fd);
+            });
+        } catch (error) {
+            triggerToast("Transmission interrupted or failed.", true);
+            resetUploadUI();
+            return;
+        }
+    }
+
+    triggerToast("Asset Transmitted & Indexed Successfully!");
+    cleanForm();
+    syncData();
+    resetUploadUI();
+
+    // Helper functions
+    function resetUploadUI() {
+        btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+        btn.disabled = false;
+        setTimeout(() => { progContainer.style.display = 'none'; progBar.style.width = '0%'; }, 4000);
+    }
+    
+    function cleanForm() {
+        if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
+        document.getElementById('uploadTitle').value = "";
+        document.getElementById('uploadSlug').value = "";
+        document.getElementById('uploadThumb').value = "";
+        if(document.getElementById('thumbPreview')) document.getElementById('thumbPreview').style.display = 'none';
+        if(document.getElementById('fileNameDisplay')) document.getElementById('fileNameDisplay').innerText = "";
+    }
+    
+    function sendSingleRequest(fd, pwd) {
+        // Simple XHR wrapper for URL links (from your original code)
+        return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.open('POST', '/api/rest', true);
             xhr.setRequestHeader('password', pwd);
-
-            // Progress Listener (Only tracks browser-to-backend transfer)
-            xhr.upload.onprogress = function(e) {
-                if (e.lengthComputable) {
-                    const percentComplete = (e.loaded / e.total) * 100;
-                    progBar.style.width = percentComplete + '%';
-                    progText.innerText = Math.round(percentComplete) + '%';
-                    
-                    // If link mode, transfer is instant. Tell user backend is working.
-                    if (uploadMode === 'link' && percentComplete === 100) {
-                        document.getElementById('progressStatusText').innerText = "Backend downloading file, please wait...";
-                    }
-                }
-            };
-
-            xhr.onload = function() {
+            xhr.onload = () => {
                 if (xhr.status >= 200 && xhr.status < 300) {
-                    const resp = JSON.parse(xhr.responseText);
-                    // Check if failsafe was triggered
-                    if (resp.metadata && resp.metadata.is_external) {
-                        triggerToast("File blocked by source. 308 Smart Redirect created instead!");
-                    } else {
-                        triggerToast("Asset Transmitted & Indexed Successfully!");
-                    }
-                    
-                    // Reset
-                    if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
-                    if(document.getElementById('uploadUrlObj')) document.getElementById('uploadUrlObj').value = "";
-                    document.getElementById('uploadTitle').value = "";
-                    document.getElementById('uploadSlug').value = "";
-                    document.getElementById('uploadThumb').value = "";
-                    if(document.getElementById('thumbPreview')) document.getElementById('thumbPreview').style.display = 'none';
-                    if(document.getElementById('fileNameDisplay')) document.getElementById('fileNameDisplay').innerText = "";
-                    
-                    syncData(); 
-                } else {
-                    let err = "Transmission failed.";
-                    try { err = JSON.parse(xhr.responseText).detail || err; } catch(e){}
-                    triggerToast(`Error: ${err}`, true);
-                }
-                resetUI();
+                    triggerToast("URL Asset Fetched & Hosted!");
+                    cleanForm(); syncData(); resolve();
+                } else reject();
+                resetUploadUI();
             };
-
-            xhr.onerror = function() {
-                triggerToast("Connection interrupted by network.", true);
-                resetUI();
-            };
-
-            function resetUI() {
-                btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
-                btn.disabled = false;
-                setTimeout(() => { 
-                    progContainer.style.display = 'none'; 
-                    progBar.style.width = '0%'; 
-                }, 3500);
-            }
-
             xhr.send(fd);
-        }
+        });
+    }
+}
         
         /**
          * QLYNK ENTERPRISE NODE - FRONTEND LOGIC
