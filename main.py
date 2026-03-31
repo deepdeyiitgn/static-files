@@ -4,7 +4,7 @@ import shutil
 import uuid
 import mimetypes
 import logging
-import requests # <--- Ye top par imports mein check kar lena
+import requests
 import base64
 import re
 import glob
@@ -37,33 +37,27 @@ logger = logging.getLogger("QlynkHost")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 SPACE_PASSWORD = os.environ.get("SPACE_PASSWORD")
 
-# Hugging Face API Client Initialization
 api = HfApi(token=HF_TOKEN)
 DATASET_REPO = os.environ.get("DATASET_REPO")
 
 # ==========================================
 # 2. ADVANCED FAST BOOT (LIFESPAN MANAGER)
 # ==========================================
-# Yeh function server start hone ke BAAD background mein chalta hai.
-# Isse port 7860 block nahi hota aur Space immediately "Running" state mein aa jata hai.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global DATASET_REPO
     logger.info("Starting Qlynk Host Initialization Sequence...")
     
     try:
-        # Agar repo name user ne env mein nahi diya, toh automatic detect karo
         if not DATASET_REPO:
             user_info = api.whoami()
             username = user_info.get("name")
             DATASET_REPO = f"{username}/my-private-storage"
             logger.info(f"Auto-detected Target Repo: {DATASET_REPO}")
         
-        # Private dataset create karna (agar exist nahi karta)
         api.create_repo(repo_id=DATASET_REPO, repo_type="dataset", private=True, exist_ok=True)
         logger.info("Dataset Repository Verified & Ready.")
         
-        # History JSON database setup karna
         try:
             hf_hub_download(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
             logger.info("Existing database (history.json) found.")
@@ -85,7 +79,6 @@ async def lifespan(app: FastAPI):
     yield
     logger.info("Shutting down Qlynk Host...")
 
-# Initialize FastAPI App with standard meta tags
 app = FastAPI(
     title="Qlynk Host Ultimate",
     description="Enterprise-grade private file hosting architecture using HF Datasets.",
@@ -96,10 +89,9 @@ app = FastAPI(
 # ==========================================
 # 3. DYNAMIC CORS (DOMAIN WHITELISTING)
 # ==========================================
-# ENV variables (DOMAIN_1, DOMAIN_2...) ko check karke allowed domains banayega
 allowed_origins = [val for key, val in os.environ.items() if key.startswith("DOMAIN_")]
 if not allowed_origins:
-    allowed_origins = ["*"] # Public fallback
+    allowed_origins = ["*"] 
     logger.info("CORS policy set to open (*). No specific domains whitelisted.")
 else:
     logger.info(f"CORS Whitelisted Domains: {', '.join(allowed_origins)}")
@@ -116,7 +108,6 @@ app.add_middleware(
 # 4. UTILITY & DATABASE FUNCTIONS
 # ==========================================
 def format_size(size_in_bytes: int) -> str:
-    """Bytes ko KB, MB, GB mein format karne ke liye"""
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size_in_bytes < 1024.0:
             return f"{size_in_bytes:.2f} {unit}"
@@ -124,7 +115,6 @@ def format_size(size_in_bytes: int) -> str:
     return f"{size_in_bytes:.2f} PB"
 
 def get_db() -> Dict[str, Any]:
-    """Hugging Face se latest database json download karta hai"""
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
         with open(file_path, "r") as f:
@@ -134,8 +124,6 @@ def get_db() -> Dict[str, Any]:
         return {"total_files": 0, "total_size_bytes": 0, "files": []}
 
 def save_db(db_data: Dict[str, Any]):
-    """Database ko update karke wapas Hugging Face par upload karta hai"""
-    # Recalculate stats for safety
     db_data["total_files"] = len(db_data.get("files", []))
     db_data["total_size_bytes"] = sum(item.get("size_bytes", 0) for item in db_data.get("files", []))
     
@@ -149,7 +137,6 @@ def save_db(db_data: Dict[str, Any]):
         repo_type="dataset"
     )
 
-# Auth Middleware: Cookie ya Header dono se verify karta hai
 def verify_auth(password: str = Header(None), auth_token: str = Cookie(None)):
     token = password or auth_token
     if not token or token != SPACE_PASSWORD:
@@ -159,76 +146,16 @@ def verify_auth(password: str = Header(None), auth_token: str = Cookie(None)):
 # ==========================================
 # 5. CORE REST APIs (THE MEGA SYSTEM)
 # ==========================================
-
 @app.get("/api/rest", response_class=JSONResponse)
 async def serve_mega_api_docs():
-    """
-    Yeh endpoint browser hit karne par pure system ka detailed documentation dega.
-    Tum ise apni dusri websites par as a backend reference use kar sakte ho.
-    """
     return {
         "system_info": {
             "name": "Qlynk Enterprise Storage Node",
             "version": "2.0.0",
-            "status": "Online & Operational",
-            "storage_provider": "Hugging Face Datasets"
-        },
-        "authentication_guide": {
-            "method": "API Key / Password",
-            "how_to_use": "Include your SPACE_PASSWORD in the request Headers as 'password: YOUR_PWD'."
-        },
-        "endpoints_documentation": {
-            "1_UPLOAD_FILE": {
-                "route": "POST /api/rest",
-                "description": "Upload a new file to the storage node.",
-                "required_headers": {"password": "Your secret password"},
-                "form_data_parameters": {
-                    "file": "[REQUIRED] The actual file binary.",
-                    "slug": "[OPTIONAL] Custom URL friendly identifier. Auto-generated if blank.",
-                    "title": "[OPTIONAL] Human readable title for the file.",
-                    "thumbnail": "[OPTIONAL] URL pointing to an image thumbnail.",
-                    "format": "[OPTIONAL] 'json' (returns metadata) OR 'redirect' (performs 308 redirect instantly)."
-                },
-                "success_response": "200 OK (JSON with file details and public URL)"
-            },
-            "2_UPDATE_METADATA": {
-                "route": "PUT /api/rest/{current_slug}",
-                "description": "Edit the title, thumbnail, or even the slug of an existing file.",
-                "required_headers": {"password": "Your secret password"},
-                "form_data_parameters": {
-                    "new_slug": "[OPTIONAL] Change the public URL string.",
-                    "title": "[OPTIONAL] Update the title.",
-                    "thumbnail": "[OPTIONAL] Update the thumbnail URL."
-                }
-            },
-            "3_DELETE_FILE": {
-                "route": "DELETE /api/rest/{slug}",
-                "description": "Permanently erase a file from the Hugging Face dataset.",
-                "required_headers": {"password": "Your secret password"}
-            },
-            "4_FETCH_HISTORY": {
-                "route": "GET /api/history",
-                "description": "Get an array of all uploaded files. Supports search.",
-                "query_params": {
-                    "search": "[OPTIONAL] Filter files by title or filename."
-                }
-            },
-            "5_SYSTEM_STATS": {
-                "route": "GET /api/stats",
-                "description": "Get server storage usage statistics."
-            }
-        },
-        "error_reference": {
-            "401": "Unauthorized - Password missing or wrong.",
-            "404": "Not Found - The file or slug does not exist.",
-            "409": "Conflict - The slug you are trying to use is already taken.",
-            "500": "Internal Server Error - Usually an issue communicating with Hugging Face."
+            "status": "Online & Operational"
         }
     }
 
-# import requests # <--- Ye top par imports mein check kar lena
-
-# Yeh line apne @app.post("/api/rest") se theek upar daal
 url_progress_tracker = {}
 
 @app.post("/api/rest")
@@ -260,9 +187,8 @@ async def process_advanced_upload(
     mime_type = "application/octet-stream"
     is_external = False
     external_url = ""
-    extracted_thumb = "" # Auto-thumbnail store karne ke liye
+    extracted_thumb = "" 
     
-    # 🌟 FIX 1: FORCE YT-DLP FOR MEDIA SITES (To prevent HTML 0.00 B download)
     if link_url:
         media_domains = ['youtube.com', 'youtu.be', 'instagram.com', 'twitter.com', 'x.com', 'facebook.com', 'tiktok.com']
         if any(domain in link_url.lower() for domain in media_domains) and media_format == "direct":
@@ -278,8 +204,6 @@ async def process_advanced_upload(
         
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-                        # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["video", "audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
@@ -317,6 +241,7 @@ async def process_advanced_upload(
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
+                # PERFECTLY INDENTED FORMAT ENGINE
                 if media_format == "audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
@@ -326,7 +251,6 @@ async def process_advanced_upload(
                     }]
                 else:
                     # 🎬 FIX: The "Zero-Crash" Ultimate Fallback Engine
-                    # 1. 1080p -> 2. Best Available -> 3. Universal Best
                     ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
 
@@ -347,16 +271,11 @@ async def process_advanced_upload(
                 ext = os.path.splitext(temp_path)[1]
                 safe_title = "".join(x for x in (title or "Downloaded_Media") if x.isalnum() or x in " _-")
                 filename = f"{safe_title[:45]}{ext}"
-
-           
-
-
-                    
                 
             # --- ENGINE B: STANDARD DIRECT PROXY ---
             else:
                 headers = {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': '*/*'
                 }
                 async with aiohttp.ClientSession(headers=headers) as session:
@@ -469,7 +388,6 @@ async def process_advanced_upload(
                 
                 final_thumbnail_url = f"/f/{thumb_filename}" 
                 
-                # 🌟 FIX 2: Create a metadata entry so the thumbnail can be served by the backend
                 thumb_record = {
                     "slug": thumb_filename,
                     "filename": f"thumbnail_{final_slug}.{img_ext}",
@@ -482,7 +400,7 @@ async def process_advanced_upload(
                     "is_external": False,
                     "external_url": ""
                 }
-                files_list.append(thumb_record) # Add thumbnail to database!
+                files_list.append(thumb_record)
 
         except Exception as e:
             logger.warning(f"Base64 processing failed: {e}")
@@ -524,8 +442,6 @@ async def process_advanced_upload(
         "download_url": f"/f/{final_slug}"
     }
     
-    
-
 @app.put("/api/rest/{current_slug}")
 async def update_file_metadata(
     current_slug: str,
@@ -539,13 +455,11 @@ async def update_file_metadata(
     
     for item in files_list:
         if item["slug"] == current_slug:
-            # Check slug conflict if changing slug
             if new_slug and new_slug != current_slug:
                 if any(x["slug"] == new_slug for x in files_list):
                     raise HTTPException(status_code=409, detail="New slug already exists in database.")
                 item["slug"] = new_slug
             
-            # Syntax fixed: 'is not None' use kiya gaya hai '!== None' ki jagah
             if title is not None: 
                 item["title"] = title
             if thumbnail is not None: 
@@ -565,12 +479,10 @@ async def delete_file_permanently(slug: str, token: str = Depends(verify_auth)):
     
     if file_record:
         try:
-            # HF se delete karo
             api.delete_file(path_in_repo=file_record["path"], repo_id=DATASET_REPO, repo_type="dataset")
         except Exception as e:
             logger.warning(f"File might already be deleted from HF: {e}")
             
-        # DB se remove karo
         db["files"] = [item for item in files_list if item["slug"] != slug]
         save_db(db)
         return {"status": "success", "message": f"File '{slug}' deleted permanently."}
@@ -582,12 +494,10 @@ async def fetch_advanced_history(search: Optional[str] = None, token: str = Depe
     db = get_db()
     files_list = db.get("files", [])
     
-    # Search filtering
     if search:
         search_query = search.lower()
         files_list = [f for f in files_list if search_query in f.get("title", "").lower() or search_query in f.get("filename", "").lower()]
         
-    # Return formatted sizes along with raw bytes
     for f in files_list:
         if "size_bytes" in f:
             f["formatted_size"] = format_size(f["size_bytes"])
@@ -609,14 +519,12 @@ async def get_server_stats(token: str = Depends(verify_auth)):
 # ==========================================
 @app.get("/f/{slug}")
 async def serve_file_publicly(slug: str):
-    """Yeh public route hai. External redirect fail-safe included."""
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
     
     if not file_record:
         raise HTTPException(status_code=404, detail="404: The requested resource could not be found.")
         
-    # 🛠️ NAYA: FAILSAFE 308 REDIRECT
     if file_record.get("is_external") and file_record.get("external_url"):
         return RedirectResponse(url=file_record["external_url"], status_code=308)
         
@@ -671,8 +579,6 @@ async def redirect_wiki():
 async def redirect_clock():
     return RedirectResponse(url="https://clock.qlynk.me", status_code=308)
 
-    
-# --- Static JS Assets ---
 @app.get("/main.js")
 async def serve_main_js():
     if os.path.exists("main.js"):
@@ -685,8 +591,6 @@ async def serve_footer_extras_js():
         return FileResponse("footer-extras.js", media_type="application/javascript")
     raise HTTPException(status_code=404, detail="File not found")    
 
-# --- UI Route ---
-# --- UI Route ---
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend_ui():
     with open("index.html", "r", encoding="utf-8") as f:
