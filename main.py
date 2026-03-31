@@ -265,6 +265,7 @@ async def process_advanced_upload(
         
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["video", "audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
@@ -282,14 +283,14 @@ async def process_advanced_upload(
                     with open(cookie_path, "w") as f:
                         f.write(yt_cookies)
 
+                # 🚀 FIX: Removed 'android' player_client and force_ipv4
+                # PC Cookies ke sath Android client mix karne se YouTube anti-bot activate ho raha tha!
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
                     'quiet': True,
                     'no_warnings': True,
                     'nocheckcertificate': True,
-                    'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
-                    'force_ipv4': True,
                     'socket_timeout': 60,
                 }
 
@@ -302,7 +303,7 @@ async def process_advanced_upload(
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # 🎬 FIX: Terminal "Default" Mode
+                # Terminal "Default" Mode (Video will automatically pick best available format)
                 if media_format == "audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
@@ -310,8 +311,6 @@ async def process_advanced_upload(
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
-                # Agar video hai toh hum format specify hi nahi karenge!
-                # Isse yt-dlp apne aap best file (MKV, WEBM ya MP4) nikal lega bina crash hue.
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
