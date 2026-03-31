@@ -243,16 +243,21 @@ async def process_advanced_upload(
 
                 # PERFECTLY INDENTED FORMAT ENGINE
                 if media_format == "audio":
-                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['format'] = 'ba/bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
                 else:
-                    # 🎬 FIX: The "Zero-Crash" Ultimate Fallback Engine
-                    ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/bestvideo+bestaudio/best'
+                    # 🎬 FIX: The "God Mode" Format Selector
+                    # bv* = best video (with or without audio)
+                    # ba = best audio
+                    # b = best single merged file
+                    ydl_opts['format'] = 'bv*[height<=1080]+ba/b[height<=1080]/bv*+ba/b/best'
                     ydl_opts['merge_output_format'] = 'mp4'
+
+
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
