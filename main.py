@@ -5,6 +5,8 @@ import uuid
 import mimetypes
 import logging
 import requests # <--- Ye top par imports mein check kar lena
+import asyncio
+import aiofiles
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import Optional, List, Dict, Any
@@ -280,7 +282,7 @@ async def process_advanced_upload(
             external_url = link_url
             filename = "External_Link"
 
-    # ==========================================
+# ==========================================
     # LOGIC 2: STANDARD LOCAL FILE UPLOAD
     # ==========================================
     elif file:
@@ -288,19 +290,26 @@ async def process_advanced_upload(
         temp_path = f"/tmp/{final_slug}_{filename}"
         repo_path = f"files/{final_slug}_{filename}"
         
-        with open(temp_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # 1. Async chunk-by-chunk write (Main thread block nahi hoga)
+        async with aiofiles.open(temp_path, "wb") as buffer:
+            while chunk := await file.read(1024 * 1024):  # 1MB chunks
+                await buffer.write(chunk)
         
         file_size = os.path.getsize(temp_path)
         mime_type, _ = mimetypes.guess_type(temp_path)
         if not mime_type:
             mime_type = "application/octet-stream"
             
-        api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+        # 2. api.upload_file synchronous hai, isliye isko alag thread mein run karein
+        # Taaki jab HF par file upload ho rahi ho, toh server freeze na ho
+        await asyncio.to_thread(
+            api.upload_file,
+            path_or_fileobj=temp_path, 
+            path_in_repo=repo_path, 
+            repo_id=DATASET_REPO, 
+            repo_type="dataset"
+        )
         os.remove(temp_path)
-        
-    else:
-        raise HTTPException(status_code=400, detail="Must provide either a 'file' or 'link_url'.")
 
     # ==========================================
     # SAVE METADATA
