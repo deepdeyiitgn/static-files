@@ -72,3 +72,17 @@ curl -X POST "https://YOUR_SPACE_URL/api/rest" \
   -F "format=redirect"
 
 Note: Using format=redirect will respond with a 308 Permanent Redirect straight to the raw file, perfect for seamless frontend integrations.
+
+---
+
+## ⚖️ Legal & Fair Use Disclaimer
+
+**QLYNK Storage Node** is a proof-of-concept architecture developed strictly for **educational purposes**, backend API experimentation, and personal workflow automation. 
+
+The inclusion of media extraction engines (such as `yt-dlp` and `FFmpeg`) is intended solely for processing royalty-free, public domain, or user-owned content. 
+
+* 🚫 **No Endorsement of Piracy:** The developer (Deep Dey) strictly prohibits and does not endorse, encourage, or facilitate the downloading of copyrighted material without explicit permission from the rightful copyright owners.
+* 👤 **End-User Responsibility:** By forking, deploying, or using this system, **YOU** assume full legal responsibility for the data and media you process. You must ensure full compliance with the Terms of Service of third-party platforms and your local copyright laws.
+* 🛡️ **Zero Liability:** The creator of this repository assumes **NO LIABILITY** for any misuse of this software, account terminations, or copyright infringements committed by users operating their own private instances of this code.
+
+---
