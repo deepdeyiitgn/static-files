@@ -1194,8 +1194,18 @@ response = requests.post(
 
     <div id="linkUploadArea" style="display: none; margin: 1.5rem 0;">
         <div class="form-group">
-            <label>Direct File URL (May fail on strict CORS domains)</label>
-            <input type="text" id="uploadUrlObj" placeholder="https://example.com/image.png">
+            <label>Direct File URL or Media Link (YT, Insta, etc.)</label>
+            <input type="text" id="uploadUrlObj" placeholder="https://example.com/media..." oninput="checkSmartUrl()">
+        </div>
+        
+        <div class="form-group" id="mediaFormatSelector" style="display: none; margin-top: 15px; padding: 15px; background: rgba(0, 112, 243, 0.05); border: 1px dashed var(--accent); border-radius: var(--radius-md);">
+            <label style="color: var(--accent);"><i class="fa-solid fa-wand-magic-sparkles"></i> Media Engine Activated</label>
+            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">Supported link detected. Choose extraction format:</p>
+            <select id="linkMediaFormat" style="width: 100%; padding: 1rem; background: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border); border-radius: var(--radius-md); font-family: var(--font-main);">
+                <option value="direct">Direct Proxy Download (Auto)</option>
+                <option value="video" selected>Extract Best Video (MP4)</option>
+                <option value="audio">Extract Audio Only (MP3)</option>
+            </select>
         </div>
     </div>
     
@@ -1307,6 +1317,25 @@ response = requests.post(
         // UI TOGGLE: LOCAL VS LINK UPLOAD
         // ==========================================
         let uploadMode = 'local';
+        function checkSmartUrl() {
+            const url = document.getElementById('uploadUrlObj').value.toLowerCase();
+            const mediaSelector = document.getElementById('mediaFormatSelector');
+            const formatSelect = document.getElementById('linkMediaFormat');
+            
+            // Media platforms detect karne ki list
+            const isMedia = url.includes('youtube.com') || url.includes('youtu.be') || 
+                            url.includes('instagram.com') || url.includes('twitter.com') || 
+                            url.includes('x.com') || url.includes('facebook.com') || url.includes('tiktok.com');
+            
+            if (isMedia) {
+                mediaSelector.style.display = 'block';
+                formatSelect.value = 'video'; // Default best video on media links
+            } else {
+                mediaSelector.style.display = 'none';
+                formatSelect.value = 'direct';
+            }
+        }
+      
         function switchUploadMode(mode) {
             uploadMode = mode;
             if (mode === 'local') {
@@ -1456,39 +1485,48 @@ async function processUpload() {
 
     // URL Mode Handling (No Chunking required for backend proxy)
     // URL Mode Handling (Realtime Backend Polling)
+    // URL Mode Handling (Realtime Backend Polling)
     if (isLinkMode) {
         chunkRow.style.display = 'none';
-        document.getElementById('progressStatusText').innerText = "Backend Server is connecting to URL...";
+        document.getElementById('progressStatusText').innerText = "Backend Server is analyzing URL...";
         const fd = new FormData();
         fd.append('link_url', linkUrl);
-        fd.append('upload_id', uploadId); // Tracker ID attach kardi
+        fd.append('upload_id', uploadId);
+        
+        // BHEJ RAHE HAIN SELECTED FORMAT!
+        const mediaFormat = document.getElementById('mediaFormatSelector').style.display === 'block' 
+                            ? document.getElementById('linkMediaFormat').value : 'direct';
+        fd.append('media_format', mediaFormat);
+        
         if (titleVal) fd.append('title', titleVal);
         if (slugVal) fd.append('slug', slugVal);
         if (thumbVal) fd.append('thumbnail', thumbVal);
         
-        // Polling engine start (Har 500ms pe puchega backend ne kitna download kiya)
         const pollInterval = setInterval(async () => {
             try {
                 const res = await fetch(`/api/progress/${uploadId}`, { headers: {'password': pwd} });
                 const data = await res.json();
                 
                 if (data.status === 'downloading') {
-                    document.getElementById('progressStatusText').innerText = "Backend Server is downloading file...";
+                    document.getElementById('progressStatusText').innerText = mediaFormat !== 'direct' ? "Media Engine Extracting Stream..." : "Backend is downloading file...";
                     if (data.total > 0) {
                         const percent = (data.loaded / data.total) * 100;
                         progBar.style.width = percent + '%';
                         progText.innerText = Math.round(percent) + '%';
-                        
                         const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
                         const totalMB = (data.total / (1024 * 1024)).toFixed(2);
                         document.getElementById('progressSize').innerText = `${loadedMB} MB / ${totalMB} MB`;
                     } else {
-                        // Agar URL ne size nahi bataya (Content-Length missing)
                         const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
                         document.getElementById('progressSize').innerText = `${loadedMB} MB Downloaded...`;
                     }
+                } else if (data.status === 'processing_media') {
+                    // NAYA: FFMPEG PROCESSING STATUS
+                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--warning)'><i class='fa-solid fa-microchip fa-spin'></i> Rendering & Merging Quality (FFmpeg)...</span>";
+                    progBar.style.width = '100%';
+                    progText.innerText = 'Wait...';
                 } else if (data.status === 'uploading_to_hf') {
-                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>File Fetched. Syncing to HF Hub...</span>";
+                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>Media Processed. Syncing to HF Hub...</span>";
                     progBar.style.width = '100%';
                     progText.innerText = '100%';
                 } else if (data.status === 'done' || data.status === 'error') {
@@ -1500,7 +1538,7 @@ async function processUpload() {
         try {
             await sendSingleRequest(fd, pwd);
         } finally {
-            clearInterval(pollInterval); // Upload khatam toh tracker band
+            clearInterval(pollInterval);
         }
         return;
     }
