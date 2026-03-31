@@ -324,8 +324,13 @@ async def process_advanced_upload(
                         'preferredquality': '256',
                     }]
                 else:
-                    # 🎬 FIX: Download best quality up to 1080p (any format) and FORCE FFmpeg to make it MP4
-                    ydl_opts['format'] = 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best'
+                    # 🎬 FIX: The Ultimate Fallback System (1080p -> 720p -> Pre-merged -> Best)
+                    ydl_opts['format'] = (
+                        'bestvideo[height<=1080]+bestaudio/'
+                        'bestvideo[height<=720]+bestaudio/'
+                        'best[height<=1080]/'
+                        'best'
+                    )
                     ydl_opts['merge_output_format'] = 'mp4'
 
                 def download_yt():
