@@ -230,15 +230,22 @@ async def process_advanced_upload(
     title: str = Form(None),
     thumbnail: str = Form(""),
     format: str = Form("json"),
+    chunk_index: int = Form(0),       # CHUNKING PARAMETERS
+    total_chunks: int = Form(1),
+    upload_id: str = Form(None),
     token: str = Depends(verify_auth)
 ):
-    """File upload logic with deep metadata extraction & Backend Proxy"""
+    """File upload logic with Advanced Chunking & Backend Proxy"""
     db = get_db()
     files_list = db.get("files", [])
     
+    # 1. Final Slug Generation
     final_slug = slug.strip() if slug and slug.strip() != "" else str(uuid.uuid4())[:8]
-    if any(item["slug"] == final_slug for item in files_list):
-        raise HTTPException(status_code=409, detail=f"ERROR: The slug '{final_slug}' is already assigned.")
+    
+    # Slug conflict sirf first chunk pe check karo
+    if chunk_index == 0:
+        if any(item["slug"] == final_slug for item in files_list):
+            raise HTTPException(status_code=409, detail=f"ERROR: The slug '{final_slug}' is already assigned.")
 
     repo_path = ""
     filename = ""
@@ -254,7 +261,6 @@ async def process_advanced_upload(
         filename = link_url.split('/')[-1].split('?')[0]
         if not filename or '.' not in filename:
             filename = "downloaded_file.bin"
-        
         temp_path = f"/tmp/{final_slug}_{filename}"
         
         try:
@@ -272,36 +278,42 @@ async def process_advanced_upload(
                 mime_type = r.headers.get('Content-Type', 'application/octet-stream')
             
             repo_path = f"files/{final_slug}_{filename}"
-            logger.info(f"Uploading fetched file {filename} to {DATASET_REPO}...")
             api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
             os.remove(temp_path)
             
         except Exception as e:
-            logger.warning(f"Backend fetch failed: {e}. Creating 308 redirect entry instead.")
+            logger.warning(f"Backend fetch failed: {e}. Creating 308 redirect instead.")
             is_external = True
             external_url = link_url
             filename = "External_Link"
 
-# ==========================================
-    # LOGIC 2: STANDARD LOCAL FILE UPLOAD
+    # ==========================================
+    # LOGIC 2: STANDARD / CHUNKED LOCAL FILE UPLOAD
     # ==========================================
     elif file:
         filename = file.filename
-        temp_path = f"/tmp/{final_slug}_{filename}"
+        # Temporary file name ko unique rakhne ke liye upload_id use karte hain
+        temp_identifier = upload_id if upload_id else final_slug
+        temp_path = f"/tmp/{temp_identifier}_{filename}"
         repo_path = f"files/{final_slug}_{filename}"
         
-        # 1. Async chunk-by-chunk write (Main thread block nahi hoga)
-        async with aiofiles.open(temp_path, "wb") as buffer:
-            while chunk := await file.read(1024 * 1024):  # 1MB chunks
-                await buffer.write(chunk)
+        # Mode: 'ab' = Append (Chunks jodna), 'wb' = Naya banana (First chunk)
+        mode = "ab" if chunk_index > 0 else "wb"
         
+        async with aiofiles.open(temp_path, mode) as buffer:
+            while chunk_data := await file.read(1024 * 1024):
+                await buffer.write(chunk_data)
+        
+        # Agar saare chunks abhi tak nahi aaye, toh yahin se success return kardo
+        if chunk_index < total_chunks - 1:
+            return {"status": "uploading", "message": f"Chunk {chunk_index + 1}/{total_chunks} received securely."}
+            
+        # Jab AAKHRI chunk aa jaye, tab HF pe bhejo
         file_size = os.path.getsize(temp_path)
         mime_type, _ = mimetypes.guess_type(temp_path)
         if not mime_type:
             mime_type = "application/octet-stream"
             
-        # 2. api.upload_file synchronous hai, isliye isko alag thread mein run karein
-        # Taaki jab HF par file upload ho rahi ho, toh server freeze na ho
         await asyncio.to_thread(
             api.upload_file,
             path_or_fileobj=temp_path, 
@@ -309,10 +321,13 @@ async def process_advanced_upload(
             repo_id=DATASET_REPO, 
             repo_type="dataset"
         )
-        os.remove(temp_path)
+        os.remove(temp_path) # HF pe jane ke baad local disk clean kardo
+        
+    else:
+        raise HTTPException(status_code=400, detail="Must provide either a 'file' or 'link_url'.")
 
     # ==========================================
-    # SAVE METADATA
+    # SAVE METADATA (Sirf aakhri chunk pe chalega)
     # ==========================================
     upload_timestamp = datetime.utcnow().isoformat() + "Z"
     
