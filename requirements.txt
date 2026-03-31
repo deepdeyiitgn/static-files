@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 motor
 pydantic
 python-dotenv
@@ -7,3 +7,4 @@ requests
 aiohttp
 huggingface_hub
 python-multipart
+aiofiles
