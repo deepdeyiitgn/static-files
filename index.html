@@ -1236,9 +1236,9 @@ response = requests.post(
                 <span id="progressSpeed"><i class="fa-solid fa-gauge-high"></i> 0 KB/s</span>
                 <span id="progressEta" style="color: var(--text-main);"><i class="fa-solid fa-stopwatch"></i> ETA: --</span>
 
-        <div class="progress-footer" id="chunkInfoRow" style="display: none; margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; font-weight: 600;">
-            <span id="chunkText" style="color: var(--warning);">Uploading Part: 1 / 1</span>
-            <span id="chunkSize" style="color: var(--accent);">0.00 MB / 10.00 MB</span>
+        <div class="progress-footer" id="chunkInfoRow" style="display: none; justify-content: space-between; margin-top: 10px; border-top: 1px dashed var(--border); padding-top: 10px; font-weight: 600;">
+            <span id="chunkText" style="color: var(--warning); padding-right: 15px; border-right: 1px solid var(--border-light);">Uploading Part: 1 / 1</span>
+            <span id="chunkSize" style="color: var(--accent); padding-left: 15px;">0.00 MB / 10.00 MB</span>
         </div>      
             </div>
         </div>
@@ -1455,17 +1455,53 @@ async function processUpload() {
     const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
 
     // URL Mode Handling (No Chunking required for backend proxy)
+    // URL Mode Handling (Realtime Backend Polling)
     if (isLinkMode) {
         chunkRow.style.display = 'none';
-        document.getElementById('progressStatusText').innerText = "Backend Proxy is fetching & uploading...";
+        document.getElementById('progressStatusText').innerText = "Backend Server is connecting to URL...";
         const fd = new FormData();
         fd.append('link_url', linkUrl);
+        fd.append('upload_id', uploadId); // Tracker ID attach kardi
         if (titleVal) fd.append('title', titleVal);
         if (slugVal) fd.append('slug', slugVal);
         if (thumbVal) fd.append('thumbnail', thumbVal);
         
-        // ... Normal fetch logic for link (you can use your existing XHR here)
-        await sendSingleRequest(fd, pwd);
+        // Polling engine start (Har 500ms pe puchega backend ne kitna download kiya)
+        const pollInterval = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/progress/${uploadId}`, { headers: {'password': pwd} });
+                const data = await res.json();
+                
+                if (data.status === 'downloading') {
+                    document.getElementById('progressStatusText').innerText = "Backend Server is downloading file...";
+                    if (data.total > 0) {
+                        const percent = (data.loaded / data.total) * 100;
+                        progBar.style.width = percent + '%';
+                        progText.innerText = Math.round(percent) + '%';
+                        
+                        const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
+                        const totalMB = (data.total / (1024 * 1024)).toFixed(2);
+                        document.getElementById('progressSize').innerText = `${loadedMB} MB / ${totalMB} MB`;
+                    } else {
+                        // Agar URL ne size nahi bataya (Content-Length missing)
+                        const loadedMB = (data.loaded / (1024 * 1024)).toFixed(2);
+                        document.getElementById('progressSize').innerText = `${loadedMB} MB Downloaded...`;
+                    }
+                } else if (data.status === 'uploading_to_hf') {
+                    document.getElementById('progressStatusText').innerHTML = "<span style='color:var(--success)'>File Fetched. Syncing to HF Hub...</span>";
+                    progBar.style.width = '100%';
+                    progText.innerText = '100%';
+                } else if (data.status === 'done' || data.status === 'error') {
+                    clearInterval(pollInterval);
+                }
+            } catch(e) {}
+        }, 500);
+
+        try {
+            await sendSingleRequest(fd, pwd);
+        } finally {
+            clearInterval(pollInterval); // Upload khatam toh tracker band
+        }
         return;
     }
 
