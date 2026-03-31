@@ -1,0 +1,2092 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+    <link rel="icon" type="image/x-icon" href="//qlynk.vercel.app/favicon.ico" sizes="16x16 32x32">
+
+    <link rel="icon" type="image/png" sizes="16x16" href="//qlynk.vercel.app/quicklink-logo.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="//qlynk.vercel.app/quicklink-logo.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="//qlynk.vercel.app/quicklink-logo.png">
+
+    <link rel="icon" type="image/png" sizes="512x512" href="//qlynk.vercel.app/quicklink-logo.png">
+
+    <link rel="icon" type="image/svg+xml" href="//qlynk.vercel.app/quicklink-logo.svg">
+
+    <link rel="apple-touch-icon" sizes="180x180" href="//qlynk.vercel.app/quicklink-logo.png">
+    
+    <title>Qlynk Host - Ultimate Secure File Architecture</title>
+    <meta name="title" content="Qlynk Host - Secure File Management">
+    <meta name="description" content="A private, unlimited file hosting architecture powered by Hugging Face datasets. Features REST APIs, metadata editing, and smart redirects.">
+    <meta name="keywords" content="file hosting, cloud storage, private api, hugging face datasets, secure storage, Qlynk, Deep Dey">
+    <meta name="author" content="Deep Dey">
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#0a0a0a">
+   <link rel="canonical" href="https://staic.qlynk.me/" />   
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://static.qlynk.me/">
+    <meta property="og:title" content="Qlynk Host - Enterprise Storage Node">
+    <meta property="og:description" content="Host files privately with unlimited capacity. Built with FastAPI and Hugging Face.">
+    <meta property="og:image" content="https://qlynk.vercel.app/Quicklink-Banner.png">
+  
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "Qlynk Host",
+      "url": "https://static.qlynk.me/",
+      "description": "Unlimited file hosting and REST API management system.",
+      "applicationCategory": "DeveloperApplication",
+      "author": {"@type": "Person", "name": "Deep Dey"}
+    }
+    </script>
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
+
+    <style>
+        :root {
+            /* Core Theme Colors */
+            --bg-body: #000000;
+            --bg-surface: #0a0a0a;
+            --bg-card: #111111;
+            --bg-hover: #1f1f1f;
+            --bg-code: #0d0d0d;
+            
+            /* Borders */
+            --border: #333333;
+            --border-hover: #444444;
+            --border-light: #222222;
+            
+            /* Typography Colors */
+            --text-main: #ededed;
+            --text-muted: #888888;
+            --text-code: #00ffcc;
+            
+            /* Brand & Accents */
+            --accent: #0070f3;
+            --accent-glow: rgba(0, 112, 243, 0.4);
+            --accent-hover: #005bb5;
+            --danger: #e00;
+            --danger-glow: rgba(238, 0, 0, 0.4);
+            --success: #17c964;
+            --warning: #f5a623;
+            
+            /* Fonts */
+            --font-main: 'Inter', sans-serif;
+            --font-code: 'Fira Code', monospace;
+            
+            /* Geometry */
+            --radius-xl: 16px;
+            --radius-lg: 12px;
+            --radius-md: 8px;
+            --radius-sm: 4px;
+            
+            /* Animations */
+            --transition-fast: 0.15s ease-in-out;
+            --transition-smooth: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        /* ------------------------------------------- */
+        /* RESET & BASE STYLES                         */
+        /* ------------------------------------------- */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: var(--font-main);
+            background-color: var(--bg-body);
+            color: var(--text-main);
+            line-height: 1.6;
+            overflow-x: hidden;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        a {
+            color: var(--accent);
+            text-decoration: none;
+            transition: var(--transition-fast);
+        }
+
+        a:hover {
+            text-decoration: underline;
+            color: var(--text-main);
+        }
+
+        ul, ol {
+            padding-left: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+            color: var(--text-muted);
+        }
+
+        /* ------------------------------------------- */
+        /* TYPOGRAPHY                                  */
+        /* ------------------------------------------- */
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--text-main);
+            line-height: 1.2;
+            margin-bottom: 1rem;
+        }
+
+        h1 {
+            font-size: 3.5rem;
+            font-weight: 900;
+            letter-spacing: -0.05em;
+            background: linear-gradient(to right, #ffffff, #888888);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        h2 {
+            font-size: 2.2rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.8rem;
+            margin-top: 2rem;
+        }
+
+        h3 {
+            font-size: 1.5rem;
+            font-weight: 600;
+            margin-top: 1.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        p {
+            margin-bottom: 1.2rem;
+            color: var(--text-muted);
+            font-size: 1.05rem;
+        }
+
+        strong, .highlight {
+            color: var(--text-main);
+            font-weight: 600;
+        }
+
+        /* ------------------------------------------- */
+        /* LAYOUT COMPONENTS                           */
+        /* ------------------------------------------- */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+
+        .section {
+            padding: 6rem 0;
+            border-bottom: 1px solid var(--border-light);
+        }
+
+        /* Header / Navbar */
+        .navbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.2rem 24px;
+            background: rgba(10, 10, 10, 0.8);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 1000;
+        }
+
+        .nav-brand {
+            font-size: 1.4rem;
+            font-weight: 800;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            letter-spacing: -0.03em;
+        }
+
+        .nav-brand i {
+            color: var(--accent);
+        }
+
+        /* Cards */
+        .card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 2.5rem;
+            margin-bottom: 2.5rem;
+            transition: var(--transition-smooth);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        .card:hover {
+            border-color: var(--border-hover);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+            transform: translateY(-2px);
+        }
+
+        /* Grid System */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 2rem;
+        }
+
+        .grid-3 {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem;
+        }
+
+        /* ------------------------------------------- */
+        /* BUTTONS & CONTROLS                          */
+        /* ------------------------------------------- */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 0.8rem 1.8rem;
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: var(--font-main);
+            border-radius: var(--radius-md);
+            cursor: pointer;
+            transition: var(--transition-smooth);
+            border: 1px solid transparent;
+            outline: none;
+            text-decoration: none;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .btn-primary {
+            background-color: var(--text-main);
+            color: var(--bg-body);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: #ffffff;
+            box-shadow: 0 4px 20px rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .btn-accent {
+            background-color: var(--accent);
+            color: #ffffff;
+        }
+
+        .btn-accent:hover:not(:disabled) {
+            background-color: var(--accent-hover);
+            box-shadow: 0 0 20px var(--accent-glow);
+            transform: translateY(-2px);
+        }
+
+        .btn-outline {
+            background-color: transparent;
+            border-color: var(--border);
+            color: var(--text-main);
+        }
+
+        .btn-outline:hover:not(:disabled) {
+            background-color: var(--bg-hover);
+            border-color: var(--text-main);
+        }
+
+        .btn-danger {
+            background-color: rgba(238, 0, 0, 0.1);
+            color: var(--danger);
+            border-color: rgba(238, 0, 0, 0.3);
+        }
+
+        .btn-danger:hover:not(:disabled) {
+            background-color: var(--danger);
+            color: #ffffff;
+            box-shadow: 0 0 15px var(--danger-glow);
+        }
+
+        .btn-sm {
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+        }
+
+        /* ------------------------------------------- */
+        /* FORMS & INPUTS                              */
+        /* ------------------------------------------- */
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.6rem;
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        input[type="text"], 
+        input[type="password"] {
+            width: 100%;
+            padding: 1.2rem;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border);
+            color: var(--text-main);
+            border-radius: var(--radius-md);
+            font-family: var(--font-main);
+            font-size: 1rem;
+            transition: var(--transition-fast);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        input[type="text"]:focus, 
+        input[type="password"]:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow), inset 0 2px 4px rgba(0,0,0,0.2);
+            outline: none;
+        }
+
+        input[type="file"] {
+            width: 100%;
+            padding: 2.5rem;
+            background-color: var(--bg-surface);
+            border: 2px dashed var(--border-hover);
+            border-radius: var(--radius-lg);
+            color: var(--text-muted);
+            cursor: pointer;
+            text-align: center;
+            font-family: var(--font-main);
+            transition: var(--transition-fast);
+        }
+
+        input[type="file"]:hover {
+            border-color: var(--accent);
+            color: var(--text-main);
+            background-color: var(--bg-hover);
+        }
+
+        /* ------------------------------------------- */
+        /* TABLES (FOR PROS/CONS/SPECS)                */
+        /* ------------------------------------------- */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 2.5rem;
+            background-color: var(--bg-card);
+            border-radius: var(--radius-md);
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+
+        th, td {
+            padding: 1.2rem 1.5rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background-color: var(--bg-surface);
+            color: var(--text-main);
+            font-weight: 700;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            letter-spacing: 0.05em;
+        }
+
+        td {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover td {
+            background-color: var(--bg-hover);
+            color: var(--text-main);
+        }
+
+        /* ------------------------------------------- */
+        /* CODE BLOCKS & SYNTAX HIGHLIGHTING           */
+        /* ------------------------------------------- */
+        .code-wrapper {
+            position: relative;
+            margin-bottom: 2rem;
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #1a1a1a;
+            padding: 0.6rem 1rem;
+            border-top-left-radius: var(--radius-md);
+            border-top-right-radius: var(--radius-md);
+            border: 1px solid var(--border);
+            border-bottom: none;
+            font-family: var(--font-code);
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .copy-code-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            transition: var(--transition-fast);
+        }
+
+        .copy-code-btn:hover {
+            color: var(--text-main);
+        }
+
+        pre {
+            background-color: var(--bg-code);
+            padding: 1.5rem;
+            border-bottom-left-radius: var(--radius-md);
+            border-bottom-right-radius: var(--radius-md);
+            border: 1px solid var(--border);
+            overflow-x: auto;
+            color: var(--text-code);
+            font-family: var(--font-code);
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }
+
+        code.inline-code {
+            background-color: var(--bg-hover);
+            padding: 0.2rem 0.5rem;
+            border-radius: var(--radius-sm);
+            font-family: var(--font-code);
+            font-size: 0.9em;
+            color: #ff79c6;
+            border: 1px solid var(--border);
+        }
+
+        /* Basic Syntax Highlighting Colors */
+        .token-keyword { color: #ff79c6; }
+        .token-string { color: #f1fa8c; }
+        .token-function { color: #50fa7b; }
+        .token-comment { color: #6272a4; font-style: italic; }
+        .token-operator { color: #ff79c6; }
+
+        /* ------------------------------------------- */
+        /* ALERTS & BADGES                             */
+        /* ------------------------------------------- */
+        .alert-box {
+            padding: 2rem;
+            border-radius: var(--radius-lg);
+            border-left: 4px solid var(--danger);
+            background: linear-gradient(90deg, rgba(238, 0, 0, 0.1) 0%, rgba(10,10,10,0) 100%);
+            margin: 3rem 0;
+            border-top: 1px solid var(--border);
+            border-right: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .alert-box h3 {
+            margin-top: 0;
+            color: var(--danger);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            border-radius: 50px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .badge-success { background: rgba(23, 201, 100, 0.2); color: var(--success); border: 1px solid var(--success); }
+        .badge-accent { background: rgba(0, 112, 243, 0.2); color: var(--accent); border: 1px solid var(--accent); }
+        .badge-warning { background: rgba(245, 166, 35, 0.2); color: var(--warning); border: 1px solid var(--warning); }
+
+        /* ------------------------------------------- */
+        /* DASHBOARD SPECIFIC UI                       */
+        /* ------------------------------------------- */
+        #appDashboard {
+            display: none; /* Hidden by default */
+            padding-top: 2rem;
+            padding-bottom: 5rem;
+        }
+        
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 3rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        /* Stats Grid */
+        .stat-card {
+            background-color: var(--bg-surface);
+            padding: 2.5rem;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+            transition: var(--transition-smooth);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 4px;
+            background: var(--border);
+            transition: var(--transition-smooth);
+        }
+
+        .stat-card:hover::before {
+            background: var(--accent);
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .stat-card h3 {
+            font-size: 3rem;
+            margin: 0;
+            color: var(--text-main);
+            font-weight: 900;
+            letter-spacing: -0.05em;
+        }
+
+        /* File List Architecture */
+        .file-toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            flex-wrap: wrap;
+            gap: 1rem;
+        }
+
+        .search-wrapper {
+            display: flex;
+            gap: 10px;
+            width: 100%;
+            max-width: 500px;
+        }
+
+        .search-wrapper input {
+            margin-bottom: 0;
+        }
+
+        .file-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 1.2rem;
+        }
+
+        .file-row {
+            display: flex;
+            align-items: center;
+            padding: 1.5rem;
+            background-color: var(--bg-surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            gap: 1.5rem;
+            transition: var(--transition-smooth);
+            position: relative;
+        }
+
+        .file-row:hover {
+            background-color: var(--bg-hover);
+            border-color: var(--border-hover);
+            box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+            transform: scale(1.01);
+        }
+
+        .file-icon {
+            width: 70px;
+            height: 70px;
+            border-radius: var(--radius-md);
+            background-color: var(--bg-body);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 1px solid var(--border);
+            overflow: hidden;
+            flex-shrink: 0;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        .file-icon img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .file-icon i {
+            font-size: 2rem;
+            color: var(--text-muted);
+        }
+
+        .file-info {
+            flex-grow: 1;
+            min-width: 0;
+        }
+
+        .file-name {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--text-main);
+            margin-bottom: 0.4rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-meta {
+            display: flex;
+            gap: 1.2rem;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            flex-wrap: wrap;
+        }
+
+        .file-meta span {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .file-meta span i {
+            color: var(--border-hover);
+        }
+
+        .file-actions {
+            display: flex;
+            gap: 0.6rem;
+            opacity: 0.7;
+            transition: var(--transition-fast);
+        }
+
+        .file-row:hover .file-actions {
+            opacity: 1;
+        }
+
+        .icon-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            border: 1px solid var(--border);
+            background-color: var(--bg-body);
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: var(--transition-fast);
+            font-size: 1.1rem;
+            text-decoration: none;
+        }
+
+        .icon-btn:hover {
+            background-color: var(--text-main);
+            color: var(--bg-body);
+            border-color: var(--text-main);
+            transform: translateY(-2px);
+        }
+
+        .icon-btn.delete:hover {
+            background-color: var(--danger);
+            border-color: var(--danger);
+            color: #ffffff;
+        }
+        
+        .icon-btn.new-tab:hover {
+            background-color: var(--accent);
+            border-color: var(--accent);
+            color: #ffffff;
+        }
+
+        /* ------------------------------------------- */
+        /* PAGINATION UI                               */
+        /* ------------------------------------------- */
+        .pagination-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 2rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .page-indicator {
+            background: var(--bg-surface);
+            padding: 0.5rem 1.2rem;
+            border-radius: 50px;
+            border: 1px solid var(--border);
+            font-weight: 600;
+            color: var(--text-main);
+            font-size: 0.9rem;
+        }
+
+        /* ------------------------------------------- */
+        /* PROGRESS BAR                                */
+        /* ------------------------------------------- */
+        .progress-container {
+            display: none;
+            margin-top: 2rem;
+            background-color: var(--bg-surface);
+            padding: 1.8rem;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border);
+            box-shadow: inset 0 2px 10px rgba(0,0,0,0.2);
+        }
+
+        .progress-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 1rem;
+            font-size: 1rem;
+            font-weight: 700;
+        }
+
+        .progress-track {
+            width: 100%;
+            background-color: var(--bg-body);
+            border-radius: 50px;
+            height: 12px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+            border: 1px solid var(--border);
+        }
+
+        .progress-fill {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), #00c6ff);
+            transition: width 0.2s ease;
+            box-shadow: 0 0 15px var(--accent-glow);
+        }
+
+        .progress-footer {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-family: var(--font-code);
+        }
+
+        /* ------------------------------------------- */
+        /* MODALS & TOASTS                             */
+        /* ------------------------------------------- */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+            opacity: 1;
+        }
+
+        .modal-content {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border);
+            padding: 3.5rem 3rem;
+            border-radius: var(--radius-xl);
+            width: 100%;
+            max-width: 480px;
+            text-align: center;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            transform: translateY(30px) scale(0.95);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .modal-overlay.active .modal-content {
+            transform: translateY(0) scale(1);
+        }
+
+        #toast {
+            position: fixed;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background-color: var(--text-main);
+            color: var(--bg-body);
+            padding: 1.2rem 2.5rem;
+            border-radius: 50px;
+            font-weight: 700;
+            font-size: 1rem;
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            z-index: 3000;
+            box-shadow: 0 10px 40px rgba(255, 255, 255, 0.2);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        #toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
+        }
+
+        #toast.error {
+            background-color: var(--danger);
+            color: white;
+            box-shadow: 0 10px 40px rgba(238, 0, 0, 0.3);
+        }
+
+        /* ------------------------------------------- */
+        /* RESPONSIVE DESIGN                           */
+        /* ------------------------------------------- */
+        @media (max-width: 768px) {
+            h1 { font-size: 2.5rem; }
+            .section { padding: 4rem 0; }
+            
+            .file-row { 
+                flex-direction: column; 
+                align-items: flex-start; 
+                gap: 1rem;
+            }
+            
+            .file-actions { 
+                width: 100%; 
+                justify-content: flex-end; 
+                margin-top: 0.5rem; 
+                border-top: 1px solid var(--border); 
+                padding-top: 1.5rem; 
+                opacity: 1;
+            }
+            
+            .file-toolbar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .search-wrapper {
+                max-width: 100%;
+            }
+            
+            .dashboard-header {
+                flex-direction: column;
+                gap: 1.5rem;
+                align-items: stretch;
+                text-align: center;
+            }
+            
+            .dashboard-header .btn-group {
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <div id="landingPage">
+        
+        <nav class="navbar">
+            <div class="nav-brand">
+                <i class="fa-solid fa-server"></i> Qlynk Node
+            </div>
+            <div id="navActionArea">
+                </div>
+        </nav>
+
+        <header class="section" style="text-align: center; padding-top: 7rem; padding-bottom: 5rem; position: relative; overflow: hidden;">
+            <div style="position: absolute; top: -50%; left: 50%; transform: translateX(-50%); width: 800px; height: 800px; background: radial-gradient(circle, rgba(0,112,243,0.15) 0%, rgba(0,0,0,0) 70%); z-index: -1; pointer-events: none;"></div>
+            
+            <div class="container">
+                <span class="badge badge-success" style="margin-bottom: 1.5rem;">v2.1 Enterprise Ready</span>
+                <h1>Unlimited File Architecture</h1>
+                <p style="font-size: 1.25rem; max-width: 650px; margin: 0 auto 2.5rem; color: #a0a0a0;">
+                    A highly-secure, headless file hosting node bridging FastAPI and Hugging Face Datasets. Unlimited capacity. Zero infrastructure cost.
+                </p>
+                <div style="display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap;">
+                    <button class="btn btn-primary" id="btnHeroAccess" onclick="handleAccessSystem()" style="padding: 1.2rem 2.5rem; font-size: 1.1rem; border-radius: 50px;">
+                        <i class="fa-solid fa-lock-open"></i> Access Dashboard
+                    </button>
+                    <a href="#docs-api" class="btn btn-outline" style="padding: 1.2rem 2.5rem; font-size: 1.1rem; border-radius: 50px;">
+                        <i class="fa-solid fa-terminal"></i> API Reference
+                    </a>
+                </div>
+            </div>
+        </header>
+
+        <section class="section" style="background-color: #050505;">
+            <div class="container">
+                <div style="text-align: center; margin-bottom: 4rem;">
+                    <h2>System Specifications</h2>
+                    <p>Built for developers who need reliable, unlimited blob storage.</p>
+                </div>
+                
+                <div class="grid-3">
+                    <div class="card" style="margin-bottom: 0;">
+                        <i class="fa-solid fa-infinity fa-2x" style="color: var(--accent); margin-bottom: 1.5rem;"></i>
+                        <h3>Infinite Storage</h3>
+                        <p>Bypass standard hosting limits. Store up to 50GB per repository absolutely free utilizing HF infrastructure.</p>
+                    </div>
+                    <div class="card" style="margin-bottom: 0;">
+                        <i class="fa-solid fa-code fa-2x" style="color: var(--success); margin-bottom: 1.5rem;"></i>
+                        <h3>Headless REST API</h3>
+                        <p>Fully programmatic access. Upload, edit, fetch, and delete files directly from your external applications.</p>
+                    </div>
+                    <div class="card" style="margin-bottom: 0;">
+                        <i class="fa-solid fa-route fa-2x" style="color: var(--warning); margin-bottom: 1.5rem;"></i>
+                        <h3>Smart 308 Routing</h3>
+                        <p>Instantly serve media directly to browsers with permanent redirects, perfect for dynamic image/video hosting.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="docs-api" class="section">
+            <div class="container">
+                <h2><i class="fa-solid fa-book-open"></i> Developer API Reference</h2>
+                <p>Integrate Qlynk Host directly into your projects. The system is secured via a master password passed in the headers.</p>
+
+                <div class="card" style="border-left: 4px solid var(--warning);">
+                    <h3>Authentication (Required)</h3>
+                    <p>All POST, PUT, and DELETE requests require your master password.</p>
+                    <pre><span class="token-comment"># Include this in your request headers:</span>
+Header: <span class="token-keyword">password</span> = <span class="token-string">"YOUR_SPACE_PASSWORD"</span></pre>
+                </div>
+
+                <div class="card" style="border-top: 4px solid var(--accent);">
+                    <h3>1. Upload Local File <span class="badge badge-accent" style="float: right;">POST /api/rest</span></h3>
+                    <p>Push a file from your local machine to the storage node.</p>
+                    
+                    <h4>Using cURL (Mac/Linux)</h4>
+                    <div class="code-wrapper">
+                        <pre>curl -X POST "https://static.qlynk.me/api/rest" \
+  -H "password: YOUR_PASSWORD" \
+  -F "file=@/path/to/local/image.png" \
+  -F "slug=my-custom-url" \
+  -F "title=Profile Picture" \
+  -F "format=redirect"</pre>
+                    </div>
+
+                    <h4>Using curl.exe (Windows PowerShell)</h4>
+                    <div class="code-wrapper">
+                        <pre>curl.exe -X POST "https://static.qlynk.me/api/rest" `
+  -H "password: YOUR_PASSWORD" `
+  -F "file=@C:\Users\Downloads\image.png" `
+  -F "slug=my-custom-url" `
+  -F "format=redirect"</pre>
+                    </div>
+                </div>
+
+                <div class="card" style="border-top: 4px solid var(--accent);">
+                    <h3>2. Upload from URL <span class="badge badge-accent" style="float: right;">POST /api/rest</span></h3>
+                    <p>Use Python to download a file from the internet and push it directly to your node without saving it permanently on your drive.</p>
+                    
+                    <div class="code-wrapper">
+                        <pre><span class="token-keyword">import</span> requests
+
+<span class="token-comment"># 1. Fetch file from an external URL</span>
+image_url = <span class="token-string">"https://example.com/sample.jpg"</span>
+img_data = requests.get(image_url).content
+
+<span class="token-comment"># 2. Push it to Qlynk Node</span>
+response = requests.post(
+    <span class="token-string">"https://static.qlynk.me/api/rest"</span>,
+    headers={<span class="token-string">"password"</span>: <span class="token-string">"YOUR_PASSWORD"</span>},
+    files={<span class="token-string">"file"</span>: (<span class="token-string">"sample.jpg"</span>, img_data)},
+    data={
+        <span class="token-string">"slug"</span>: <span class="token-string">"remote-download"</span>,
+        <span class="token-string">"title"</span>: <span class="token-string">"Uploaded via Script"</span>
+    }
+)
+
+<span class="token-keyword">print</span>(response.json())</pre>
+                    </div>
+                </div>
+
+                <div class="grid-2">
+                    <div class="card" style="border-top: 4px solid var(--success);">
+                        <h3>3. Fetch Database <span class="badge badge-success" style="float: right;">GET /api/history</span></h3>
+                        <p>Retrieve the full JSON array of your files.</p>
+                        <pre>curl.exe -X GET "https://static.qlynk.me/api/history" \
+  -H "password: YOUR_PASSWORD"</pre>
+                    </div>
+                    
+                    <div class="card" style="border-top: 4px solid var(--danger);">
+                        <h3>4. Erase File <span class="badge" style="background: rgba(238,0,0,0.2); color: var(--danger); float: right;">DELETE</span></h3>
+                        <p>Permanently remove an asset via slug.</p>
+                        <pre>curl.exe -X DELETE "https://static.qlynk.me/api/rest/YOUR_SLUG" \
+  -H "password: YOUR_PASSWORD"</pre>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section" style="background-color: #050505;">
+            <div class="container">
+                <h2 style="text-align: center; border: none; margin-bottom: 3rem;">System Trade-offs</h2>
+                <div class="grid-2">
+                    <div class="card" style="border: 1px solid var(--success); box-shadow: 0 10px 30px rgba(23, 201, 100, 0.05);">
+                        <h3 style="color: var(--success); margin-top: 0;"><i class="fa-solid fa-check-double"></i> Primary Advantages</h3>
+                        <ul style="margin-top: 1.5rem;">
+                            <li><span class="highlight">Zero Cost Capacity:</span> Up to 50GB per repository.</li>
+                            <li><span class="highlight">SEO Friendly:</span> Custom URL slugs (e.g., <code>/f/logo</code>).</li>
+                            <li><span class="highlight">Mutable Metadata:</span> Edit titles and thumbnails post-upload.</li>
+                            <li><span class="highlight">CORS Protected:</span> Lock API access to your own domains.</li>
+                            <li><span class="highlight">Persistent Login:</span> Secure 1-year cookie authentication.</li>
+                        </ul>
+                    </div>
+                    <div class="card" style="border: 1px solid var(--danger); box-shadow: 0 10px 30px rgba(238, 0, 0, 0.05);">
+                        <h3 style="color: var(--danger); margin-top: 0;"><i class="fa-solid fa-triangle-exclamation"></i> Known Limitations</h3>
+                        <ul style="margin-top: 1.5rem;">
+                            <li><span class="highlight">Cold Boot Sleep:</span> Hugging Face free tier spaces sleep after inactivity.</li>
+                            <li><span class="highlight">Large File Timeout:</span> Files over 1GB may fail depending on connection.</li>
+                            <li><span class="highlight">Public Links:</span> Files are accessible if the exact slug is guessed.</li>
+                            <li><span class="highlight">Flat Architecture:</span> No folder hierarchies, rely on search instead.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="section">
+            <div class="container">
+                <div class="alert-box">
+                    <h3><i class="fa-solid fa-scale-balanced"></i> STRICT LEGAL NOTICE & COPYRIGHT</h3>
+                    <p style="margin-bottom: 1rem; color: #ffb3b3; font-size: 1.1rem; font-weight: 500;">
+                        This architecture, including the Python backend, React-inspired UI, and Reverse Proxy integration, was exclusively designed and engineered by <strong>Deep Dey</strong>.
+                    </p>
+                    <p style="margin-bottom: 0; color: #cccccc;">
+                        While the source code is provided for educational and personal use, <strong>ATTRIBUTION IS MANDATORY</strong>. 
+                        If you fork, copy, host, modify, or distribute this system publicly on any domain, you MUST leave the developer credits intact in the footer and documentation. 
+                        <br><br>
+                        <strong>Failure to provide proper credit constitutes Intellectual Property Theft and will result in an immediate DMCA Takedown Notice sent to your hosting provider (Cloudflare, Vercel, HF, etc.).</strong> Do not test this policy.
+                    </p>
+                </div>
+                
+                <footer style="text-align: center; margin-top: 5rem; padding-top: 2rem; border-top: 1px solid var(--border-light);">
+                    <div style="font-size: 2rem; margin-bottom: 1rem; color: var(--border-hover);">
+                        <i class="fa-brands fa-python"></i>
+                        <i class="fa-brands fa-docker" style="margin: 0 15px;"></i>
+                        <i class="fa-solid fa-database"></i>
+                    </div>
+                    <p style="color: var(--text-muted); font-weight: 500;">
+                        &copy; 2026 Engineered by Deep Dey. All Systems Operational.
+                    </p>
+                    <a href="https://qlynk.vercel.app/v1/portfolio" target="_blank" class="btn btn-outline btn-sm" style="border-radius: 50px; margin-top: 1rem;">
+                        Visit Developer Portfolio
+                    </a>
+                </footer>
+            </div>
+        </section>
+    </div>
+
+    <div class="modal-overlay" id="authModal">
+        <div class="modal-content">
+            <div style="background: rgba(0, 112, 243, 0.1); width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem; border: 1px solid rgba(0, 112, 243, 0.3);">
+                <i class="fa-solid fa-fingerprint" style="font-size: 2.5rem; color: var(--accent);"></i>
+            </div>
+            <h2 style="border: none; margin-top: 0;">System Locked</h2>
+            <p style="margin-bottom: 2.5rem;">Enter the master sequence to mount the storage node.</p>
+            
+            <div class="form-group" style="text-align: left;">
+                <input type="password" id="masterPwd" placeholder="Enter Secure Password..." onkeypress="if(event.key === 'Enter') executeLogin()">
+            </div>
+            
+            <button class="btn btn-primary" style="width: 100%; padding: 1.2rem; font-size: 1.1rem;" onclick="executeLogin()">
+                <i class="fa-solid fa-unlock"></i> Authorize Access
+            </button>
+            <button class="btn btn-outline" style="width: 100%; padding: 1rem; margin-top: 1rem;" onclick="closeLoginModal()">
+                Cancel
+            </button>
+        </div>
+    </div>
+
+    <div id="appDashboard">
+        <div class="container">
+            
+            <div class="dashboard-header">
+                <div>
+                    <h2 style="border: none; margin: 0; display: flex; align-items: center; gap: 12px;">
+                        <i class="fa-solid fa-server" style="color: var(--accent);"></i> Node Control Center
+                    </h2>
+                    <p style="margin: 0; margin-top: 5px; color: var(--text-muted);">Manage your Hugging Face data lake.</p>
+                </div>
+                <div class="btn-group" style="display: flex; gap: 12px;">
+                    <button class="btn btn-outline" onclick="toggleView('docs')">
+                        <i class="fa-solid fa-book-bookmark"></i> View Docs
+                    </button>
+                    <button class="btn btn-danger" onclick="logoutSystem()">
+                        <i class="fa-solid fa-power-off"></i> Disconnect
+                    </button>
+                </div>
+            </div>
+
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <h3 id="uiTotalFiles">0</h3>
+                    <p style="margin-top: 8px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;">Hosted Assets</p>
+                </div>
+                <div class="stat-card">
+                    <h3 id="uiTotalSize">0 B</h3>
+                    <p style="margin-top: 8px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;">Storage Consumed</p>
+                </div>
+                <div class="stat-card" style="border-color: rgba(23, 201, 100, 0.3); background: linear-gradient(180deg, var(--bg-surface) 0%, rgba(23, 201, 100, 0.05) 100%);">
+                    <h3 style="color: var(--success);"><i class="fa-solid fa-satellite-dish"></i></h3>
+                    <p style="margin-top: 8px; color: var(--success); font-weight: 600; text-transform: uppercase; font-size: 0.85rem; letter-spacing: 1px;">API Online & Listening</p>
+                </div>
+            </div>
+
+<div class="card" style="border-top: 4px solid var(--accent);">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; flex-wrap: wrap; gap: 10px;">
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <div style="background: var(--bg-body); width: 50px; height: 50px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border);">
+                <i class="fa-solid fa-cloud-arrow-up fa-lg" style="color: var(--accent);"></i>
+            </div>
+            <div>
+                <h3 style="margin: 0;">Upload Engine</h3>
+                <p style="margin: 0; font-size: 0.9rem;">Drag & drop, browse, or paste a link.</p>
+            </div>
+        </div>
+        <div style="background: var(--bg-body); border-radius: 8px; border: 1px solid var(--border); overflow: hidden; display: flex;">
+            <button id="tabLocal" onclick="switchUploadMode('local')" class="btn" style="background: var(--bg-hover); color: var(--text-main); border-radius: 0; border: none; padding: 0.5rem 1rem;">Local File</button>
+            <button id="tabLink" onclick="switchUploadMode('link')" class="btn" style="background: transparent; color: var(--text-muted); border-radius: 0; border: none; padding: 0.5rem 1rem;">From URL</button>
+        </div>
+    </div>
+    
+    <div id="localUploadArea">
+        <div id="dropzone" style="background: var(--bg-main); padding: 3rem 1.5rem; border-radius: var(--radius-sm); border: 2px dashed var(--border-hover); margin: 1.5rem 0; text-align: center; cursor: pointer; transition: 0.3s; position: relative;">
+            <input type="file" id="uploadFileObj" style="position: absolute; width: 100%; height: 100%; top: 0; left: 0; opacity: 0; cursor: pointer;" onchange="handleFileSelect(event)">
+            <i class="fa-solid fa-file-arrow-up fa-3x" style="color: var(--text-muted); margin-bottom: 1rem;"></i>
+            <h4 style="margin: 0; color: var(--text-main);">Click or Drag & Drop File Here</h4>
+            <p id="fileNameDisplay" style="margin: 10px 0 0 0; color: var(--accent); font-weight: 600;"></p>
+        </div>
+    </div>
+
+    <div id="linkUploadArea" style="display: none; margin: 1.5rem 0;">
+        <div class="form-group">
+            <label>Direct File URL (May fail on strict CORS domains)</label>
+            <input type="text" id="uploadUrlObj" placeholder="https://example.com/image.png">
+        </div>
+    </div>
+    
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+        <div class="form-group">
+            <label>File Title (Optional)</label>
+            <input type="text" id="uploadTitle" placeholder="e.g., Summer Vacation Photo">
+        </div>
+        <div class="form-group">
+            <label>Custom Slug (Optional)</label>
+            <input type="text" id="uploadSlug" placeholder="e.g., summer-2026">
+        </div>
+    </div>
+    
+    <div class="form-group">
+        <label>Thumbnail Image URL (Auto-generated for Audio/Video)</label>
+        <div style="display: flex; gap: 10px; align-items: center;">
+            <input type="text" id="uploadThumb" placeholder="https://... or Base64 Data">
+            <img id="thumbPreview" src="" style="width: 40px; height: 40px; border-radius: 6px; object-fit: cover; display: none; border: 1px solid var(--border);">
+        </div>
+    </div>
+
+    <button class="btn btn-primary" id="btnUploadTrigger" onclick="processUpload()" style="width: 100%; padding: 1.2rem; font-size: 1.1rem; margin-top: 1rem;">
+        <i class="fa-solid fa-rocket"></i> Execute API Upload
+    </button>
+    
+    <div class="progress-container" id="uploadProgressContainer">
+        <div class="progress-header">
+            <span style="color: var(--text-main);" id="progressStatusText">Transmitting Data...</span>
+            <span id="progressText" style="color: var(--accent);">0%</span>
+        </div>
+        <div class="progress-track">
+            <div class="progress-fill" id="progressBar"></div>
+        </div>
+        <div class="progress-footer">
+            <span id="progressSize">0.00 MB / 0.00 MB</span>
+            <div style="display: flex; gap: 20px;">
+                <span id="progressSpeed"><i class="fa-solid fa-gauge-high"></i> 0 KB/s</span>
+                <span id="progressEta" style="color: var(--text-main);"><i class="fa-solid fa-stopwatch"></i> ETA: --</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+            <div class="card" style="padding: 0; overflow: hidden;">
+                <div style="padding: 2.5rem 2.5rem 1.5rem; border-bottom: 1px solid var(--border);">
+                    <div class="file-toolbar">
+                        <div style="display: flex; align-items: center; gap: 15px;">
+                            <div style="background: var(--bg-body); width: 50px; height: 50px; border-radius: 10px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border);">
+                                <i class="fa-solid fa-database fa-lg" style="color: var(--text-main);"></i>
+                            </div>
+                            <div>
+                                <h3 style="margin: 0;">Dataset Explorer</h3>
+                                <p style="margin: 0; font-size: 0.9rem;">Manage hosted assets.</p>
+                            </div>
+                        </div>
+                        
+                        <div class="search-wrapper">
+                            <input type="text" id="searchInput" placeholder="Search by name, slug, or extension..." onkeyup="handleSearch()">
+                            <button class="btn btn-outline" onclick="syncData()" title="Force Refresh"><i class="fa-solid fa-rotate"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="padding: 2.5rem; background: var(--bg-body);">
+                    <div class="file-grid" id="explorerList">
+                        <div style="text-align: center; padding: 4rem 2rem; color: var(--text-muted);">
+                            <i class="fa-solid fa-circle-notch fa-spin fa-3x" style="margin-bottom: 1.5rem; color: var(--accent);"></i>
+                            <h3>Syncing with Infrastructure</h3>
+                            <p>Establishing secure connection to Hugging Face Datasets...</p>
+                        </div>
+                    </div>
+                    
+                    <div class="pagination-container" id="paginationControls">
+                        <button class="btn btn-outline" id="btnPrevPage" onclick="prevPage()">
+                            <i class="fa-solid fa-arrow-left"></i> Previous
+                        </button>
+                        
+                        <div class="page-indicator" id="pageIndicator">
+                            Page 1 of 1
+                        </div>
+                        
+                        <button class="btn btn-outline" id="btnNextPage" onclick="nextPage()">
+                            Next <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <footer style="text-align: center; margin-top: 3rem; color: var(--border-hover); font-family: var(--font-code); font-size: 0.85rem;">
+                SYS_VERSION: 2.1.0_ENTERPRISE | ENGINEER: DEEP_DEY
+            </footer>
+        </div>
+    </div>
+
+    <div id="toast">
+        <i class="fa-solid fa-circle-info" id="toastIcon"></i>
+        <span id="toastMsg">Notification System Ready</span>
+    </div>
+
+    <script>
+
+      // ==========================================
+        // UI TOGGLE: LOCAL VS LINK UPLOAD
+        // ==========================================
+        let uploadMode = 'local';
+        function switchUploadMode(mode) {
+            uploadMode = mode;
+            if (mode === 'local') {
+                document.getElementById('localUploadArea').style.display = 'block';
+                document.getElementById('linkUploadArea').style.display = 'none';
+                document.getElementById('tabLocal').style.background = 'var(--bg-hover)';
+                document.getElementById('tabLocal').style.color = 'var(--text-main)';
+                document.getElementById('tabLink').style.background = 'transparent';
+                document.getElementById('tabLink').style.color = 'var(--text-muted)';
+            } else {
+                document.getElementById('localUploadArea').style.display = 'none';
+                document.getElementById('linkUploadArea').style.display = 'block';
+                document.getElementById('tabLink').style.background = 'var(--bg-hover)';
+                document.getElementById('tabLink').style.color = 'var(--text-main)';
+                document.getElementById('tabLocal').style.background = 'transparent';
+                document.getElementById('tabLocal').style.color = 'var(--text-muted)';
+            }
+        }
+
+        // ==========================================
+        // DRAG & DROP + AUTO THUMBNAIL LOGIC
+        // ==========================================
+        const dropzone = document.getElementById('dropzone');
+        
+        dropzone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropzone.style.borderColor = 'var(--accent)';
+            dropzone.style.background = 'rgba(0, 112, 243, 0.1)';
+        });
+        
+        dropzone.addEventListener('dragleave', () => {
+            dropzone.style.borderColor = 'var(--border-hover)';
+            dropzone.style.background = 'var(--bg-main)';
+        });
+        
+        dropzone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropzone.style.borderColor = 'var(--border-hover)';
+            dropzone.style.background = 'var(--bg-main)';
+            if (e.dataTransfer.files.length) {
+                document.getElementById('uploadFileObj').files = e.dataTransfer.files;
+                handleFileSelect({ target: { files: e.dataTransfer.files } });
+            }
+        });
+
+        async function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            document.getElementById('fileNameDisplay').innerText = `Selected: ${file.name} (${(file.size/(1024*1024)).toFixed(2)} MB)`;
+            document.getElementById('uploadTitle').value = file.name.split('.')[0]; // Auto-fill title
+
+            // Reset Thumbnail
+            document.getElementById('uploadThumb').value = "";
+            document.getElementById('thumbPreview').style.display = 'none';
+
+            // 🎥 VIDEO THUMBNAIL EXTRACTION
+            if (file.type.startsWith('video/')) {
+                triggerToast("Extracting Video Frame...");
+                try {
+                    const video = document.createElement('video');
+                    video.preload = 'metadata';
+                    video.src = URL.createObjectURL(file);
+                    
+                    video.onloadeddata = () => { video.currentTime = 1; }; // Capture at 1 second
+                    
+                    video.onseeked = () => {
+                        const canvas = document.createElement('canvas');
+                        // Scale down to save history.json space
+                        const scale = 300 / video.videoWidth; 
+                        canvas.width = 300;
+                        canvas.height = video.videoHeight * scale;
+                        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+                        
+                        const base64Thumb = canvas.toDataURL('image/jpeg', 0.6);
+                        setThumbnail(base64Thumb);
+                    };
+                } catch(e) { console.error("Video thumb failed", e); }
+            }
+
+            // 🎵 AUDIO THUMBNAIL EXTRACTION (Needs jsmediatags)
+            if (file.type.startsWith('audio/')) {
+                if (window.jsmediatags) {
+                    triggerToast("Reading Audio Tags...");
+                    window.jsmediatags.read(file, {
+                        onSuccess: function(tag) {
+                            const picture = tag.tags.picture;
+                            if (picture) {
+                                let base64String = "";
+                                for (let i = 0; i < picture.data.length; i++) {
+                                    base64String += String.fromCharCode(picture.data[i]);
+                                }
+                                const base64Thumb = "data:" + picture.format + ";base64," + window.btoa(base64String);
+                                setThumbnail(base64Thumb);
+                            }
+                        },
+                        onError: function(error) { console.log("No audio cover found"); }
+                    });
+                }
+            }
+        }
+
+        function setThumbnail(base64String) {
+            document.getElementById('uploadThumb').value = base64String;
+            const preview = document.getElementById('thumbPreview');
+            preview.src = base64String;
+            preview.style.display = 'block';
+            triggerToast("Thumbnail Extracted!");
+        }
+
+        // ==========================================
+        // UPDATED PROCESS UPLOAD (Handles Both Modes)
+        // ==========================================
+// --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
+// --- Upload Engine (XHR Progress Integration & CORS Bypass) ---
+async function processUpload() {
+            const fd = new FormData();
+
+            // 1. DYNAMIC PAYLOAD BUILDER
+            if (uploadMode === 'local') {
+                const fileObj = document.getElementById('uploadFileObj').files[0];
+                if (!fileObj) return triggerToast("Target binary is missing. Select a file.", true);
+                fd.append('file', fileObj);
+            } else {
+                const linkUrl = document.getElementById('uploadUrlObj').value.trim();
+                if (!linkUrl) return triggerToast("Please enter a valid URL", true);
+                fd.append('link_url', linkUrl); // Backend proxy zindabad!
+            }
+
+            const btn = document.getElementById('btnUploadTrigger');
+            const progContainer = document.getElementById('uploadProgressContainer');
+            const progBar = document.getElementById('progressBar');
+            const progText = document.getElementById('progressText');
+            
+            document.getElementById('progressStatusText').innerText = uploadMode === 'link' 
+                ? "Backend Proxy is fetching & uploading..." 
+                : "Transmitting to Node...";
+
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Processing...';
+            btn.disabled = true;
+            progContainer.style.display = 'block';
+            progBar.style.width = '0%';
+
+            const titleVal = document.getElementById('uploadTitle').value.trim();
+            const slugVal = document.getElementById('uploadSlug').value.trim();
+            const thumbVal = document.getElementById('uploadThumb').value.trim();
+
+            if (titleVal) fd.append('title', titleVal);
+            if (slugVal) fd.append('slug', slugVal);
+            if (thumbVal) fd.append('thumbnail', thumbVal);
+
+            const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
+
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/rest', true);
+            xhr.setRequestHeader('password', pwd);
+
+            // Progress Listener (Only tracks browser-to-backend transfer)
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progBar.style.width = percentComplete + '%';
+                    progText.innerText = Math.round(percentComplete) + '%';
+                    
+                    // If link mode, transfer is instant. Tell user backend is working.
+                    if (uploadMode === 'link' && percentComplete === 100) {
+                        document.getElementById('progressStatusText').innerText = "Backend downloading file, please wait...";
+                    }
+                }
+            };
+
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    const resp = JSON.parse(xhr.responseText);
+                    // Check if failsafe was triggered
+                    if (resp.metadata && resp.metadata.is_external) {
+                        triggerToast("File blocked by source. 308 Smart Redirect created instead!");
+                    } else {
+                        triggerToast("Asset Transmitted & Indexed Successfully!");
+                    }
+                    
+                    // Reset
+                    if(document.getElementById('uploadFileObj')) document.getElementById('uploadFileObj').value = "";
+                    if(document.getElementById('uploadUrlObj')) document.getElementById('uploadUrlObj').value = "";
+                    document.getElementById('uploadTitle').value = "";
+                    document.getElementById('uploadSlug').value = "";
+                    document.getElementById('uploadThumb').value = "";
+                    if(document.getElementById('thumbPreview')) document.getElementById('thumbPreview').style.display = 'none';
+                    if(document.getElementById('fileNameDisplay')) document.getElementById('fileNameDisplay').innerText = "";
+                    
+                    syncData(); 
+                } else {
+                    let err = "Transmission failed.";
+                    try { err = JSON.parse(xhr.responseText).detail || err; } catch(e){}
+                    triggerToast(`Error: ${err}`, true);
+                }
+                resetUI();
+            };
+
+            xhr.onerror = function() {
+                triggerToast("Connection interrupted by network.", true);
+                resetUI();
+            };
+
+            function resetUI() {
+                btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+                btn.disabled = false;
+                setTimeout(() => { 
+                    progContainer.style.display = 'none'; 
+                    progBar.style.width = '0%'; 
+                }, 3500);
+            }
+
+            xhr.send(fd);
+        }
+        
+        /**
+         * QLYNK ENTERPRISE NODE - FRONTEND LOGIC
+         * Engineered by Deep Dey
+         * Features: Pagination, Smart Routing, XHR Progress, Secure Auth
+         */
+
+        // --- DOM Element References ---
+        const elLanding = document.getElementById('landingPage');
+        const elDashboard = document.getElementById('appDashboard');
+        const elModal = document.getElementById('authModal');
+        const toast = document.getElementById('toast');
+        const toastMsg = document.getElementById('toastMsg');
+        const navActionArea = document.getElementById('navActionArea');
+
+        // --- Global Application State ---
+        let currentSearchTimer = null;
+        let isLoggedIn = false;
+
+        // --- Pagination Architecture State ---
+        let allFilesData = [];          // Holds the master copy of fetched files
+        let filteredData = [];          // Holds search-filtered files
+        let currentPage = 1;            // Current active page index
+        const itemsPerPage = 5;         // STANDARD SETTING: Top 5 files per page
+
+        /**
+         * Toast Notification System
+         * @param {string} msg - Message to display
+         * @param {boolean} isErr - If true, styles as danger alert
+         */
+        function triggerToast(msg, isErr = false) {
+            toastMsg.innerText = msg;
+            toast.className = isErr ? "show error" : "show";
+            document.getElementById('toastIcon').className = isErr ? "fa-solid fa-triangle-exclamation" : "fa-solid fa-circle-check";
+            
+            setTimeout(() => { 
+                toast.className = toast.className.replace("show", ""); 
+            }, 3500);
+        }
+
+        /**
+         * Clipboard API Wrapper
+         * @param {string} url - The public URL to copy
+         */
+        async function copyURL(url) {
+            try {
+                await navigator.clipboard.writeText(url);
+                triggerToast("Public URL Copied to Clipboard!");
+            } catch (e) {
+                triggerToast("Clipboard access denied by browser", true);
+            }
+        }
+
+        // --- Authentication & Routing Engine ---
+        
+        window.onload = async () => {
+            // Validate secure cookie on initial load
+            const cookieVal = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            if (cookieVal) {
+                try {
+                    // Send POST request to verify token validity with backend
+                    const res = await fetch('/api/verify', { method: 'POST' }); 
+                    if (res.ok) {
+                        isLoggedIn = true;
+                        updateNavbarUI();
+                        // Optional: Automatically jump to dashboard if previously logged in
+                        // transitionToApp(); 
+                        return;
+                    }
+                } catch(e) {
+                    console.error("Backend unreachable on boot.");
+                }
+            }
+            updateNavbarUI(); // Setup default landing page UI
+        };
+
+        /**
+         * Dynamic Navbar Builder
+         */
+        function updateNavbarUI() {
+            if(isLoggedIn) {
+                navActionArea.innerHTML = `
+                    <button class="btn btn-outline btn-sm" onclick="toggleView('dashboard')">
+                        <i class="fa-solid fa-gauge"></i> Enter Dashboard
+                    </button>
+                `;
+                // Update hero button as well
+                const heroBtn = document.getElementById('btnHeroAccess');
+                if(heroBtn) {
+                    heroBtn.innerHTML = '<i class="fa-solid fa-gauge"></i> Go to Dashboard';
+                }
+            } else {
+                navActionArea.innerHTML = `
+                    <button class="btn btn-primary btn-sm" onclick="openLoginModal()">
+                        <i class="fa-solid fa-lock"></i> Node Login
+                    </button>
+                `;
+            }
+        }
+
+        /**
+         * View Controller (Smart Navigation without Logout)
+         * @param {string} view - Target view ('docs' or 'dashboard')
+         */
+        function toggleView(view) {
+            if (view === 'docs') {
+                elDashboard.style.display = 'none';
+                elLanding.style.display = 'block';
+                window.scrollTo(0,0);
+            } else if (view === 'dashboard') {
+                if(!isLoggedIn) return openLoginModal();
+                elLanding.style.display = 'none';
+                elDashboard.style.display = 'block';
+                syncData(); // Always refresh data when entering dashboard
+                window.scrollTo(0,0);
+            }
+        }
+
+        function handleAccessSystem() {
+            if (isLoggedIn) {
+                toggleView('dashboard');
+            } else {
+                openLoginModal();
+            }
+        }
+
+        function openLoginModal() { 
+            elModal.classList.add('active'); 
+            document.getElementById('masterPwd').focus();
+        }
+        
+        function closeLoginModal() { 
+            elModal.classList.remove('active'); 
+            document.getElementById('masterPwd').value = '';
+        }
+
+        /**
+         * Master Login Execution
+         */
+        async function executeLogin() {
+            const pwd = document.getElementById('masterPwd').value;
+            if (!pwd) return triggerToast("Authentication sequence required.", true);
+
+            const btn = document.querySelector('#authModal .btn-primary');
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Verifying...';
+            btn.disabled = true;
+
+            try {
+                const res = await fetch('/api/verify', { 
+                    method: 'POST', 
+                    headers: { 'password': pwd } 
+                });
+                
+                if (res.ok) {
+                    // Inject strict 1-year persistent cookie
+                    document.cookie = `auth_token=${pwd}; max-age=31536000; path=/; SameSite=Strict`;
+                    isLoggedIn = true;
+                    updateNavbarUI();
+                    closeLoginModal();
+                    toggleView('dashboard');
+                    triggerToast("Security Clearance Granted.");
+                } else {
+                    triggerToast("Access Denied: Invalid Master Sequence", true);
+                }
+            } catch(e) {
+                triggerToast("Connection to host failed.", true);
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
+        }
+
+        function logoutSystem() {
+            // Destroy cookie
+            document.cookie = "auth_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            window.location.reload();
+        }
+
+        // --- Data Synchronization Pipeline ---
+        
+        async function syncData() {
+            fetchSystemStats();
+            fetchExplorerData();
+        }
+
+        async function fetchSystemStats() {
+            try {
+                const res = await fetch('/api/stats');
+                if (res.ok) {
+                    const data = await res.json();
+                    
+                    // Animate numbers for premium feel
+                    document.getElementById('uiTotalFiles').innerText = data.total_files;
+                    document.getElementById('uiTotalSize').innerText = data.formatted_total_size || "0 B";
+                }
+            } catch (e) { 
+                console.error("Telemetry failure", e); 
+            }
+        }
+
+        /**
+         * Advanced Search Handler with Debounce
+         */
+        function handleSearch() {
+            clearTimeout(currentSearchTimer);
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            
+            // Debounce for performance
+            currentSearchTimer = setTimeout(() => { 
+                if (query === "") {
+                    filteredData = [...allFilesData]; // Reset to all
+                } else {
+                    filteredData = allFilesData.filter(f => 
+                        (f.title && f.title.toLowerCase().includes(query)) || 
+                        (f.slug && f.slug.toLowerCase().includes(query)) ||
+                        (f.filename && f.filename.toLowerCase().includes(query))
+                    );
+                }
+                currentPage = 1; // Always return to page 1 on search
+                renderExplorer();
+            }, 300);
+        }
+
+        /**
+         * Fetch Master Dataset from HF
+         */
+        async function fetchExplorerData() {
+            const listEl = document.getElementById('explorerList');
+            const paginationEl = document.getElementById('paginationControls');
+            
+            // Show loader
+            listEl.innerHTML = `
+                <div style="text-align: center; padding: 4rem 2rem; color: var(--text-muted);">
+                    <i class="fa-solid fa-circle-notch fa-spin fa-3x" style="margin-bottom: 1.5rem; color: var(--accent);"></i>
+                    <h3>Syncing with Infrastructure</h3>
+                    <p>Establishing secure connection to Hugging Face Datasets...</p>
+                </div>
+            `;
+            
+            try {
+                const res = await fetch('/api/history');
+                if (res.ok) {
+                    allFilesData = await res.json();
+                    // Initialize filtered data as full data
+                    filteredData = [...allFilesData];
+                    currentPage = 1; 
+                    
+                    // Clear search input on fresh sync
+                    document.getElementById('searchInput').value = "";
+                    
+                    renderExplorer();
+                } else {
+                    listEl.innerHTML = `<div class="alert-box"><h3>Sync Failed</h3><p>Server rejected the request.</p></div>`;
+                    paginationEl.style.display = 'none';
+                }
+            } catch (e) {
+                listEl.innerHTML = `<div class="alert-box"><h3>Network Error</h3><p>Could not connect to backend node.</p></div>`;
+                paginationEl.style.display = 'none';
+            }
+        }
+
+        /**
+         * Intelligent File Type Icon Mapper
+         */
+        function getFileIcon(mime, filename) {
+            const m = mime ? mime.toLowerCase() : "";
+            const fn = filename ? filename.toLowerCase() : "";
+            
+            if (m.includes('image') || fn.match(/\.(jpg|jpeg|png|gif|webp|svg)$/)) return '<i class="fa-regular fa-image" style="color: #0070f3;"></i>';
+            if (m.includes('video') || fn.match(/\.(mp4|mkv|webm|avi)$/)) return '<i class="fa-solid fa-film" style="color: #f5a623;"></i>';
+            if (m.includes('audio') || fn.match(/\.(mp3|wav|ogg)$/)) return '<i class="fa-solid fa-music" style="color: #e00;"></i>';
+            if (m.includes('pdf') || fn.match(/\.pdf$/)) return '<i class="fa-regular fa-file-pdf" style="color: #e00;"></i>';
+            if (m.includes('zip') || m.includes('tar') || fn.match(/\.(zip|rar|tar|gz)$/)) return '<i class="fa-regular fa-file-zipper" style="color: #888;"></i>';
+            if (m.includes('json') || fn.match(/\.json$/)) return '<i class="fa-brands fa-node-js" style="color: #17c964;"></i>';
+            if (fn.match(/\.(py|js|html|css|ts|tsx|jsx)$/)) return '<i class="fa-solid fa-code" style="color: #0070f3;"></i>';
+            
+            return '<i class="fa-solid fa-file-lines"></i>'; // Default
+        }
+
+        // --- Core Render & Pagination Engine ---
+        
+        function renderExplorer() {
+            const listEl = document.getElementById('explorerList');
+            const paginationEl = document.getElementById('paginationControls');
+            
+            if (filteredData.length === 0) {
+                listEl.innerHTML = `
+                    <div style="text-align: center; padding: 4rem 2rem; color: var(--text-muted); border: 1px dashed var(--border); border-radius: var(--radius-lg); background: var(--bg-surface);">
+                        <i class="fa-solid fa-ghost fa-3x" style="margin-bottom:1.5rem; opacity: 0.5;"></i>
+                        <h3 style="margin-top:0;">No Assets Found</h3>
+                        <p style="margin:0;">Upload a file or adjust your search parameters.</p>
+                    </div>`;
+                paginationEl.style.display = 'none';
+                return;
+            }
+
+            // Math for Pagination Segment
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            if (currentPage > totalPages) currentPage = totalPages;
+            if (currentPage < 1) currentPage = 1;
+
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const currentSegment = filteredData.slice(startIndex, startIndex + itemsPerPage);
+
+            // Construct DOM string
+            let htmlChunk = "";
+            currentSegment.forEach(f => {
+                const publicUrl = `${window.location.origin}/f/${f.slug}`;
+                
+                // Format Date safely
+                let dateStr = "N/A";
+                if (f.uploaded_at) {
+                    const d = new Date(f.uploaded_at);
+                    if (!isNaN(d)) {
+                        // e.g., "15 Mar 2026, 14:30"
+                        const timeOpts = { hour: '2-digit', minute:'2-digit' };
+                        dateStr = d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) + " " + d.toLocaleTimeString([], timeOpts);
+                    }
+                }
+
+                // Determine Icon or Thumbnail
+                let iconUI = f.thumbnail 
+                    ? `<img src="${f.thumbnail}" alt="Thumbnail" loading="lazy">` 
+                    : getFileIcon(f.mime_type, f.filename);
+
+                const safeTitle = (f.title || f.filename || 'Untitled').replace(/'/g, "\\'");
+                const safeThumb = (f.thumbnail || '').replace(/'/g, "\\'");
+
+                htmlChunk += `
+                    <div class="file-row">
+                        <div class="file-icon">${iconUI}</div>
+                        <div class="file-info">
+                            <div class="file-name" title="${f.filename}">${f.title || f.filename}</div>
+                            <div class="file-meta">
+                                <span><i class="fa-solid fa-link"></i> ${f.slug}</span>
+                                <span style="color: var(--accent); font-weight: 600;"><i class="fa-solid fa-database"></i> ${f.formatted_size || '0 B'}</span>
+                                <span><i class="fa-regular fa-clock"></i> ${dateStr}</span>
+                            </div>
+                        </div>
+                        <div class="file-actions">
+                            <button class="icon-btn" onclick="copyURL('${publicUrl}')" title="Copy Public Link">
+                                <i class="fa-solid fa-copy"></i>
+                            </button>
+                            
+                            <a href="${publicUrl}" target="_blank" class="icon-btn new-tab" title="Open File in New Tab">
+                                <i class="fa-solid fa-arrow-up-right-from-square"></i>
+                            </a>
+                            
+                            <button class="icon-btn" onclick="triggerEdit('${f.slug}', '${safeTitle}', '${safeThumb}')" title="Edit Metadata">
+                                <i class="fa-solid fa-pen-to-square"></i>
+                            </button>
+                            <button class="icon-btn delete" onclick="triggerDelete('${f.slug}')" title="Permanently Erase">
+                                <i class="fa-solid fa-trash-can"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            // Inject to DOM
+            listEl.innerHTML = htmlChunk;
+
+            // Handle Pagination State & UI
+            if (totalPages > 1) {
+                paginationEl.style.display = 'flex';
+                document.getElementById('pageIndicator').innerText = `Page ${currentPage} of ${totalPages} (Total: ${filteredData.length})`;
+                document.getElementById('btnPrevPage').disabled = currentPage === 1;
+                document.getElementById('btnNextPage').disabled = currentPage === totalPages;
+            } else {
+                paginationEl.style.display = 'none';
+            }
+        }
+
+        // Pagination Controllers
+        function prevPage() {
+            if (currentPage > 1) { 
+                currentPage--; 
+                renderExplorer(); 
+                document.getElementById('explorerList').scrollIntoView({behavior: 'smooth', block: 'start'});
+            }
+        }
+        
+        function nextPage() {
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            if (currentPage < totalPages) { 
+                currentPage++; 
+                renderExplorer(); 
+                document.getElementById('explorerList').scrollIntoView({behavior: 'smooth', block: 'start'});
+            }
+        }
+
+        // --- Upload Engine (XHR Progress Integration) ---
+        
+        function processUpload() {
+            const fileObj = document.getElementById('uploadFileObj').files[0];
+            if (!fileObj) return triggerToast("Target binary is missing. Select a file.", true);
+
+            const btn = document.getElementById('btnUploadTrigger');
+            const progContainer = document.getElementById('uploadProgressContainer');
+            const progBar = document.getElementById('progressBar');
+            const progText = document.getElementById('progressText');
+            const progSize = document.getElementById('progressSize');
+            const progSpeed = document.getElementById('progressSpeed');
+            const progEta = document.getElementById('progressEta');
+
+            // UI Locks
+            btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i> Transmitting...';
+            btn.disabled = true;
+            progContainer.style.display = 'block';
+            progBar.style.width = '0%';
+
+            // Data Assembly
+            const fd = new FormData();
+            fd.append('file', fileObj);
+            
+            const titleVal = document.getElementById('uploadTitle').value.trim();
+            const slugVal = document.getElementById('uploadSlug').value.trim();
+            const thumbVal = document.getElementById('uploadThumb').value.trim();
+
+            if (titleVal) fd.append('title', titleVal);
+            if (slugVal) fd.append('slug', slugVal);
+            if (thumbVal) fd.append('thumbnail', thumbVal);
+
+            // Auth Injection
+            const pwdCookie = document.cookie.split(';').find(c => c.trim().startsWith('auth_token='));
+            const pwd = pwdCookie ? pwdCookie.split('=')[1] : '';
+
+            // Advanced XHR Configuration
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/rest', true);
+            xhr.setRequestHeader('password', pwd);
+
+            // Metrics Trackers
+            let startTime = Date.now();
+            let lastLoaded = 0;
+            let lastTime = startTime;
+
+            // The Progress Listener
+            xhr.upload.onprogress = function(e) {
+                if (e.lengthComputable) {
+                    const percentComplete = (e.loaded / e.total) * 100;
+                    progBar.style.width = percentComplete + '%';
+                    progText.innerText = Math.round(percentComplete) + '%';
+
+                    const loadedMB = (e.loaded / (1024 * 1024)).toFixed(2);
+                    const totalMB = (e.total / (1024 * 1024)).toFixed(2);
+                    progSize.innerText = `${loadedMB} MB / ${totalMB} MB`;
+
+                    const currentTime = Date.now();
+                    const timeDiff = (currentTime - lastTime) / 1000; 
+                    
+                    // Update speed/ETA every ~500ms to prevent jitter
+                    if (timeDiff > 0.5) {
+                        const bytesLoadedInDiff = e.loaded - lastLoaded;
+                        const speedBps = bytesLoadedInDiff / timeDiff;
+                        
+                        // Display Speed
+                        if (speedBps > 1024 * 1024) {
+                            progSpeed.innerHTML = `<i class="fa-solid fa-truck-fast"></i> ${(speedBps / (1024 * 1024)).toFixed(2)} MB/s`;
+                        } else {
+                            progSpeed.innerHTML = `<i class="fa-solid fa-gauge-high"></i> ${(speedBps / 1024).toFixed(2)} KB/s`;
+                        }
+
+                        // Calculate ETA
+                        const bytesRemaining = e.total - e.loaded;
+                        const etaSeconds = speedBps > 0 ? Math.round(bytesRemaining / speedBps) : 0;
+                        
+                        if (etaSeconds > 60) {
+                            progEta.innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${Math.floor(etaSeconds/60)}m ${etaSeconds%60}s`;
+                        } else {
+                            progEta.innerHTML = `<i class="fa-solid fa-stopwatch"></i> ETA: ${etaSeconds}s`;
+                        }
+
+                        lastTime = currentTime;
+                        lastLoaded = e.loaded;
+                    }
+                }
+            };
+
+            // Upload Complete Listener
+            xhr.onload = function() {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    triggerToast("Asset Transmitted & Indexed Successfully!");
+                    
+                    // Clean Form
+                    document.getElementById('uploadFileObj').value = "";
+                    document.getElementById('uploadTitle').value = "";
+                    document.getElementById('uploadSlug').value = "";
+                    document.getElementById('uploadThumb').value = "";
+                    
+                    // Force complete bar
+                    progBar.style.width = '100%';
+                    progText.innerText = '100%';
+                    
+                    syncData(); 
+                } else {
+                    let err = "Transmission failed.";
+                    try { err = JSON.parse(xhr.responseText).detail || err; } catch(e){}
+                    triggerToast(`Error: ${err}`, true);
+                }
+                resetUI();
+            };
+
+            xhr.onerror = function() {
+                triggerToast("Connection interrupted by network.", true);
+                resetUI();
+            };
+
+            function resetUI() {
+                btn.innerHTML = '<i class="fa-solid fa-rocket"></i> Execute API Upload';
+                btn.disabled = false;
+                setTimeout(() => { 
+                    progContainer.style.display = 'none'; 
+                    progBar.style.width = '0%'; 
+                }, 3500);
+            }
+
+            // Execute Payload
+            xhr.send(fd);
+        }
+
+        // --- Data Mutators ---
+        
+        async function triggerEdit(slug, currentTitle, currentThumb) {
+            const nTitle = prompt("Update Title (Leave as is to keep current):", currentTitle);
+            if (nTitle === null) return;
+            
+            const nThumb = prompt("Update Thumbnail URL (Leave empty for generic icon):", currentThumb);
+            if (nThumb === null) return;
+
+            const fd = new FormData();
+            fd.append('title', nTitle);
+            fd.append('thumbnail', nThumb);
+
+            try {
+                const res = await fetch(`/api/rest/${slug}`, { method: 'PUT', body: fd });
+                if (res.ok) {
+                    triggerToast("Metadata Synced to Node.");
+                    fetchExplorerData(document.getElementById('searchInput').value);
+                } else {
+                    triggerToast("Update Failed. Slug might conflict.", true);
+                }
+            } catch(e) {
+                triggerToast("Network error during update.", true);
+            }
+        }
+
+        async function triggerDelete(slug) {
+            const confirmed = confirm(`🛑 SECURITY WARNING 🛑\n\nYou are about to permanently erase the asset '${slug}' from the Hugging Face Repository.\n\nThis action bypasses trash and cannot be undone. Proceed?`);
+            if (!confirmed) return;
+
+            try {
+                const res = await fetch(`/api/rest/${slug}`, { method: 'DELETE' });
+                if (res.ok) {
+                    triggerToast("Asset Permanently Purged.");
+                    syncData();
+                } else {
+                    triggerToast("Deletion Failed at Node Level.", true);
+                }
+            } catch(e) {
+                triggerToast("Network error during deletion.", true);
+            }
+        }
+    </script>
+
+
+  <script src="/main.js"></script>
+  <script src="/footer-extras.js"></script>
+  
+</body>
+</html>
