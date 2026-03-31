@@ -324,13 +324,10 @@ async def process_advanced_upload(
                         'preferredquality': '256',
                     }]
                 else:
-                    # 🎬 FIX: The Ultimate Fallback System (1080p -> 720p -> Pre-merged -> Best)
-                    ydl_opts['format'] = (
-                        'bestvideo[height<=1080]+bestaudio/'
-                        'bestvideo[height<=720]+bestaudio/'
-                        'best[height<=1080]/'
-                        'best'
-                    )
+                    # 🎬 FIX: The Modern "Format Sort" System
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    # Ye yt-dlp ko force karega ki maximum 1080p hi chunna hai, usse zyada nahi
+                    ydl_opts['format_sort'] = ['res:1080', 'ext:mp4:m4a']
                     ydl_opts['merge_output_format'] = 'mp4'
 
                 def download_yt():
