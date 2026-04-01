@@ -716,7 +716,7 @@ async def generate_sitemap(request: Request):
         # 1. Main Page (Priority 1.0)
         urls.append(f"""
         <url>
-            <loc>{base_url}/</loc>
+            <loc>https://static.qlynk.me/</loc>
             <lastmod>{current_time}</lastmod>
             <changefreq>daily</changefreq>
             <priority>1.0</priority>
@@ -728,7 +728,7 @@ async def generate_sitemap(request: Request):
         for link in social_links:
             urls.append(f"""
             <url>
-                <loc>{base_url}{link}</loc>
+                <loc>https://static.qlynk.me{link}</loc>
                 <lastmod>{current_time}</lastmod>
                 <changefreq>weekly</changefreq>
                 <priority>0.7</priority>
@@ -745,7 +745,7 @@ async def generate_sitemap(request: Request):
             
             urls.append(f"""
             <url>
-                <loc>{base_url}/f/{slug}</loc>
+                <loc>https://static.qlynk.me/f/{slug}</loc>
                 <lastmod>{file_time}</lastmod>
                 <changefreq>monthly</changefreq>
                 <priority>0.1</priority>
