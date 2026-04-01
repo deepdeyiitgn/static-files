@@ -267,6 +267,7 @@ async def process_advanced_upload(
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["yt_default", "yt_video", "yt_audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
@@ -284,8 +285,8 @@ async def process_advanced_upload(
                     with open(cookie_path, "w") as f:
                         f.write(yt_cookies)
 
-                # 🌟 THE PURE TERMINAL ENGINE 🌟
-                # Sab restrictions aur spoofing hata di hain. yt-dlp khud handle karega.
+                # 🚀 THE PURE TERMINAL ENGINE (Fixed) 🚀
+                # Yahan se 'http_headers' aur saari spoofing delete kar di gayi hai!
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -300,7 +301,7 @@ async def process_advanced_upload(
                 if proxy_url:
                     ydl_opts['proxy'] = proxy_url
                 
-                # Cookie Injection (Bot protection bypass)
+                # Cookie Injection
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
@@ -316,9 +317,9 @@ async def process_advanced_upload(
                     # Force MP4 (Best Video + Audio)
                     ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
-                
-                # IMPORTANT: Agar media_format == "yt_default" hai, toh hum 'format' set hi nahi karenge!
-                # Isse wo automatically Terminal ki tarah "Default" (Best Quality) behave karega bina crash hue.
+                else:
+                    # yt_default: Terminal ki tarah best format automatically uthayega
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
