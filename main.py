@@ -266,6 +266,7 @@ async def process_advanced_upload(
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["video", "audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
