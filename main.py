@@ -313,7 +313,7 @@ async def process_advanced_upload(
             logger.info("Auto-switching to Video Engine for media link.")
             media_format = "yt_default"
 
-    # ==========================================
+   # ==========================================
     # LOGIC 1: UPLOAD FROM URL
     # ==========================================
     if link_url:
@@ -322,10 +322,8 @@ async def process_advanced_upload(
         
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            if media_format in ["yt_default", "yt_video", "yt_audio"]:
+            # 🌟 FIX: Ab hum check kar rahe hain ki agar format "direct" nahi hai, toh yt-dlp chalao
+            if media_format != "direct":
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
                         total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
@@ -342,8 +340,7 @@ async def process_advanced_upload(
                     with open(cookie_path, "w") as f:
                         f.write(yt_cookies)
 
-                # 🌟 THE DATACENTER BYPASS ENGINE 🌟
-                # 🌟 THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix) 🌟
+                # THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix)
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -351,8 +348,7 @@ async def process_advanced_upload(
                     'no_warnings': True,
                     'nocheckcertificate': True,
                     'socket_timeout': 60,
-                    'force_ipv4': True,  # 👈 YEH RAKHNA HAI (HF ke IPv6 ban hote hain)
-                    # ❌ Yahan se 'extractor_args' (Smart TV wali line) HATA DI HAI!
+                    'force_ipv4': True,
                 }
 
                 # Proxy Injection
@@ -364,7 +360,6 @@ async def process_advanced_upload(
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # 🎬 ZERO-FILTER FORMAT LOGIC
                 # 🎬 THE DYNAMIC FORMAT LOGIC 🎬
                 if media_format == "yt_audio" or media_format == "bestaudio/best":
                     ydl_opts['format'] = 'bestaudio/best'
@@ -377,12 +372,9 @@ async def process_advanced_upload(
                     ydl_opts['format'] = 'bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
                 else:
-                    # User ne UI se specific format choose kiya hai (e.g. 1080p, 720p)
+                    # User ne UI se specific resolution choose kiya hai
                     ydl_opts['format'] = media_format
                     ydl_opts['merge_output_format'] = 'mp4'
-                else:
-                    # yt_default: Terminal jaisa same behave karega
-                    pass
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -402,7 +394,7 @@ async def process_advanced_upload(
                 safe_title = "".join(x for x in (title or "Downloaded_Media") if x.isalnum() or x in " _-")
                 filename = f"{safe_title[:45]}{ext}"
                 
-            # --- ENGINE B: STANDARD DIRECT PROXY (Agar YT-DLP OFF ho) ---
+            # --- ENGINE B: STANDARD DIRECT PROXY ---
             else:
                 
                 headers = {
