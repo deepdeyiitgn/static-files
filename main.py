@@ -287,6 +287,7 @@ async def process_advanced_upload(
                         f.write(yt_cookies)
 
                 # 🌟 THE DATACENTER BYPASS ENGINE 🌟
+                # 🌟 THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix) 🌟
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -294,9 +295,8 @@ async def process_advanced_upload(
                     'no_warnings': True,
                     'nocheckcertificate': True,
                     'socket_timeout': 60,
-                    'force_ipv4': True,
-                    # 🚀 FIX: Bypass HF IP Ban by forcing Smart TV & Embedded Clients
-                    'extractor_args': {'youtube': {'player_client': ['tv', 'web_embedded']}}
+                    'force_ipv4': True,  # 👈 YEH RAKHNA HAI (HF ke IPv6 ban hote hain)
+                    # ❌ Yahan se 'extractor_args' (Smart TV wali line) HATA DI HAI!
                 }
 
                 # Proxy Injection
