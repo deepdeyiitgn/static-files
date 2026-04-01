@@ -4,10 +4,11 @@ FROM python:3.10-slim
 # Hugging Face requirement: Non-root user
 RUN useradd -m -u 1000 user
 
-# System dependencies
+# System dependencies (nodejs add kar diya gaya hai)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     ffmpeg \
+    nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # User switch karo aur Environment variables set karo
