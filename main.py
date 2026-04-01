@@ -307,18 +307,60 @@ async def process_advanced_upload(
                     ydl_opts['cookiefile'] = cookie_path
 
                 # 🎬 FORMAT LOGIC BASED ON USER UI DROPDOWN
+                # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            if media_format in ["yt_default", "yt_video", "yt_audio"]:
+                def ytdl_progress_hook(d):
+                    if d['status'] == 'downloading':
+                        total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                        url_progress_tracker[tracker_id]["total"] = total
+                        url_progress_tracker[tracker_id]["loaded"] = d.get('downloaded_bytes', 0)
+                        url_progress_tracker[tracker_id]["status"] = "downloading"
+                    elif d['status'] == 'finished':
+                        url_progress_tracker[tracker_id]["status"] = "processing_media"
+
+                # Cookie File Injection
+                yt_cookies = os.environ.get("YT_COOKIES")
+                cookie_path = "/tmp/yt_cookies.txt"
+                if yt_cookies:
+                    with open(cookie_path, "w") as f:
+                        f.write(yt_cookies)
+
+                # 🌟 NATIVE SPOOFING ENGINE (Let yt-dlp handle it) 🌟
+                ydl_opts = {
+                    'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
+                    'progress_hooks': [ytdl_progress_hook],
+                    'quiet': True,
+                    'no_warnings': True,
+                    'nocheckcertificate': True,
+                    # Chrome Headers Hata diye hain.
+                    # YouTube ko Web client se bacha kar Android/iOS APIs ke through bypass karenge:
+                    'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
+                    'socket_timeout': 60,
+                }
+
+                # Proxy Injection
+                proxy_url = os.environ.get("PROXY_URL")
+                if proxy_url:
+                    ydl_opts['proxy'] = proxy_url
+                
+                if yt_cookies:
+                    ydl_opts['cookiefile'] = cookie_path
+
+                # 🎬 THE GOD-TIER FORMAT LOGIC
                 if media_format == "yt_audio":
-                    ydl_opts['format'] = 'bestaudio/best'
+                    ydl_opts['format'] = 'ba/bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
                 elif media_format == "yt_video":
-                    # Force MP4 Merge
-                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    # Force MP4
+                    ydl_opts['format'] = 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b'
                     ydl_opts['merge_output_format'] = 'mp4'
-                # Agar 'yt_default' hai, toh hum kuch format pass nahi karenge (Normal Terminal behavior)
+                else:
+                    # yt_default (Safest Fallback - No Force MP4)
+                    ydl_opts['format'] = 'bv*+ba/b'
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
