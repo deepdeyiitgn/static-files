@@ -143,6 +143,25 @@ def verify_auth(password: str = Header(None), auth_token: str = Cookie(None)):
         raise HTTPException(status_code=401, detail="UNAUTHORIZED: Access denied. Invalid Master Password.")
     return token
 
+# Progress Tracking Store
+progress_store = {}
+
+def progress_hook(d):
+    if d['status'] == 'downloading':
+        # yt-dlp automatically filename ko task_id ki tarah use kar sakta hai
+        filename = d.get('filename')
+        if filename:
+            p = d.get('_percent_str', '0%').replace('%','').strip()
+            try:
+                progress_store[filename] = float(p)
+            except:
+                pass
+
+@app.get("/api/progress/{task_id}")
+async def get_progress(task_id: str):
+    # Task ID (Slug) ke base par progress return karega
+    return {"progress": progress_store.get(task_id, 0)}
+
 # ==========================================
 # 5. CORE REST APIs (THE MEGA SYSTEM)
 # ==========================================
@@ -217,71 +236,7 @@ async def serve_mega_api_docs():
         "docs": "Send a GET request to /api/rest at any time to view this JSON documentation."
     }
 
-
-@app.post("/api/formats")
-async def fetch_available_formats(link_url: str = Form(...), token: str = Depends(verify_auth)):
-    try:
-        # Cookie extraction system
-        yt_cookies = os.environ.get("YT_COOKIES")
-        cookie_path = "/tmp/yt_cookies_scan.txt"
-        if yt_cookies:
-            with open(cookie_path, "w") as f:
-                f.write(yt_cookies)
-
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'socket_timeout': 30,
-            'force_ipv4': True,
-            # Force mobile client during scan to bypass datacenter IP restrictions
-            'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
-        }
-        
-        if yt_cookies:
-            ydl_opts['cookiefile'] = cookie_path
-            
-        proxy_url = os.environ.get("PROXY_URL")
-        if proxy_url:
-            if "ngrok-free.dev" in proxy_url:
-                proxy_url = proxy_url.replace("https://", "http://")
-            ydl_opts['proxy'] = proxy_url
-            ydl_opts['http_headers'] = {
-                'ngrok-skip-browser-warning': '69420',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-
-        def get_info():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # download=False means it ONLY fetches the --list-formats data
-                return ydl.extract_info(link_url, download=False)
-
-        info = await asyncio.to_thread(get_info)
-        formats = info.get('formats', [])
-        
-        clean_formats = []
-        clean_formats.append({"format_id": "bestvideo+bestaudio/best", "label": "🌟 Auto Best (Default)"})
-        clean_formats.append({"format_id": "bestaudio/best", "label": "🎵 Best MP3 Audio"})
-        
-        # Unique heights list (1080p, 720p etc)
-        heights = sorted(list(set(f.get('height') for f in formats if f.get('height'))), reverse=True)
-        
-        for h in heights:
-            # We filter for mp4 compatible merges
-            clean_formats.append({
-                "format_id": f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/best[height<={h}]",
-                "label": f"📺 Video {h}p (MP4/Best)"
-            })
-            
-        return {"status": "success", "formats": clean_formats}
-    except Exception as e:
-        logger.error(f"Format fetch error: {e}")
-        return JSONResponse(status_code=400, content={"status": "error", "detail": str(e)})
-        
-
 url_progress_tracker = {}
-
-
 
 @app.post("/api/rest")
 async def process_advanced_upload(
@@ -321,7 +276,7 @@ async def process_advanced_upload(
             logger.info("Auto-switching to Video Engine for media link.")
             media_format = "yt_default"
 
-   # ==========================================
+    # ==========================================
     # LOGIC 1: UPLOAD FROM URL
     # ==========================================
     if link_url:
@@ -330,8 +285,10 @@ async def process_advanced_upload(
         
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # 🌟 FIX: Ab hum check kar rahe hain ki agar format "direct" nahi hai, toh yt-dlp chalao
-            if media_format != "direct":
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            if media_format in ["yt_default", "yt_video", "yt_audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
                         total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
@@ -348,8 +305,8 @@ async def process_advanced_upload(
                     with open(cookie_path, "w") as f:
                         f.write(yt_cookies)
 
-                # THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix)
-                # THE PURE TERMINAL ENGINE (IPv4 + Ngrok Fix)
+                # 🌟 THE DATACENTER BYPASS ENGINE 🌟
+                # 🌟 THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix) 🌟
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -357,39 +314,36 @@ async def process_advanced_upload(
                     'no_warnings': True,
                     'nocheckcertificate': True,
                     'socket_timeout': 60,
-                    'force_ipv4': True,
+                    'force_ipv4': True,  # 👈 YEH RAKHNA HAI (HF ke IPv6 ban hote hain)
+                    'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
+                    # ❌ Yahan se 'extractor_args' (Smart TV wali line) HATA DI HAI!
                 }
 
-                # Proxy & Ngrok Bypass Injection
-                # Proxy & Ngrok Bypass Injection
+                progress_store[final_slug] = 0
+
+                # Proxy Injection
                 proxy_url = os.environ.get("PROXY_URL")
                 if proxy_url:
-                    if "ngrok-free.dev" in proxy_url:
-                        proxy_url = proxy_url.replace("https://", "http://")
                     ydl_opts['proxy'] = proxy_url
-                    ydl_opts['http_headers'] = {
-                        'ngrok-skip-browser-warning': '69420',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
                 
+                # Cookie Injection 
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # 🎬 THE DYNAMIC FORMAT LOGIC 🎬
-                if media_format == "yt_audio" or media_format == "bestaudio/best":
+                # 🎬 ZERO-FILTER FORMAT LOGIC
+                if media_format == "yt_audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
-                elif media_format == "yt_video" or media_format == "yt_default":
+                elif media_format == "yt_video":
                     ydl_opts['format'] = 'bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
                 else:
-                    # User ne UI se specific resolution choose kiya hai
-                    ydl_opts['format'] = media_format
-                    ydl_opts['merge_output_format'] = 'mp4'
+                    # yt_default: Terminal jaisa same behave karega
+                    pass
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -409,7 +363,7 @@ async def process_advanced_upload(
                 safe_title = "".join(x for x in (title or "Downloaded_Media") if x.isalnum() or x in " _-")
                 filename = f"{safe_title[:45]}{ext}"
                 
-            # --- ENGINE B: STANDARD DIRECT PROXY ---
+            # --- ENGINE B: STANDARD DIRECT PROXY (Agar YT-DLP OFF ho) ---
             else:
                 
                 headers = {
