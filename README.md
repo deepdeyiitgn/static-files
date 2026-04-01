@@ -28,6 +28,8 @@ A highly secure, Dockerized FastAPI application built to use Hugging Face Datase
 
 You can fork this space to create your own personal hosting node. **You don't even need to create a dataset manually!** The code automatically detects your username and creates a private dataset for you.
 
+```NOTE: I Recommend You To Run On Local So Yt-dlp Works Correctly```
+
 ### 1. Fork the Repo
 Click the **"Duplicate this Space"** button on Hugging Face.
 
