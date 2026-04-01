@@ -221,48 +221,50 @@ async def serve_mega_api_docs():
 @app.post("/api/formats")
 async def fetch_available_formats(link_url: str = Form(...), token: str = Depends(verify_auth)):
     try:
+        # Cookie extraction system
+        yt_cookies = os.environ.get("YT_COOKIES")
+        cookie_path = "/tmp/yt_cookies_scan.txt"
+        if yt_cookies:
+            with open(cookie_path, "w") as f:
+                f.write(yt_cookies)
+
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'nocheckcertificate': True,
-            'socket_timeout': 60,
+            'socket_timeout': 30,
             'force_ipv4': True,
+            # Force mobile client during scan to bypass datacenter IP restrictions
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios']}},
         }
         
+        if yt_cookies:
+            ydl_opts['cookiefile'] = cookie_path
+            
         proxy_url = os.environ.get("PROXY_URL")
         if proxy_url:
             ydl_opts['proxy'] = proxy_url
-            
-        yt_cookies = os.environ.get("YT_COOKIES")
-        if yt_cookies:
-            cookie_path = "/tmp/yt_cookies.txt"
-            with open(cookie_path, "w") as f:
-                f.write(yt_cookies)
-            ydl_opts['cookiefile'] = cookie_path
 
         def get_info():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # download=False means it ONLY fetches the --list-formats data
                 return ydl.extract_info(link_url, download=False)
 
         info = await asyncio.to_thread(get_info)
         formats = info.get('formats', [])
         
         clean_formats = []
-        # Sabse upar Default Best options
-        clean_formats.append({"format_id": "bestvideo+bestaudio/best", "label": "🌟 Auto Best Quality (Video + Audio)"})
-        clean_formats.append({"format_id": "bestaudio/best", "label": "🎵 Best Audio Only (MP3)"})
+        clean_formats.append({"format_id": "bestvideo+bestaudio/best", "label": "🌟 Auto Best (Default)"})
+        clean_formats.append({"format_id": "bestaudio/best", "label": "🎵 Best MP3 Audio"})
         
-        # Ab jo resolutions exactly available hain, unko list karenge
-        heights = set()
-        for f in formats:
-            h = f.get('height')
-            if h and isinstance(h, int):
-                heights.add(h)
+        # Unique heights list (1080p, 720p etc)
+        heights = sorted(list(set(f.get('height') for f in formats if f.get('height'))), reverse=True)
         
-        for h in sorted(heights, reverse=True):
+        for h in heights:
+            # We filter for mp4 compatible merges
             clean_formats.append({
-                "format_id": f"bestvideo[height<={h}]+bestaudio/best",
-                "label": f"📺 Video {h}p (Merged with Audio)"
+                "format_id": f"bestvideo[height<={h}][ext=mp4]+bestaudio[ext=m4a]/best[height<={h}]",
+                "label": f"📺 Video {h}p (MP4/Best)"
             })
             
         return {"status": "success", "formats": clean_formats}
