@@ -688,3 +688,95 @@ async def serve_frontend_ui():
     with open("index.html", "r", encoding="utf-8") as f:
         html_content = f.read()
     return HTMLResponse(content=html_content)
+
+# ==========================================
+# 9. VIRTUAL CACHE & DYNAMIC SITEMAP
+# ==========================================
+import time
+from fastapi.responses import Response
+
+# Virtual Cache in-memory store
+sitemap_cache = {
+    "content": "",
+    "last_generated": 0
+}
+
+async def generate_sitemap(request: Request):
+    try:
+        logger.info("Generating Sitemap for cache...")
+        
+        # Base URL automatically host se nikal lega (e.g., qlynk.me ya HF space link)
+        base_url = f"{request.url.scheme}://{request.url.netloc}"
+        
+        # Main routes ke liye current time set kar rahe hain
+        current_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        
+        urls = []
+        
+        # 1. Main Page (Priority 1.0)
+        urls.append(f"""
+        <url>
+            <loc>{base_url}/</loc>
+            <lastmod>{current_time}</lastmod>
+            <changefreq>daily</changefreq>
+            <priority>1.0</priority>
+        </url>
+        """)
+        
+        # 2. Social & Redirects (Priority 0.7)
+        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/clock"]
+        for link in social_links:
+            urls.append(f"""
+            <url>
+                <loc>{base_url}{link}</loc>
+                <lastmod>{current_time}</lastmod>
+                <changefreq>weekly</changefreq>
+                <priority>0.7</priority>
+            </url>
+            """)
+            
+        # 3. Files from history.json (Priority 0.1)
+        db = get_db()
+        files_list = db.get("files", [])
+        for file_record in files_list:
+            slug = file_record.get("slug")
+            # File ka original upload time use kar raha hai auto-update ke liye
+            file_time = file_record.get("uploaded_at", current_time) 
+            
+            urls.append(f"""
+            <url>
+                <loc>{base_url}/f/{slug}</loc>
+                <lastmod>{file_time}</lastmod>
+                <changefreq>monthly</changefreq>
+                <priority>0.1</priority>
+            </url>
+            """)
+            
+        sitemap_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    {"".join(urls)}
+</urlset>"""
+        
+        sitemap_cache["content"] = sitemap_xml.strip()
+        sitemap_cache["last_generated"] = time.time()
+        logger.info("Sitemap successfully updated in virtual cache.")
+        
+    except Exception as e:
+        logger.error(f"Error generating sitemap: {e}")
+
+# Background worker jo har 30 minute baad chalega
+async def sitemap_updater_loop(request_mock):
+    while True:
+        await asyncio.sleep(1800)  # 30 mins = 1800 seconds
+        await generate_sitemap(request_mock)
+
+@app.get("/sitemap.xml", response_class=Response)
+async def serve_sitemap(request: Request):
+    # Agar cache khali hai (jaise server just start hua ho)
+    if not sitemap_cache["content"]:
+        await generate_sitemap(request)
+        # Background task sirf tabhi start hogi jab sitemap pehli baar hit ho,
+        # isse hum request object ko background loop mein pass kar sakte hain
+        asyncio.create_task(sitemap_updater_loop(request))
+        
+    return Response(content=sitemap_cache["content"], media_type="application/xml")    
