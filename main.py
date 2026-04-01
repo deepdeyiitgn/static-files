@@ -217,7 +217,63 @@ async def serve_mega_api_docs():
         "docs": "Send a GET request to /api/rest at any time to view this JSON documentation."
     }
 
+
+@app.post("/api/formats")
+async def fetch_available_formats(link_url: str = Form(...), token: str = Depends(verify_auth)):
+    try:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'socket_timeout': 60,
+            'force_ipv4': True,
+        }
+        
+        proxy_url = os.environ.get("PROXY_URL")
+        if proxy_url:
+            ydl_opts['proxy'] = proxy_url
+            
+        yt_cookies = os.environ.get("YT_COOKIES")
+        if yt_cookies:
+            cookie_path = "/tmp/yt_cookies.txt"
+            with open(cookie_path, "w") as f:
+                f.write(yt_cookies)
+            ydl_opts['cookiefile'] = cookie_path
+
+        def get_info():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                return ydl.extract_info(link_url, download=False)
+
+        info = await asyncio.to_thread(get_info)
+        formats = info.get('formats', [])
+        
+        clean_formats = []
+        # Sabse upar Default Best options
+        clean_formats.append({"format_id": "bestvideo+bestaudio/best", "label": "🌟 Auto Best Quality (Video + Audio)"})
+        clean_formats.append({"format_id": "bestaudio/best", "label": "🎵 Best Audio Only (MP3)"})
+        
+        # Ab jo resolutions exactly available hain, unko list karenge
+        heights = set()
+        for f in formats:
+            h = f.get('height')
+            if h and isinstance(h, int):
+                heights.add(h)
+        
+        for h in sorted(heights, reverse=True):
+            clean_formats.append({
+                "format_id": f"bestvideo[height<={h}]+bestaudio/best",
+                "label": f"📺 Video {h}p (Merged with Audio)"
+            })
+            
+        return {"status": "success", "formats": clean_formats}
+    except Exception as e:
+        logger.error(f"Format fetch error: {e}")
+        return JSONResponse(status_code=400, content={"status": "error", "detail": str(e)})
+        
+
 url_progress_tracker = {}
+
+
 
 @app.post("/api/rest")
 async def process_advanced_upload(
@@ -309,15 +365,20 @@ async def process_advanced_upload(
                     ydl_opts['cookiefile'] = cookie_path
 
                 # 🎬 ZERO-FILTER FORMAT LOGIC
-                if media_format == "yt_audio":
+                # 🎬 THE DYNAMIC FORMAT LOGIC 🎬
+                if media_format == "yt_audio" or media_format == "bestaudio/best":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
-                elif media_format == "yt_video":
+                elif media_format == "yt_video" or media_format == "yt_default":
                     ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    ydl_opts['merge_output_format'] = 'mp4'
+                else:
+                    # User ne UI se specific format choose kiya hai (e.g. 1080p, 720p)
+                    ydl_opts['format'] = media_format
                     ydl_opts['merge_output_format'] = 'mp4'
                 else:
                     # yt_default: Terminal jaisa same behave karega
