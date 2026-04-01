@@ -268,6 +268,7 @@ async def process_advanced_upload(
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
+            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
             if media_format in ["yt_default", "yt_video", "yt_audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
@@ -285,9 +286,7 @@ async def process_advanced_upload(
                     with open(cookie_path, "w") as f:
                         f.write(yt_cookies)
 
-                # 🚀 THE PURE TERMINAL ENGINE (Fixed) 🚀
-                # Yahan se 'http_headers' aur saari spoofing delete kar di gayi hai!
-               # 🌟 THE PURE TERMINAL ENGINE (Fixed) 🌟
+                # 🌟 THE DATACENTER BYPASS ENGINE 🌟
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -295,7 +294,9 @@ async def process_advanced_upload(
                     'no_warnings': True,
                     'nocheckcertificate': True,
                     'socket_timeout': 60,
-                    'force_ipv4': True,  # <--- YAHAN LAGA DIYA HAI IPv4 FORCE
+                    'force_ipv4': True,
+                    # 🚀 FIX: Bypass HF IP Ban by forcing Smart TV & Embedded Clients
+                    'extractor_args': {'youtube': {'player_client': ['tv', 'web_embedded']}}
                 }
 
                 # Proxy Injection
@@ -303,11 +304,11 @@ async def process_advanced_upload(
                 if proxy_url:
                     ydl_opts['proxy'] = proxy_url
                 
-                # Cookie Injection (Bot protection bypass)
+                # Cookie Injection 
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # 🎬 THE ZERO-FILTER FORMAT LOGIC 🎬
+                # 🎬 ZERO-FILTER FORMAT LOGIC
                 if media_format == "yt_audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
@@ -316,12 +317,10 @@ async def process_advanced_upload(
                         'preferredquality': '256',
                     }]
                 elif media_format == "yt_video":
-                    # FIX: Koi restriction nahi. YouTube WEBM de ya MP4, sab download hoga.
-                    ydl_opts['format'] = 'bv*+ba/b'
-                    # Download ke baad FFmpeg usko zabardasti MP4 bana dega
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
                 else:
-                    # yt_default: Terminal jaisa same behave karega (Kuch set nahi karenge)
+                    # yt_default: Terminal jaisa same behave karega
                     pass
 
                 def download_yt():
