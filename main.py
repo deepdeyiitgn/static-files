@@ -250,11 +250,12 @@ async def process_advanced_upload(
     external_url = ""
     extracted_thumb = "" 
     
+    # 🌟 FIX: Auto-switcher updated to use 'yt_default' instead of 'video'
     if link_url:
         media_domains = ['youtube.com', 'youtu.be', 'instagram.com', 'twitter.com', 'x.com', 'facebook.com', 'tiktok.com']
         if any(domain in link_url.lower() for domain in media_domains) and media_format == "direct":
             logger.info("Auto-switching to Video Engine for media link.")
-            media_format = "video"
+            media_format = "yt_default"
 
     # ==========================================
     # LOGIC 1: UPLOAD FROM URL
@@ -265,9 +266,7 @@ async def process_advanced_upload(
         
         try:
             # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            # --- ENGINE A: YT-DLP MEDIA EXTRACTOR ---
-            if media_format in ["video", "audio"]:
+            if media_format in ["yt_default", "yt_video", "yt_audio"]:
                 def ytdl_progress_hook(d):
                     if d['status'] == 'downloading':
                         total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
@@ -277,21 +276,25 @@ async def process_advanced_upload(
                     elif d['status'] == 'finished':
                         url_progress_tracker[tracker_id]["status"] = "processing_media"
 
-                # 🌟 THE COOKIE INJECTION 🌟
+                # Cookie File Injection
                 yt_cookies = os.environ.get("YT_COOKIES")
                 cookie_path = "/tmp/yt_cookies.txt"
                 if yt_cookies:
                     with open(cookie_path, "w") as f:
                         f.write(yt_cookies)
 
-                # 🚀 FIX: Removed 'android' player_client and force_ipv4
-                # PC Cookies ke sath Android client mix karne se YouTube anti-bot activate ho raha tha!
+                # 🌟 THE CHROME SPOOFING ENGINE 🌟
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
                     'quiet': True,
                     'no_warnings': True,
                     'nocheckcertificate': True,
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.5',
+                    },
                     'socket_timeout': 60,
                 }
 
@@ -300,18 +303,22 @@ async def process_advanced_upload(
                 if proxy_url:
                     ydl_opts['proxy'] = proxy_url
                 
-                # Cookie File Injection
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # Terminal "Default" Mode (Video will automatically pick best available format)
-                if media_format == "audio":
+                # 🎬 FORMAT LOGIC BASED ON USER UI DROPDOWN
+                if media_format == "yt_audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
                         'preferredquality': '256',
                     }]
+                elif media_format == "yt_video":
+                    # Force MP4 Merge
+                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    ydl_opts['merge_output_format'] = 'mp4'
+                # Agar 'yt_default' hai, toh hum kuch format pass nahi karenge (Normal Terminal behavior)
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -331,8 +338,9 @@ async def process_advanced_upload(
                 safe_title = "".join(x for x in (title or "Downloaded_Media") if x.isalnum() or x in " _-")
                 filename = f"{safe_title[:45]}{ext}"
                 
-            # --- ENGINE B: STANDARD DIRECT PROXY ---
+            # --- ENGINE B: STANDARD DIRECT PROXY (Agar YT-DLP OFF ho) ---
             else:
+                
                 headers = {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
                     'Accept': '*/*'
