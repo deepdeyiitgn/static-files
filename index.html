@@ -1212,14 +1212,17 @@ response = requests.post(
         </div>
 
         <div class="form-group" id="mediaFormatSelector" style="display: none; margin-top: 15px;">
-            <label>Extraction Format</label>
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <button type="button" class="btn btn-secondary" onclick="scanFormats()" id="btnScanFormats" style="flex: 1; background: var(--bg-surface); border: 1px solid var(--accent); color: var(--accent);">
+                    <i class="fa-solid fa-satellite-dish"></i> Scan Available Formats
+                </button>
+            </div>
+            <label>Select Quality</label>
             <select id="linkMediaFormat" style="width: 100%; padding: 1rem; background: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border); border-radius: var(--radius-md); font-family: var(--font-main);">
-                <option value="yt_default" selected>Normal Mode (Terminal Default - Auto Best)</option>
-                <option value="yt_video">Force MP4 (Best Video + Audio)</option>
-                <option value="yt_audio">Force MP3 (Audio Only)</option>
+                <option value="bestvideo+bestaudio/best" selected>🌟 Auto Best Quality (Video + Audio)</option>
+                <option value="bestaudio/best">🎵 Best Audio Only (MP3)</option>
             </select>
         </div>
-    </div>
     
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
         <div class="form-group">
@@ -1328,6 +1331,7 @@ response = requests.post(
         // UI TOGGLE: LOCAL VS LINK UPLOAD
         // ==========================================
         let uploadMode = 'local';
+  
 
         function toggleYtdlpOptions() {
             const isChecked = document.getElementById('ytdlpToggle').checked;
@@ -1422,6 +1426,55 @@ response = requests.post(
             }
         });
 
+        async function scanFormats() {
+            const url = document.getElementById('uploadUrlObj').value.trim();
+            if (!url) {
+                triggerToast("Please enter a link first!", true);
+                return;
+            }
+            
+            const btn = document.getElementById('btnScanFormats');
+            btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Scanning YouTube...';
+            btn.disabled = true;
+            
+            const fd = new FormData();
+            fd.append("link_url", url);
+            
+            const headers = {};
+            const savedPassword = localStorage.getItem("qlynk_space_password");
+            if (savedPassword) headers["password"] = savedPassword;
+
+            try {
+                const res = await fetch("/api/formats", { method: "POST", headers: headers, body: fd });
+                const data = await res.json();
+                
+                if (data.status === "success") {
+                    const select = document.getElementById('linkMediaFormat');
+                    select.innerHTML = ""; // Purani list clear karega
+                    
+                    data.formats.forEach(f => {
+                        const opt = document.createElement('option');
+                        opt.value = f.format_id;
+                        opt.innerText = f.label;
+                        select.appendChild(opt);
+                    });
+                    
+                    btn.innerHTML = '<i class="fa-solid fa-check"></i> Scan Complete';
+                    btn.style.borderColor = "#10b981";
+                    btn.style.color = "#10b981";
+                    triggerToast("Format list updated successfully!");
+                } else {
+                    triggerToast("Failed to scan: " + (data.detail || "DRM/Bot Error"), true);
+                    btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> Scan Failed';
+                }
+            } catch (e) {
+                triggerToast("Network Error during scan.", true);
+                btn.innerHTML = '<i class="fa-solid fa-rotate-right"></i> Try Again';
+            }
+            
+            setTimeout(() => { btn.disabled = false; }, 2000);
+        }      
+  
         async function handleFileSelect(event) {
             const file = event.target.files[0];
             if (!file) return;
