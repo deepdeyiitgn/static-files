@@ -241,7 +241,7 @@ async def fetch_available_formats(link_url: str = Form(...), token: str = Depend
         if yt_cookies:
             ydl_opts['cookiefile'] = cookie_path
             
-       proxy_url = os.environ.get("PROXY_URL")
+        proxy_url = os.environ.get("PROXY_URL")
         if proxy_url:
             if "ngrok-free.dev" in proxy_url:
                 proxy_url = proxy_url.replace("https://", "http://")
@@ -360,6 +360,7 @@ async def process_advanced_upload(
                     'force_ipv4': True,
                 }
 
+                # Proxy & Ngrok Bypass Injection
                 # Proxy & Ngrok Bypass Injection
                 proxy_url = os.environ.get("PROXY_URL")
                 if proxy_url:
