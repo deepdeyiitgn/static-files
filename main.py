@@ -354,9 +354,12 @@ async def process_advanced_upload(
                 }
 
                 # Proxy Injection
+                # Proxy Injection
                 proxy_url = os.environ.get("PROXY_URL")
                 if proxy_url:
                     ydl_opts['proxy'] = proxy_url
+                    # 🔥 Ngrok free tier warning bypass karne ke liye
+                    ydl_opts['http_headers'] = {'ngrok-skip-browser-warning': 'true'}
                 
                 # Cookie Injection 
                 if yt_cookies:
