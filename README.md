@@ -72,6 +72,7 @@ curl -X POST "https://YOUR_SPACE_URL/api/rest" \
   -F "slug=my-custom-url" \
   -F "title=My Cool Image" \
   -F "format=redirect"
+```
 
 Note: Using format=redirect will respond with a 308 Permanent Redirect straight to the raw file, perfect for seamless frontend integrations.
 
