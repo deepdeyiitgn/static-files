@@ -241,19 +241,15 @@ async def fetch_available_formats(link_url: str = Form(...), token: str = Depend
         if yt_cookies:
             ydl_opts['cookiefile'] = cookie_path
             
-        # Proxy Injection
-                proxy_url = os.environ.get("PROXY_URL")
-                if proxy_url:
-                    # Force HTTP instead of HTTPS if user provided ngrok link
-                    if "ngrok-free.dev" in proxy_url:
-                        proxy_url = proxy_url.replace("https://", "http://")
-                    
-                    ydl_opts['proxy'] = proxy_url
-                    # 🔥 Ngrok solid bypass headers
-                    ydl_opts['http_headers'] = {
-                        'ngrok-skip-browser-warning': '69420',
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                    }
+       proxy_url = os.environ.get("PROXY_URL")
+        if proxy_url:
+            if "ngrok-free.dev" in proxy_url:
+                proxy_url = proxy_url.replace("https://", "http://")
+            ydl_opts['proxy'] = proxy_url
+            ydl_opts['http_headers'] = {
+                'ngrok-skip-browser-warning': '69420',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
 
         def get_info():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -353,6 +349,7 @@ async def process_advanced_upload(
                         f.write(yt_cookies)
 
                 # THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix)
+                # THE PURE TERMINAL ENGINE (IPv4 + Ngrok Fix)
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -363,17 +360,15 @@ async def process_advanced_upload(
                     'force_ipv4': True,
                 }
 
-                # Proxy Injection
-                # Proxy Injection
-                # Proxy Injection
+                # Proxy & Ngrok Bypass Injection
                 proxy_url = os.environ.get("PROXY_URL")
                 if proxy_url:
-                    # Force HTTP instead of HTTPS if user provided ngrok link
+                    # Force HTTP for Ngrok stability
                     if "ngrok-free.dev" in proxy_url:
                         proxy_url = proxy_url.replace("https://", "http://")
                     
                     ydl_opts['proxy'] = proxy_url
-                    # 🔥 Ngrok solid bypass headers
+                    # Ngrok free tier warning bypass + User-Agent
                     ydl_opts['http_headers'] = {
                         'ngrok-skip-browser-warning': '69420',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
