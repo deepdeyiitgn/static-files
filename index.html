@@ -1194,17 +1194,29 @@ response = requests.post(
 
     <div id="linkUploadArea" style="display: none; margin: 1.5rem 0;">
         <div class="form-group">
-            <label>Direct File URL or Media Link (YT, Insta, etc.)</label>
+            <label>Direct File URL or Media Link</label>
             <input type="text" id="uploadUrlObj" placeholder="https://example.com/media..." oninput="checkSmartUrl()">
         </div>
         
-        <div class="form-group" id="mediaFormatSelector" style="display: none; margin-top: 15px; padding: 15px; background: rgba(0, 112, 243, 0.05); border: 1px dashed var(--accent); border-radius: var(--radius-md);">
-            <label style="color: var(--accent);"><i class="fa-solid fa-wand-magic-sparkles"></i> Media Engine Activated</label>
-            <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 10px;">Supported link detected. Choose extraction format:</p>
+        <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; padding: 15px; background: rgba(0, 112, 243, 0.05); border: 1px dashed var(--accent); border-radius: var(--radius-md);">
+            <div>
+                <label style="color: var(--accent); margin-bottom: 5px;"><i class="fa-solid fa-wand-magic-sparkles"></i> YT-DLP Engine</label>
+                <p style="font-size: 0.85rem; color: var(--text-muted); margin: 0;">Toggle to extract media from video sites.</p>
+            </div>
+            <label style="position: relative; display: inline-block; width: 50px; height: 26px;">
+                <input type="checkbox" id="ytdlpToggle" onchange="toggleYtdlpOptions()" style="opacity: 0; width: 0; height: 0;">
+                <span id="ytdlpBg" style="position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--border); transition: .3s; border-radius: 34px;">
+                    <span id="ytdlpKnob" style="position: absolute; height: 18px; width: 18px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%;"></span>
+                </span>
+            </label>
+        </div>
+
+        <div class="form-group" id="mediaFormatSelector" style="display: none; margin-top: 15px;">
+            <label>Extraction Format</label>
             <select id="linkMediaFormat" style="width: 100%; padding: 1rem; background: var(--bg-surface); color: var(--text-main); border: 1px solid var(--border); border-radius: var(--radius-md); font-family: var(--font-main);">
-                <option value="direct">Direct Proxy Download (Auto)</option>
-                <option value="video" selected>Extract Best Video (MP4)</option>
-                <option value="audio">Extract Audio Only (MP3)</option>
+                <option value="yt_default" selected>Normal Mode (Terminal Default - Auto Best)</option>
+                <option value="yt_video">Force MP4 (Best Video + Audio)</option>
+                <option value="yt_audio">Force MP3 (Audio Only)</option>
             </select>
         </div>
     </div>
@@ -1316,6 +1328,35 @@ response = requests.post(
         // UI TOGGLE: LOCAL VS LINK UPLOAD
         // ==========================================
         let uploadMode = 'local';
+
+        function toggleYtdlpOptions() {
+            const isChecked = document.getElementById('ytdlpToggle').checked;
+            const bg = document.getElementById('ytdlpBg');
+            const knob = document.getElementById('ytdlpKnob');
+            
+            if(isChecked) {
+                bg.style.backgroundColor = 'var(--accent)';
+                knob.style.transform = 'translateX(24px)';
+                document.getElementById('mediaFormatSelector').style.display = 'block';
+            } else {
+                bg.style.backgroundColor = 'var(--border)';
+                knob.style.transform = 'translateX(0)';
+                document.getElementById('mediaFormatSelector').style.display = 'none';
+            }
+        }
+
+        function checkSmartUrl() {
+            const url = document.getElementById('uploadUrlObj').value.toLowerCase();
+            const mediaDomains = ['youtube.com', 'youtu.be', 'instagram.com', 'twitter.com', 'x.com', 'facebook.com', 'tiktok.com'];
+            
+            const isMedia = mediaDomains.some(domain => url.includes(domain));
+            
+            // Auto turn ON toggle if it's a known media site
+            if (isMedia && !document.getElementById('ytdlpToggle').checked) {
+                document.getElementById('ytdlpToggle').checked = true;
+                toggleYtdlpOptions();
+            }
+        }  
 
         function checkSmartUrl() {
             const url = document.getElementById('uploadUrlObj').value.toLowerCase();
@@ -1480,6 +1521,9 @@ response = requests.post(
             // ------------------------------------------
             // 1. URL MODE HANDLING
             // ------------------------------------------
+            // ------------------------------------------
+            // 1. URL MODE HANDLING
+            // ------------------------------------------
             if (isLinkMode) {
                 if (chunkRow) chunkRow.style.display = 'none';
                 document.getElementById('progressStatusText').innerText = "Backend Server is analyzing URL...";
@@ -1487,13 +1531,16 @@ response = requests.post(
                 fd.append('link_url', linkUrl);
                 fd.append('upload_id', uploadId);
                 
-                const mediaFormat = document.getElementById('mediaFormatSelector').style.display === 'block' 
-                                    ? document.getElementById('linkMediaFormat').value : 'direct';
+                // 🌟 NAYA LOGIC: Read toggle state
+                const useYtdlp = document.getElementById('ytdlpToggle').checked;
+                const mediaFormat = useYtdlp ? document.getElementById('linkMediaFormat').value : 'direct';
                 fd.append('media_format', mediaFormat);
                 
                 if (titleVal) fd.append('title', titleVal);
                 if (slugVal) fd.append('slug', slugVal);
                 if (thumbVal) fd.append('thumbnail', thumbVal);
+                
+                // (Baaki ka polling interval aur try-catch block same rahega)
                 
                 const pollInterval = setInterval(async () => {
                     try {
