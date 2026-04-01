@@ -287,6 +287,7 @@ async def process_advanced_upload(
 
                 # 🚀 THE PURE TERMINAL ENGINE (Fixed) 🚀
                 # Yahan se 'http_headers' aur saari spoofing delete kar di gayi hai!
+               # 🌟 THE PURE TERMINAL ENGINE (Fixed) 🌟
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
@@ -294,6 +295,7 @@ async def process_advanced_upload(
                     'no_warnings': True,
                     'nocheckcertificate': True,
                     'socket_timeout': 60,
+                    'force_ipv4': True,  # <--- YAHAN LAGA DIYA HAI IPv4 FORCE
                 }
 
                 # Proxy Injection
@@ -301,11 +303,11 @@ async def process_advanced_upload(
                 if proxy_url:
                     ydl_opts['proxy'] = proxy_url
                 
-                # Cookie Injection
+                # Cookie Injection (Bot protection bypass)
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
-                # 🎬 THE FINAL FORMAT LOGIC
+                # 🎬 THE ZERO-FILTER FORMAT LOGIC 🎬
                 if media_format == "yt_audio":
                     ydl_opts['format'] = 'bestaudio/best'
                     ydl_opts['postprocessors'] = [{
@@ -314,12 +316,13 @@ async def process_advanced_upload(
                         'preferredquality': '256',
                     }]
                 elif media_format == "yt_video":
-                    # Force MP4 (Best Video + Audio)
-                    ydl_opts['format'] = 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best'
+                    # FIX: Koi restriction nahi. YouTube WEBM de ya MP4, sab download hoga.
+                    ydl_opts['format'] = 'bv*+ba/b'
+                    # Download ke baad FFmpeg usko zabardasti MP4 bana dega
                     ydl_opts['merge_output_format'] = 'mp4'
                 else:
-                    # yt_default: Terminal ki tarah best format automatically uthayega
-                    ydl_opts['format'] = 'bestvideo+bestaudio/best'
+                    # yt_default: Terminal jaisa same behave karega (Kuch set nahi karenge)
+                    pass
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
