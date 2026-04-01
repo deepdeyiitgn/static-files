@@ -363,18 +363,14 @@ async def process_advanced_upload(
                 # Proxy & Ngrok Bypass Injection
                 proxy_url = os.environ.get("PROXY_URL")
                 if proxy_url:
-                    # Force HTTP for Ngrok stability
                     if "ngrok-free.dev" in proxy_url:
                         proxy_url = proxy_url.replace("https://", "http://")
-                    
                     ydl_opts['proxy'] = proxy_url
-                    # Ngrok free tier warning bypass + User-Agent
                     ydl_opts['http_headers'] = {
                         'ngrok-skip-browser-warning': '69420',
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
                     }
                 
-                # Cookie Injection 
                 if yt_cookies:
                     ydl_opts['cookiefile'] = cookie_path
 
