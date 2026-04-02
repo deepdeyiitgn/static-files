@@ -2673,3 +2673,101 @@ MEDIA_TUBE_HTML = """
 @app.get("/video", response_class=HTMLResponse)
 async def serve_media_tube():
     return HTMLResponse(content=MEDIA_TUBE_HTML)
+
+# ==========================================
+# 12. ENTERPRISE MEDIA OPTIMIZER (BACKGROUND CRON)
+# ==========================================
+def get_optimizer_db():
+    try:
+        file_path = hf_hub_download(repo_id=DATASET_REPO, filename="optimized_media.json", repo_type="dataset", token=HF_TOKEN)
+        with open(file_path, "r") as f: 
+            return json.load(f)
+    except Exception:
+        return {"optimized_slugs": []}
+
+def save_optimizer_db(db_data):
+    with open("optimized_media.json", "w") as f: 
+        json.dump(db_data, f, indent=4)
+    api.upload_file(
+        path_or_fileobj="optimized_media.json", 
+        path_in_repo="optimized_media.json", 
+        repo_id=DATASET_REPO, 
+        repo_type="dataset"
+    )
+
+async def media_optimizer_loop():
+    logger.info("Media Optimizer Loop Initiated. Waiting 5 mins before first scan to allow server stabilization...")
+    await asyncio.sleep(300)  # Boot hone ke 5 minute baad pehla scan (reduced from 15m since you have bot.py)
+    
+    while True:
+        logger.info("Starting Background Media Scan for Unoptimized Audio...")
+        try:
+            main_db = get_db()
+            opt_db = get_optimizer_db()
+            
+            all_files = main_db.get("files", [])
+            optimized_slugs = opt_db.get("optimized_slugs", [])
+            
+            current_file_slugs = [f["slug"] for f in all_files]
+            
+            # STEP 1: CLEANUP (Remove deleted files from optimized history)
+            new_optimized_slugs = [slug for slug in optimized_slugs if slug in current_file_slugs]
+            if len(new_optimized_slugs) != len(optimized_slugs):
+                opt_db["optimized_slugs"] = new_optimized_slugs
+                save_optimizer_db(opt_db)
+                logger.info("Cleaned up deleted files from optimized history.")
+
+            # STEP 2: SCAN & FIX
+            for f in all_files:
+                # Target only videos that are NOT external and NOT yet optimized
+                if f.get("mime_type", "").startswith("video/") and not f.get("is_external") and f["slug"] not in new_optimized_slugs:
+                    slug = f["slug"]
+                    repo_path = f["path"]
+                    logger.info(f"Optimizing Media (Converting Audio to AAC): {slug}")
+                    
+                    try:
+                        # 1. Download file from HF to /tmp/
+                        local_path = hf_hub_download(repo_id=DATASET_REPO, filename=repo_path, repo_type="dataset", token=HF_TOKEN)
+                        temp_out = f"/tmp/fixed_{slug}.mp4"
+                        
+                        # 2. Run FFmpeg (Video copy, Audio convert to AAC)
+                        cmd = ["ffmpeg", "-y", "-i", local_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", temp_out]
+                        process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                        await process.communicate()
+                        
+                        if os.path.exists(temp_out) and os.path.getsize(temp_out) > 0:
+                            # 3. Upload fixed file back to HF (Overwrite the original)
+                            await asyncio.to_thread(
+                                api.upload_file, 
+                                path_or_fileobj=temp_out, 
+                                path_in_repo=repo_path, 
+                                repo_id=DATASET_REPO, 
+                                repo_type="dataset"
+                            )
+                            
+                            # 4. Mark as completed in JSON
+                            opt_db["optimized_slugs"].append(slug)
+                            save_optimizer_db(opt_db)
+                            new_optimized_slugs.append(slug)
+                            logger.info(f"Successfully Optimized & Synced: {slug}")
+                            
+                            # Cleanup temp output
+                            os.remove(temp_out)
+                        
+                        # Cleanup downloaded original
+                        if os.path.exists(local_path):
+                            os.remove(local_path)
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to optimize {slug}: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Optimizer Loop Error: {e}")
+            
+        logger.info("Media scan complete. Sleeping for 24 hours.")
+        await asyncio.sleep(86400)  # 24 Hours sleep cycle
+
+# Auto-Trigger for the background loop without modifying the top lifespan function
+@app.on_event("startup")
+async def init_background_optimizer():
+    asyncio.create_task(media_optimizer_loop())
