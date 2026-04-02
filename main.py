@@ -1484,61 +1484,120 @@ async def websocket_max_endpoint(websocket: WebSocket):
     except Exception: app_metrics["active_ws"] -= 1
 
 # ==========================================
-# 11. QLYNK MEDIA TUBE (SECURE SHARE & YOUTUBE CLONE)
+# 11. QLYNK MEDIA TUBE (CINEMATIC VAULT & SUBTITLES)
 # ==========================================
 from fastapi import Query
 import time
 import uuid
 
-# --- 🧠 In-Memory Token Store (RAM) ---
-# Tokens automatically disappear on server restart
+# --- 🧠 In-Memory Token Store & Subtitle DB Managers ---
 share_tokens_store = {} 
+
+def get_sub_db() -> Dict[str, Any]:
+    try:
+        file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history_subtitle.json", repo_type="dataset", token=HF_TOKEN)
+        with open(file_path, "r") as f:
+            return json.load(f)
+    except:
+        return {"subtitles": []}
+
+def save_sub_db(db_data: Dict[str, Any]):
+    with open("history_subtitle.json", "w") as f:
+        json.dump(db_data, f, indent=4)
+    api.upload_file(path_or_fileobj="history_subtitle.json", path_in_repo="history_subtitle.json", repo_id=DATASET_REPO, repo_type="dataset")
 
 # --- 🔒 Dual-Auth Verifier ---
 def verify_view_access(password: str = Header(None), auth_token: str = Cookie(None), share_token: str = Cookie(None)):
-    """Grants access if user is Admin OR has a valid 24-hour Share Token"""
-    # 1. Check Admin
     admin_token = password or auth_token
     if admin_token and admin_token == SPACE_PASSWORD:
         return {"role": "admin"}
-    
-    # 2. Check Guest Share Token
     if share_token:
         expiry = share_tokens_store.get(share_token)
         if expiry and time.time() < expiry:
             return {"role": "guest"}
         elif expiry:
-            del share_tokens_store[share_token] # Cleanup expired token
-            
+            del share_tokens_store[share_token] 
     raise HTTPException(status_code=401, detail="Access Expired or Denied.")
 
-# --- 🔗 Generate 24-Hour Share Link (Admin Only) ---
+# --- 🔗 Share Token API ---
 @app.post("/api/share/generate")
 async def generate_share_token(token: str = Depends(verify_auth)):
     new_token = uuid.uuid4().hex
     share_tokens_store[new_token] = time.time() + 86400  # 24 Hours expiry
     return {"status": "success", "share_token": new_token}
 
-# --- 📁 API Endpoint to fetch media library securely ---
+# --- 📁 Media Library API ---
 @app.get("/api/media_library")
 async def fetch_media_library(access: dict = Depends(verify_view_access)):
     db = get_db()
-    files = db.get("files", [])
-    
-    # FILTER: Sirf actual hosted files dikhayega (308 redirects hide ho jayenge)
-    filtered_files = [f for f in files if not f.get("is_external")]
-    
-    # Sort by newest first
+    filtered_files = [f for f in db.get("files", []) if not f.get("is_external")]
     return sorted(filtered_files, key=lambda x: x.get("uploaded_at", ""), reverse=True)
 
-# --- Massive HTML/JS Payload for the Virtual Media Tube ---
+# --- 📝 Subtitle Upload API ---
+@app.post("/api/subtitle/upload")
+async def upload_subtitle(
+    file: UploadFile = File(...),
+    media_slug: str = Form(...),
+    language: str = Form(...),
+    token: str = Depends(verify_auth)
+):
+    content = (await file.read()).decode('utf-8', errors='ignore')
+    
+    # Auto Convert SRT to WebVTT for HTML5 compatibility
+    if file.filename.endswith('.srt') or not content.startswith('WEBVTT'):
+        content = "WEBVTT\n\n" + content.replace(',', '.')
+        
+    sub_slug = str(uuid.uuid4())[:8]
+    filename = f"{language.lower()}_{sub_slug}.vtt"
+    temp_path = f"/tmp/{filename}"
+    repo_path = f"subtitles/{filename}"
+    
+    with open(temp_path, "w", encoding='utf-8') as f:
+        f.write(content)
+        
+    api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+    os.remove(temp_path)
+    
+    db = get_sub_db()
+    subs = db.get("subtitles", [])
+    subs.append({
+        "sub_slug": sub_slug,
+        "media_slug": media_slug,
+        "language": language,
+        "path": repo_path,
+        "uploaded_at": datetime.utcnow().isoformat() + "Z"
+    })
+    db["subtitles"] = subs
+    save_sub_db(db)
+    
+    return {"status": "success", "message": f"Subtitle ({language}) linked to media."}
+
+# --- 📝 Subtitle Fetch APIs ---
+@app.get("/api/subtitles/list/{media_slug}")
+async def list_subtitles(media_slug: str, access: dict = Depends(verify_view_access)):
+    db = get_sub_db()
+    return [s for s in db.get("subtitles", []) if s["media_slug"] == media_slug]
+
+@app.get("/sub/{sub_slug}")
+async def serve_subtitle_file(sub_slug: str):
+    db = get_sub_db()
+    sub_record = next((s for s in db.get("subtitles", []) if s["sub_slug"] == sub_slug), None)
+    if not sub_record: raise HTTPException(status_code=404, detail="Subtitle not found.")
+    
+    try:
+        file_path = hf_hub_download(repo_id=DATASET_REPO, filename=sub_record["path"], repo_type="dataset", token=HF_TOKEN)
+        return FileResponse(path=file_path, media_type="text/vtt")
+    except:
+        raise HTTPException(status_code=500, detail="Error loading subtitle file.")
+
+# --- Massive HTML/JS Payload (Cinematic Media Tube) ---
 MEDIA_TUBE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlynk Tube - Secure Vault</title>
+    <title>Qlynk Tube - Cinematic Vault</title>
     <link rel="icon" type="image/png" href="//qlynk.vercel.app/quicklink-logo.png">
     <style>
         :root {
@@ -1554,10 +1613,10 @@ MEDIA_TUBE_HTML = """
         .search-box { display: flex; align-items: center; width: 40%; max-width: 600px; background: var(--yt-bg); border: 1px solid var(--yt-border); border-radius: 40px; overflow: hidden; }
         .search-box input { flex: 1; background: transparent; border: none; color: #fff; padding: 10px 20px; font-size: 16px; outline: none; }
         .search-box button { background: var(--yt-card); border: none; border-left: 1px solid var(--yt-border); color: var(--yt-text); padding: 10px 20px; cursor: pointer; transition: 0.2s; }
-        .search-box button:hover { background: var(--yt-hover); }
         
         .container { padding: 24px; max-width: 1600px; margin: 0 auto; }
         
+        /* Grid */
         .video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; row-gap: 40px; }
         .vid-card { cursor: pointer; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: transform 0.2s;}
         .vid-card:hover { transform: scale(1.02); }
@@ -1567,38 +1626,52 @@ MEDIA_TUBE_HTML = """
         .vid-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .vid-meta { font-size: 13px; color: var(--yt-muted); }
 
+        /* Watch Layout */
         .watch-layout { display: flex; gap: 24px; flex-wrap: wrap; display: none; }
         .primary-col { flex: 1; min-width: 65%; max-width: 1200px; }
         .secondary-col { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; gap: 15px;}
         
-        .player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
-        .player-element { width: 100%; height: 100%; object-fit: contain; }
-        .visualizer-canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 10; pointer-events: none; display: none; mix-blend-mode: screen;}
+        /* The Cinematic Player Area */
+        .player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;}
+        .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5;}
         
-        .watch-title { font-size: 20px; font-weight: bold; margin: 15px 0 10px 0; word-break: break-all;}
+        /* Audio Specific Visuals */
+        .audio-disc { width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 30px rgba(188, 140, 255, 0.4); display: none;}
+        .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 30%; z-index: 4; pointer-events: none;}
+        
+        /* Video Specific Visuals */
+        .video-visualizer { width: 100%; height: 40px; margin-top: 10px; border-radius: 6px; display: none; pointer-events: none;}
+
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        
+        .watch-title { font-size: 20px; font-weight: bold; margin: 15px 0 5px 0; word-break: break-all;}
         .watch-actions { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--yt-border); padding-bottom: 15px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;}
         .channel-info { display: flex; align-items: center; gap: 12px; }
         .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--yt-brand); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; color: #000;}
-        .action-btns { display: flex; gap: 10px; }
+        
+        .action-btns { display: flex; gap: 10px; flex-wrap: wrap;}
         .btn { display: flex; align-items: center; gap: 8px; background: var(--yt-card); color: #fff; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 500; font-size: 14px; transition: 0.2s; text-decoration: none;}
         .btn:hover { background: var(--yt-hover); }
         .btn-primary { background: var(--yt-text); color: #000; }
-        .btn-primary:hover { background: #d0d0d0; }
         .btn-share { background: var(--yt-brand); color: #000; font-weight: bold; border-radius: 4px; }
-        .btn-share:hover { background: #d7b5ff; }
-
+        
         .description-box { background: var(--yt-card); padding: 15px; border-radius: 12px; font-size: 14px; line-height: 1.5; color: #e1e1e1;}
-        .description-box span { color: var(--yt-muted); display: block; margin-bottom: 8px;}
-
         .related-card { display: flex; gap: 10px; cursor: pointer; text-decoration: none; color: inherit; }
         .related-card .thumb-wrapper { width: 160px; border-radius: 8px; margin-bottom: 0; flex-shrink: 0;}
         .related-info { display: flex; flex-direction: column; }
-        .related-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .related-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; overflow: hidden; }
 
+        /* Subtitle Modal */
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 1000; display:flex; justify-content:center; align-items:center; display:none;}
+        .modal-box { background: var(--yt-card); width: 400px; padding: 25px; border-radius: 12px; border: 1px solid var(--yt-border); display:flex; flex-direction:column; gap:15px;}
+        .modal-box h3 { color: var(--yt-brand); margin-bottom: 5px;}
+        .drop-zone { border: 2px dashed var(--yt-border); padding: 30px; text-align: center; border-radius: 8px; cursor: pointer; color: var(--yt-muted); transition: 0.2s;}
+        .drop-zone:hover, .drop-zone.dragover { border-color: var(--yt-brand); color: #fff;}
+        .modal-input { width: 100%; padding: 10px; background: #000; border: 1px solid var(--yt-border); color: #fff; border-radius: 6px; outline:none;}
+        
         .hidden { display: none !important; }
         .theater-mode .primary-col { min-width: 100%; max-width: 100%; }
         .theater-mode .secondary-col { width: 100%; margin-top: 20px;}
-        
         @media(max-width: 1000px) { .primary-col { min-width: 100%; } .secondary-col { width: 100%; } .search-box { width: 60%; } }
         @media(max-width: 600px) { .search-box { display: none; } }
     </style>
@@ -1606,31 +1679,31 @@ MEDIA_TUBE_HTML = """
 <body>
 
     <div class="navbar">
-        <div class="logo" onclick="goHome()">
-            ▶ <span>Qlynk</span>Tube
-        </div>
+        <div class="logo" onclick="goHome()">▶ <span>Qlynk</span>Tube</div>
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Search secure vault..." onkeyup="if(event.key === 'Enter') handleSearch()">
             <button onclick="handleSearch()">🔍</button>
         </div>
         <div style="display: flex; gap: 15px; align-items: center;">
-            <button onclick="generateShareLink()" class="btn btn-share" id="shareBtn" style="display:none;">🔗 Share Access</button>
+            <button onclick="generateShareLink()" class="btn btn-share" id="shareBtn" style="display:none;">🔗 Share</button>
             <div class="avatar" style="width: 32px; height: 32px; font-size:14px; cursor:pointer;" onclick="window.location.href='/'">Q</div>
         </div>
     </div>
 
     <div class="container">
-        <h2 id="loadingText" style="text-align:center; color: var(--yt-muted); margin-top:50px;">Verifying Access Token...</h2>
+        <h2 id="loadingText" style="text-align:center; color: var(--yt-muted); margin-top:50px;">Verifying Secure Token...</h2>
 
         <div id="homeView" class="video-grid hidden"></div>
 
         <div id="watchView" class="watch-layout">
             <div class="primary-col">
                 <div class="player-wrapper" id="playerWrapper">
-                    <canvas id="visualizer" class="visualizer-canvas"></canvas>
-                </div>
+                    </div>
+                
                 <h1 class="watch-title" id="wTitle">Loading...</h1>
-                <div class="watch-actions">
+                <canvas id="videoVisualizer" class="video-visualizer"></canvas>
+                
+                <div class="watch-actions" style="margin-top:15px;">
                     <div class="channel-info">
                         <div class="avatar">Q</div>
                         <div>
@@ -1639,6 +1712,7 @@ MEDIA_TUBE_HTML = """
                         </div>
                     </div>
                     <div class="action-btns">
+                        <button class="btn" onclick="openSubModal()" id="addSubBtn" style="display:none;">➕ Add CC</button>
                         <button class="btn" onclick="toggleTheater()">📺 Theater</button>
                         <button class="btn" onclick="togglePiP()" id="pipBtn">🔲 PiP</button>
                         <a href="#" class="btn btn-primary" id="wDownload" download>⬇ Download</a>
@@ -1648,7 +1722,8 @@ MEDIA_TUBE_HTML = """
                 <div class="description-box">
                     <span id="wDate">Uploaded on: Unknown</span>
                     <div id="wSlugPath" style="margin-bottom: 10px; font-family: monospace; color: var(--yt-brand);"></div>
-                    <p>Protected by Qlynk Host AES Verification. Media is streamed directly from the private Hugging Face architecture.</p>
+                    <div id="subsList" style="margin-bottom: 10px; color: var(--accent-green); font-size:12px;"></div>
+                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active. Subtitles (SRT/VTT) auto-converted.</p>
                 </div>
             </div>
 
@@ -1664,22 +1739,40 @@ MEDIA_TUBE_HTML = """
         </div>
     </div>
 
+    <div class="modal-overlay" id="subModal">
+        <div class="modal-box">
+            <h3>Upload Subtitle (SRT / VTT)</h3>
+            <div class="drop-zone" id="dropZone" onclick="document.getElementById('subFile').click()">
+                Drop Subtitle File Here<br>or Click to Browse
+            </div>
+            <input type="file" id="subFile" style="display:none" accept=".srt,.vtt" onchange="fileSelected(this)">
+            <p id="selectedFileName" style="font-size:12px; color:var(--yt-brand); text-align:center;"></p>
+            
+            <input type="text" id="subLang" class="modal-input" placeholder="Language (e.g. English, Hindi, Spanish)">
+            <div style="display:flex; gap:10px; margin-top:10px;">
+                <button class="btn" style="flex:1;" onclick="closeSubModal()">Cancel</button>
+                <button class="btn btn-primary" style="flex:1;" onclick="submitSubtitle()">Upload & Link</button>
+            </div>
+        </div>
+    </div>
+
     <script>
-        // --- 1. TOKEN HANDLING (Check URL on load) ---
+        // --- 1. TOKEN HANDLING ---
         const urlParams = new URLSearchParams(window.location.search);
         const tokenFromUrl = urlParams.get('token');
         if (tokenFromUrl) {
-            // Save token to cookies valid for 24 hours
             document.cookie = "share_token=" + tokenFromUrl + "; path=/; max-age=86400";
-            // Remove token from URL to keep it clean
-            const cleanUrl = window.location.protocol + "//" + window.location.host + window.location.pathname;
-            window.history.replaceState({}, document.title, cleanUrl);
+            window.history.replaceState({}, document.title, window.location.pathname);
         }
 
         const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
+        const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23bc8cff"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
+        
         let masterLibrary = [];
         let currentAudioCtx = null;
         let currentAnimationId = null;
+        let activeSlug = null;
+        let pendingSubFile = null;
 
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
@@ -1688,63 +1781,48 @@ MEDIA_TUBE_HTML = """
         }
 
         function getMediaType(mimeType) {
-            if(!mimeType) return 'unknown';
+            if(!mimeType) return 'file';
             if(mimeType.startsWith('video/')) return 'video';
             if(mimeType.startsWith('audio/')) return 'audio';
             if(mimeType.startsWith('image/')) return 'image';
             return 'file';
         }
 
-        // --- 2. GENERATE SHARE LINK (Admin Action) ---
         async function generateShareLink() {
             try {
                 const res = await fetch('/api/share/generate', { method: 'POST' });
-                if (res.status === 401) {
-                    alert("Guest Error: Only the Server Admin can generate share links!");
-                    return;
-                }
+                if (res.status === 401) return alert("Only the Server Admin can generate share links!");
                 const data = await res.json();
-                const shareUrl = window.location.origin + "/view?token=" + data.share_token;
-                prompt("Share this link (Valid for exactly 24 Hours):", shareUrl);
-            } catch(e) {
-                alert("Network error generating link.");
-            }
+                prompt("Share this link (Valid for 24 Hours):", window.location.origin + "/view?token=" + data.share_token);
+            } catch(e) { alert("Network error."); }
         }
 
-        // --- 3. INIT & DATA FETCH ---
         async function init() {
             try {
                 const res = await fetch('/api/media_library');
                 if(res.status === 401) {
-                    document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED OR EXPIRED</b><br><br>The access link is invalid, has expired after 24 hours, or you need Admin login.";
-                    document.getElementById('loadingText').style.color = "var(--yt-red)";
+                    document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED</b><br>Link expired or invalid.";
                     return;
                 }
-                
-                // Show Share button only if Admin (Simple UI check, API strictly enforces anyway)
                 if(document.cookie.includes('auth_token=')) {
                     document.getElementById('shareBtn').style.display = 'block';
+                    document.getElementById('addSubBtn').style.display = 'flex';
                 }
-
                 masterLibrary = await res.json();
                 document.getElementById('loadingText').classList.add('hidden');
                 routeHandler();
-            } catch(e) {
-                document.getElementById('loadingText').innerText = "Error establishing secure connection.";
-            }
+            } catch(e) { document.getElementById('loadingText').innerText = "Connection Error."; }
         }
 
-        // --- 4. ROUTER ---
         function routeHandler() {
             const params = new URLSearchParams(window.location.search);
-            const id = params.get('id');
+            activeSlug = params.get('id');
             const searchQ = params.get('search');
             
-            document.getElementById('playerWrapper').innerHTML = '<canvas id="visualizer" class="visualizer-canvas"></canvas>';
             if(currentAudioCtx) { currentAudioCtx.close(); currentAudioCtx = null; }
             if(currentAnimationId) cancelAnimationFrame(currentAnimationId);
 
-            if(id) renderWatchPage(id);
+            if(activeSlug) renderWatchPage(activeSlug);
             else renderHomeGrid(searchQ);
         }
 
@@ -1755,7 +1833,6 @@ MEDIA_TUBE_HTML = """
             routeHandler();
         }
 
-        // --- 5. RENDER HOME ---
         function renderHomeGrid(searchQuery = null) {
             document.getElementById('watchView').classList.add('hidden');
             const grid = document.getElementById('homeView');
@@ -1766,14 +1843,11 @@ MEDIA_TUBE_HTML = """
             if(searchQuery) {
                 const q = searchQuery.toLowerCase();
                 data = masterLibrary.filter(f => f.title.toLowerCase().includes(q) || f.slug.toLowerCase().includes(q));
-                if(data.length === 0) grid.innerHTML = `<h3 style="grid-column: 1/-1; text-align:center; color:var(--yt-muted);">No files matched '${searchQuery}'</h3>`;
             }
 
             data.forEach(file => {
                 const thumb = file.thumbnail || FALLBACK_THUMB;
                 const type = getMediaType(file.mime_type);
-                const date = new Date(file.uploaded_at).toLocaleDateString();
-                
                 const card = document.createElement('a');
                 card.href = `/view?id=${file.slug}`;
                 card.className = 'vid-card';
@@ -1784,27 +1858,23 @@ MEDIA_TUBE_HTML = """
                         <img src="${thumb}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'">
                         <div class="type-badge">${type}</div>
                     </div>
-                    <div class="vid-title" title="${file.title}">${file.title}</div>
-                    <div class="vid-meta">Vault Item • ${formatBytes(file.size_bytes)}<br>${date}</div>
+                    <div class="vid-title">${file.title}</div>
+                    <div class="vid-meta">Vault • ${formatBytes(file.size_bytes)}<br>${new Date(file.uploaded_at).toLocaleDateString()}</div>
                 `;
                 grid.appendChild(card);
             });
         }
 
-        // --- 6. RENDER WATCH PAGE ---
-        function renderWatchPage(slug) {
+        async function renderWatchPage(slug) {
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('watchView').classList.remove('hidden');
             
             const file = masterLibrary.find(f => f.slug === slug);
-            if(!file) {
-                document.getElementById('wTitle').innerText = "File Not Found or Filtered.";
-                return;
-            }
+            if(!file) return document.getElementById('wTitle').innerText = "File Not Found.";
 
             document.getElementById('wTitle').innerText = file.title;
             document.getElementById('wSize').innerText = formatBytes(file.size_bytes);
-            document.getElementById('wType').innerText = getMediaType(file.mime_type).toUpperCase() + " ENGINE";
+            document.getElementById('wType').innerText = getMediaType(file.mime_type).toUpperCase();
             document.getElementById('wDate').innerText = `Uploaded on: ${new Date(file.uploaded_at).toLocaleString()}`;
             document.getElementById('wSlugPath').innerText = `Path: /f/${file.slug}`;
             
@@ -1812,23 +1882,44 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wDownload').href = downloadUrl;
 
             const playerWrapper = document.getElementById('playerWrapper');
+            const vCanvas = document.getElementById('videoVisualizer');
             const type = getMediaType(file.mime_type);
-
+            
+            playerWrapper.innerHTML = '';
+            vCanvas.style.display = 'none';
             document.getElementById('pipBtn').style.display = type === 'video' ? 'flex' : 'none';
+            document.getElementById('subsList').innerText = 'Scanning for Subtitles...';
+
+            // Fetch Subtitles
+            let subs = [];
+            try {
+                const r = await fetch(`/api/subtitles/list/${slug}`);
+                if(r.ok) subs = await r.json();
+            } catch(e){}
+
+            let trackHtml = subs.map(s => `<track kind="subtitles" src="/sub/${s.sub_slug}" srclang="${s.language.substring(0,2).toLowerCase()}" label="${s.language}">`).join('');
+            if(subs.length > 0) document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
+            else document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
 
             if(type === 'video') {
-                playerWrapper.innerHTML += `<video id="mainMedia" class="player-element" src="${downloadUrl}" controls autoplay></video>`;
-            } else if(type === 'audio') {
-                const thumb = file.thumbnail || FALLBACK_THUMB;
-                playerWrapper.innerHTML += `
-                    <img src="${thumb}" class="player-element" style="object-fit:cover; opacity:0.4;" onerror="this.src='${FALLBACK_THUMB}'">
-                    <audio id="mainMedia" src="${downloadUrl}" controls autoplay style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:90%; z-index:20;"></audio>
+                playerWrapper.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" crossorigin="anonymous" controls autoplay>${trackHtml}</video>`;
+                vCanvas.style.display = 'block';
+                setTimeout(() => initVisualizer('mainMedia', 'videoVisualizer', 'bar'), 500);
+            } 
+            else if(type === 'audio') {
+                const thumb = file.thumbnail || SVG_MUSIC;
+                playerWrapper.innerHTML = `
+                    <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'" style="display:block;">
+                    <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
+                    <audio id="mainMedia" src="${downloadUrl}" crossorigin="anonymous" controls autoplay style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:90%; z-index:20;">${trackHtml}</audio>
                 `;
-                setTimeout(() => initAudioVisualizer(), 500); 
-            } else if(type === 'image') {
-                playerWrapper.innerHTML += `<img class="player-element" src="${downloadUrl}">`;
-            } else {
-                playerWrapper.innerHTML += `<div style="display:flex; justify-content:center; align-items:center; height:100%; flex-direction:column; gap:10px;"><span style="font-size:40px;">📄</span><span>No Preview Available for Document</span></div>`;
+                setTimeout(() => initVisualizer('mainMedia', 'audioVisualizer', 'wave'), 500);
+            } 
+            else if(type === 'image') {
+                playerWrapper.innerHTML = `<img class="player-element" src="${downloadUrl}">`;
+            } 
+            else {
+                playerWrapper.innerHTML = `<div style="color:#fff; font-size:18px;">No Preview Available for this Document</div>`;
             }
 
             const mediaEl = document.getElementById('mainMedia');
@@ -1843,66 +1934,46 @@ MEDIA_TUBE_HTML = """
             renderRelated(file);
         }
 
-        // --- 7. SMART RECOMMENDATION ---
         function renderRelated(currentFile) {
             const container = document.getElementById('relatedVideos');
             container.innerHTML = '';
-            
             const currentWords = currentFile.title.toLowerCase().split(/[\s_\-\.]+/).filter(w => w.length > 2);
             let scoredList = masterLibrary.map(f => {
                 if(f.slug === currentFile.slug) return {file: f, score: -1};
-                const words = f.title.toLowerCase().split(/[\s_\-\.]+/);
                 let score = 0;
-                words.forEach(w => { if(currentWords.includes(w)) score++; });
+                f.title.toLowerCase().split(/[\s_\-\.]+/).forEach(w => { if(currentWords.includes(w)) score++; });
                 if(getMediaType(f.mime_type) === getMediaType(currentFile.mime_type)) score += 0.5;
                 return {file: f, score: score};
             });
-
             scoredList.sort((a,b) => b.score - a.score || new Date(b.file.uploaded_at) - new Date(a.file.uploaded_at));
-            
             scoredList.slice(0, 15).forEach(item => {
-                const f = item.file;
                 if(item.score === -1) return;
-                
-                const thumb = f.thumbnail || FALLBACK_THUMB;
+                const f = item.file;
                 const card = document.createElement('a');
                 card.href = `/view?id=${f.slug}`;
                 card.className = 'related-card';
                 card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/view?id=${f.slug}`); routeHandler(); };
-
-                card.innerHTML = `
-                    <div class="thumb-wrapper">
-                        <img src="${thumb}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'">
-                        <div class="type-badge" style="font-size:10px; padding:2px 4px;">${getMediaType(f.mime_type)}</div>
-                    </div>
-                    <div class="related-info">
-                        <div class="related-title" title="${f.title}">${f.title}</div>
-                        <div class="vid-meta">Vault Item<br>${formatBytes(f.size_bytes)}</div>
-                    </div>
-                `;
+                card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div></div><div class="related-info"><div class="related-title">${f.title}</div></div>`;
                 container.appendChild(card);
             });
         }
 
-        // --- 8. AUDIO VISUALIZER API ---
-        function initAudioVisualizer() {
-            const audioElement = document.getElementById('mainMedia');
-            const canvas = document.getElementById('visualizer');
-            if(!audioElement || !canvas) return;
-
+        // --- VISUALIZER ENGINE (Audio Wave & Video Bar) ---
+        function initVisualizer(mediaId, canvasId, mode) {
+            const media = document.getElementById(mediaId);
+            const canvas = document.getElementById(canvasId);
+            if(!media || !canvas) return;
             const ctx = canvas.getContext('2d');
-            canvas.style.display = 'block';
 
-            audioElement.addEventListener('play', () => {
+            media.addEventListener('play', () => {
                 if(currentAudioCtx) return;
                 try {
                     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     currentAudioCtx = audioCtx;
                     const analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 64; // Gives 32 frequency bars
+                    analyser.fftSize = 64; 
                     
-                    audioElement.crossOrigin = "anonymous"; 
-                    const source = audioCtx.createMediaElementSource(audioElement);
+                    const source = audioCtx.createMediaElementSource(media);
                     source.connect(analyser);
                     analyser.connect(audioCtx.destination);
                     
@@ -1912,7 +1983,7 @@ MEDIA_TUBE_HTML = """
                     function draw() {
                         currentAnimationId = requestAnimationFrame(draw);
                         canvas.width = canvas.parentElement.clientWidth;
-                        canvas.height = canvas.parentElement.clientHeight;
+                        canvas.height = canvas.clientHeight || canvas.parentElement.clientHeight;
                         
                         analyser.getByteFrequencyData(dataArray);
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1920,22 +1991,60 @@ MEDIA_TUBE_HTML = """
                         const barWidth = (canvas.width / bufferLength) - 2;
                         let x = 0;
                         for(let i = 0; i < bufferLength; i++) {
-                            const barHeight = (dataArray[i] / 255) * (canvas.height / 2.5);
+                            const barHeight = (dataArray[i] / 255) * (canvas.height / (mode==='wave'?2.2:1));
                             const hue = i * (360 / bufferLength) + 200;
                             ctx.fillStyle = `hsl(${hue}, 100%, 60%)`;
                             
-                            // Bottom Bar & Top Bar (Mirror)
-                            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-                            ctx.fillRect(x, 0, barWidth, barHeight);
+                            if(mode === 'wave') {
+                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                                ctx.fillRect(x, 0, barWidth, barHeight); // Mirror Top
+                            } else {
+                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight); // Single Bottom
+                            }
                             x += barWidth + 2;
                         }
                     }
                     draw();
-                } catch(e) { console.error("Audio Context Failed:", e); }
+                } catch(e) { console.error("Visualizer Init Failed", e); }
             }, {once: true});
         }
 
-        // --- 9. UTILITIES ---
+        // --- SUBTITLE UPLOAD SYSTEM ---
+        const dropZone = document.getElementById('dropZone');
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault(); dropZone.classList.remove('dragover');
+            if(e.dataTransfer.files.length) { document.getElementById('subFile').files = e.dataTransfer.files; fileSelected(document.getElementById('subFile')); }
+        });
+
+        function fileSelected(input) {
+            if(input.files.length > 0) {
+                pendingSubFile = input.files[0];
+                document.getElementById('selectedFileName').innerText = `Selected: ${pendingSubFile.name}`;
+            }
+        }
+
+        function openSubModal() { document.getElementById('subModal').style.display = 'flex'; }
+        function closeSubModal() { document.getElementById('subModal').style.display = 'none'; pendingSubFile = null; document.getElementById('selectedFileName').innerText = ''; }
+
+        async function submitSubtitle() {
+            if(!pendingSubFile) return alert("Select an SRT or VTT file first.");
+            const lang = document.getElementById('subLang').value.trim();
+            if(!lang) return alert("Please type the language (e.g., English).");
+
+            const formData = new FormData();
+            formData.append('file', pendingSubFile);
+            formData.append('media_slug', activeSlug);
+            formData.append('language', lang);
+
+            try {
+                const res = await fetch('/api/subtitle/upload', { method: 'POST', body: formData });
+                if(res.ok) { alert("Subtitle Synced! Refreshing player..."); closeSubModal(); renderWatchPage(activeSlug); }
+                else alert("Upload failed.");
+            } catch(e) { alert("Network Error"); }
+        }
+
         function toggleTheater() { document.getElementById('watchView').classList.toggle('theater-mode'); window.scrollTo({top: 0, behavior: 'smooth'}); }
         async function togglePiP() {
             const video = document.getElementById('mainMedia');
@@ -1951,7 +2060,6 @@ MEDIA_TUBE_HTML = """
             switch(e.code) {
                 case 'Space': e.preventDefault(); media.paused ? media.play() : media.pause(); break;
                 case 'KeyF': e.preventDefault(); if(media.tagName === 'VIDEO') { if (media.requestFullscreen) media.requestFullscreen(); } break;
-                case 'KeyM': e.preventDefault(); media.muted = !media.muted; break;
             }
         });
 
@@ -1962,8 +2070,6 @@ MEDIA_TUBE_HTML = """
 </html>
 """
 
-# --- Free Route for HTML (JS Handles the Token Auth Logic) ---
 @app.get("/view", response_class=HTMLResponse)
 async def serve_media_tube():
-    """Serves the frontend. Auth verification is done dynamically inside JS."""
-    return HTMLResponse(content=MEDIA_TUBE_HTML)    
+    return HTMLResponse(content=MEDIA_TUBE_HTML)
