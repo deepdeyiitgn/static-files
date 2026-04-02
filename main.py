@@ -1484,7 +1484,7 @@ async def websocket_max_endpoint(websocket: WebSocket):
     except Exception: app_metrics["active_ws"] -= 1
 
 # ==========================================
-# 11. QLYNK MEDIA TUBE (CINEMATIC VAULT & SUBTITLES)
+# 11. QLYNK MEDIA TUBE (CINEMATIC VAULT, CUSTOM PLAYER & CC)
 # ==========================================
 from fastapi import Query
 import time
@@ -1572,7 +1572,6 @@ async def upload_subtitle(
     
     return {"status": "success", "message": f"Subtitle ({language}) linked to media."}
 
-# --- 📝 Subtitle Fetch APIs ---
 @app.get("/api/subtitles/list/{media_slug}")
 async def list_subtitles(media_slug: str, access: dict = Depends(verify_view_access)):
     db = get_sub_db()
@@ -1583,12 +1582,10 @@ async def serve_subtitle_file(sub_slug: str):
     db = get_sub_db()
     sub_record = next((s for s in db.get("subtitles", []) if s["sub_slug"] == sub_slug), None)
     if not sub_record: raise HTTPException(status_code=404, detail="Subtitle not found.")
-    
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename=sub_record["path"], repo_type="dataset", token=HF_TOKEN)
         return FileResponse(path=file_path, media_type="text/vtt")
-    except:
-        raise HTTPException(status_code=500, detail="Error loading subtitle file.")
+    except: raise HTTPException(status_code=500, detail="Error loading subtitle file.")
 
 # --- Massive HTML/JS Payload (Cinematic Media Tube) ---
 MEDIA_TUBE_HTML = """
@@ -1607,7 +1604,7 @@ MEDIA_TUBE_HTML = """
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { font-family: "Roboto", "Arial", sans-serif; background-color: var(--yt-bg); color: var(--yt-text); overflow-x: hidden; }
         
-        .navbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 24px; background: var(--yt-bg); position: sticky; top: 0; z-index: 100; border-bottom: 1px solid var(--yt-border); }
+        .navbar { display: flex; justify-content: space-between; align-items: center; padding: 10px 24px; background: var(--yt-bg); position: sticky; top: 0; z-index: 1000; border-bottom: 1px solid var(--yt-border); }
         .logo { font-size: 20px; font-weight: bold; color: #fff; text-decoration: none; display: flex; align-items: center; gap: 8px; cursor: pointer;}
         .logo span { color: var(--yt-brand); }
         .search-box { display: flex; align-items: center; width: 40%; max-width: 600px; background: var(--yt-bg); border: 1px solid var(--yt-border); border-radius: 40px; overflow: hidden; }
@@ -1626,35 +1623,67 @@ MEDIA_TUBE_HTML = """
         .vid-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .vid-meta { font-size: 13px; color: var(--yt-muted); }
 
-        /* Watch Layout - FIXED display issue */
+        /* Watch Layout */
         .watch-layout { display: flex; gap: 24px; flex-wrap: wrap; }
         .primary-col { flex: 1; min-width: 65%; max-width: 1200px; }
         .secondary-col { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; gap: 15px;}
         
-        /* The Cinematic Player Area */
+        /* --- CUSTOM PLAYER ARCHITECTURE --- */
         .player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;}
         .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
         
-        /* Audio Specific Visuals */
-        .audio-disc { width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 30px rgba(188, 140, 255, 0.4); display: none;}
-        .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 30%; z-index: 4; pointer-events: none;}
-        
-        /* Video Specific Visuals */
-        .video-visualizer { width: 100%; height: 40px; margin-top: 10px; border-radius: 6px; display: none; pointer-events: none;}
-
+        /* Audio Visuals */
+        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: none;}
+        .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
         @keyframes spin { 100% { transform: rotate(360deg); } }
         
+        /* Custom Controls Overlay */
+        .custom-controls { position: absolute; bottom: 0; left: 0; width: 100%; padding: 40px 20px 10px 20px; background: linear-gradient(transparent, rgba(0,0,0,0.9)); z-index: 50; display: flex; flex-direction: column; gap: 8px; opacity: 0; transition: opacity 0.3s;}
+        .player-wrapper:hover .custom-controls, .custom-controls.active { opacity: 1; }
+        
+        /* Seek Bar (Violet Theme) */
+        .seek-container { width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; cursor: pointer; position: relative; transition: height 0.1s;}
+        .seek-container:hover { height: 8px; }
+        .seek-progress { height: 100%; background: var(--yt-brand); border-radius: 3px; width: 0%; pointer-events: none;}
+        
+        /* Control Buttons */
+        .control-row { display: flex; justify-content: space-between; align-items: center; color: #fff;}
+        .ctrl-left, .ctrl-right { display: flex; align-items: center; gap: 15px; }
+        .ctrl-btn { background: none; border: none; color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s;}
+        .ctrl-btn:hover { color: var(--yt-brand); }
+        .time-display { font-size: 13px; font-family: monospace;}
+        
+        /* Volume Slider */
+        .volume-slider { width: 0px; opacity: 0; transition: 0.3s; -webkit-appearance: none; background: transparent; cursor: pointer;}
+        .volume-container:hover .volume-slider { width: 80px; opacity: 1; margin-left: 5px;}
+        .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%; background: var(--yt-brand); margin-top: -4px;}
+        .volume-slider::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px;}
+
+        /* Settings Menu & Subtitles Menu */
+        .settings-menu { position: absolute; bottom: 60px; right: 20px; background: rgba(28,28,28,0.95); border-radius: 8px; padding: 10px; z-index: 60; display: none; flex-direction: column; min-width: 200px; border: 1px solid var(--yt-border); backdrop-filter: blur(10px);}
+        .settings-menu.show { display: flex; }
+        .setting-item { display: flex; justify-content: space-between; padding: 10px; font-size: 13px; cursor: pointer; border-radius: 4px;}
+        .setting-item:hover { background: rgba(255,255,255,0.1); }
+        .speed-slider { -webkit-appearance: none; width: 100%; background: transparent; margin-top: 10px;}
+        .speed-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: var(--yt-brand); margin-top: -5px;}
+        .speed-slider::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px;}
+
+        /* Custom Context Menu */
+        .custom-context { position: absolute; background: #212121; border: 1px solid var(--yt-border); border-radius: 4px; padding: 5px 0; z-index: 1000; display: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5);}
+        .context-item { padding: 8px 20px; font-size: 13px; cursor: pointer; color: #fff;}
+        .context-item:hover { background: var(--yt-hover); }
+
+        /* Meta & Actions */
         .watch-title { font-size: 20px; font-weight: bold; margin: 15px 0 5px 0; word-break: break-all;}
+        .video-visualizer { width: 100%; height: 30px; margin-bottom: 10px; border-radius: 4px; display: none; pointer-events: none;}
         .watch-actions { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--yt-border); padding-bottom: 15px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;}
         .channel-info { display: flex; align-items: center; gap: 12px; }
         .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--yt-brand); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; color: #000;}
-        
         .action-btns { display: flex; gap: 10px; flex-wrap: wrap;}
-        .btn { display: flex; align-items: center; gap: 8px; background: var(--yt-card); color: #fff; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 500; font-size: 14px; transition: 0.2s; text-decoration: none;}
+        .btn { display: flex; align-items: center; gap: 8px; background: var(--yt-card); color: #fff; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 500; font-size: 14px; transition: 0.2s;}
         .btn:hover { background: var(--yt-hover); }
-        .btn-primary { background: var(--yt-text); color: #000; }
+        .btn-primary { background: var(--yt-text); color: #000; text-decoration: none;}
         .btn-share { background: var(--yt-brand); color: #000; font-weight: bold; border-radius: 4px; }
-        
         .description-box { background: var(--yt-card); padding: 15px; border-radius: 12px; font-size: 14px; line-height: 1.5; color: #e1e1e1;}
         .related-card { display: flex; gap: 10px; cursor: pointer; text-decoration: none; color: inherit; }
         .related-card .thumb-wrapper { width: 160px; border-radius: 8px; margin-bottom: 0; flex-shrink: 0;}
@@ -1662,18 +1691,21 @@ MEDIA_TUBE_HTML = """
         .related-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; overflow: hidden; }
 
         /* Subtitle Modal */
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content:center; align-items:center; display:none;}
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content:center; align-items:center; display:none;}
         .modal-box { background: var(--yt-card); width: 400px; padding: 25px; border-radius: 12px; border: 1px solid var(--yt-border); display:flex; flex-direction:column; gap:15px;}
-        .modal-box h3 { color: var(--yt-brand); margin-bottom: 5px;}
         .drop-zone { border: 2px dashed var(--yt-border); padding: 30px; text-align: center; border-radius: 8px; cursor: pointer; color: var(--yt-muted); transition: 0.2s;}
-        .drop-zone:hover, .drop-zone.dragover { border-color: var(--yt-brand); color: #fff;}
+        .drop-zone:hover { border-color: var(--yt-brand); color: #fff;}
         .modal-input { width: 100%; padding: 10px; background: #000; border: 1px solid var(--yt-border); color: #fff; border-radius: 6px; outline:none;}
         
         .hidden { display: none !important; }
         .theater-mode .primary-col { min-width: 100%; max-width: 100%; }
         .theater-mode .secondary-col { width: 100%; margin-top: 20px;}
+        
+        /* CC Styling override */
+        ::cue { background-color: rgba(0,0,0,0.8); color: white; font-family: sans-serif; font-size: 100%; }
+
         @media(max-width: 1000px) { .primary-col { min-width: 100%; } .secondary-col { width: 100%; } .search-box { width: 60%; } }
-        @media(max-width: 600px) { .search-box { display: none; } }
+        @media(max-width: 600px) { .search-box { display: none; } .custom-controls { padding: 20px 10px 10px 10px;} .ctrl-btn { font-size: 16px;} .volume-slider{ display:none; } }
     </style>
 </head>
 <body>
@@ -1714,7 +1746,6 @@ MEDIA_TUBE_HTML = """
                     <div class="action-btns">
                         <button class="btn" onclick="openSubModal()" id="addSubBtn" style="display:none;">➕ Add CC</button>
                         <button class="btn" onclick="toggleTheater()">📺 Theater</button>
-                        <button class="btn" onclick="togglePiP()" id="pipBtn">🔲 PiP</button>
                         <a href="#" class="btn btn-primary" id="wDownload" download>⬇ Download</a>
                     </div>
                 </div>
@@ -1722,8 +1753,7 @@ MEDIA_TUBE_HTML = """
                 <div class="description-box">
                     <span id="wDate">Uploaded on: Unknown</span>
                     <div id="wSlugPath" style="margin-bottom: 10px; font-family: monospace; color: var(--yt-brand);"></div>
-                    <div id="subsList" style="margin-bottom: 10px; color: var(--accent-green); font-size:12px;"></div>
-                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active. Subtitles (SRT/VTT) auto-converted.</p>
+                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active.</p>
                 </div>
             </div>
 
@@ -1739,6 +1769,10 @@ MEDIA_TUBE_HTML = """
         </div>
     </div>
 
+    <div class="custom-context" id="customContext">
+        <div class="context-item" onclick="copyVidUrl()">📋 Copy video URL</div>
+    </div>
+
     <div class="modal-overlay" id="subModal">
         <div class="modal-box">
             <h3>Upload Subtitle (SRT / VTT)</h3>
@@ -1747,23 +1781,23 @@ MEDIA_TUBE_HTML = """
             </div>
             <input type="file" id="subFile" style="display:none" accept=".srt,.vtt" onchange="fileSelected(this)">
             <p id="selectedFileName" style="font-size:12px; color:var(--yt-brand); text-align:center;"></p>
-            
-            <input type="text" id="subLang" class="modal-input" placeholder="Language (e.g. English, Hindi, Spanish)">
+            <input type="text" id="subLang" class="modal-input" placeholder="Language (Auto-Detected or Type)">
             <div style="display:flex; gap:10px; margin-top:10px;">
                 <button class="btn" style="flex:1;" onclick="closeSubModal()">Cancel</button>
-                <button class="btn btn-primary" style="flex:1;" onclick="submitSubtitle()">Upload & Link</button>
+                <button class="btn btn-primary" style="flex:1; background:var(--yt-brand);" onclick="submitSubtitle()">Upload & Link</button>
             </div>
         </div>
     </div>
 
     <script>
-        // --- 1. TOKEN HANDLING ---
+        // --- AUTH & ROLES ---
         const urlParams = new URLSearchParams(window.location.search);
         const tokenFromUrl = urlParams.get('token');
         if (tokenFromUrl) {
             document.cookie = "share_token=" + tokenFromUrl + "; path=/; max-age=86400";
             window.history.replaceState({}, document.title, window.location.pathname);
         }
+        const isAdmin = document.cookie.includes('auth_token=');
 
         const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
         const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23bc8cff"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
@@ -1773,41 +1807,47 @@ MEDIA_TUBE_HTML = """
         let currentAnimationId = null;
         let activeSlug = null;
         let pendingSubFile = null;
+        let controlTimeout;
 
+        // UI Utils
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
             const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
-
-        function getMediaType(mimeType) {
-            if(!mimeType) return 'file';
-            if(mimeType.startsWith('video/')) return 'video';
-            if(mimeType.startsWith('audio/')) return 'audio';
-            if(mimeType.startsWith('image/')) return 'image';
+        function formatTime(sec) {
+            let m = Math.floor(sec / 60); let s = Math.floor(sec % 60);
+            return m + ':' + (s < 10 ? '0' : '') + s;
+        }
+        function getMediaType(m) {
+            if(!m) return 'file'; if(m.startsWith('video/')) return 'video';
+            if(m.startsWith('audio/')) return 'audio'; if(m.startsWith('image/')) return 'image';
             return 'file';
         }
-
-        async function generateShareLink() {
+        function getDominantColor(imgEl, callback) {
+            const c = document.createElement('canvas'); const ctx = c.getContext('2d');
+            c.width = imgEl.width || 100; c.height = imgEl.height || 100;
+            ctx.drawImage(imgEl, 0, 0, c.width, c.height);
             try {
-                const res = await fetch('/api/share/generate', { method: 'POST' });
-                if (res.status === 401) return alert("Only the Server Admin can generate share links!");
-                const data = await res.json();
-                prompt("Share this link (Valid for 24 Hours):", window.location.origin + "/view?token=" + data.share_token);
-            } catch(e) { alert("Network error."); }
+                const data = ctx.getImageData(0,0,c.width,c.height).data;
+                let r=0,g=0,b=0, count=0;
+                for(let i=0; i<data.length; i+=16) { r+=data[i]; g+=data[i+1]; b+=data[i+2]; count++; }
+                callback(`rgb(${~~(r/count)},${~~(g/count)},${~~(b/count)})`);
+            } catch(e) { callback('#bc8cff'); }
         }
 
         async function init() {
             try {
                 const res = await fetch('/api/media_library');
-                if(res.status === 401) {
-                    document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED</b><br>Link expired or invalid.";
-                    return;
-                }
-                if(document.cookie.includes('auth_token=')) {
+                if(res.status === 401) return document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED</b>";
+                
+                if(isAdmin) {
                     document.getElementById('shareBtn').style.display = 'block';
                     document.getElementById('addSubBtn').style.display = 'flex';
+                } else {
+                    document.getElementById('wDownload').style.display = 'none';
                 }
+                
                 masterLibrary = await res.json();
                 document.getElementById('loadingText').classList.add('hidden');
                 routeHandler();
@@ -1817,58 +1857,39 @@ MEDIA_TUBE_HTML = """
         function routeHandler() {
             const path = window.location.pathname;
             const params = new URLSearchParams(window.location.search);
-            
             if(currentAudioCtx) { currentAudioCtx.close(); currentAudioCtx = null; }
             if(currentAnimationId) cancelAnimationFrame(currentAnimationId);
 
-            // New Route Handling System
             if(path === '/video' || path === '/video/') {
                 activeSlug = params.get('q');
-                if (activeSlug) renderWatchPage(activeSlug);
-                else goHome();
+                if (activeSlug) renderWatchPage(activeSlug); else goHome();
             } else {
-                const searchQ = params.get('search');
-                renderHomeGrid(searchQ);
+                renderHomeGrid(params.get('search'));
             }
         }
 
         function goHome() { window.history.pushState({}, '', '/view'); routeHandler(); }
         function handleSearch() {
             const q = document.getElementById('searchInput').value;
-            window.history.pushState({}, '', `/view?search=${encodeURIComponent(q)}`);
-            routeHandler();
+            window.history.pushState({}, '', `/view?search=${encodeURIComponent(q)}`); routeHandler();
         }
 
         function renderHomeGrid(searchQuery = null) {
             document.getElementById('watchView').classList.add('hidden');
             const grid = document.getElementById('homeView');
-            grid.classList.remove('hidden');
-            grid.innerHTML = '';
+            grid.classList.remove('hidden'); grid.innerHTML = '';
 
             let data = masterLibrary;
             if(searchQuery) {
                 const q = searchQuery.toLowerCase();
                 data = masterLibrary.filter(f => f.title.toLowerCase().includes(q) || f.slug.toLowerCase().includes(q));
             }
-
-            data.forEach(file => {
-                const thumb = file.thumbnail || FALLBACK_THUMB;
-                const type = getMediaType(file.mime_type);
+            data.forEach(f => {
+                const type = getMediaType(f.mime_type);
                 const card = document.createElement('a');
-                
-                // Updated link generation to use /video?q=
-                card.href = `/video?q=${file.slug}`;
-                card.className = 'vid-card';
-                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${file.slug}`); routeHandler(); };
-
-                card.innerHTML = `
-                    <div class="thumb-wrapper">
-                        <img src="${thumb}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'">
-                        <div class="type-badge">${type}</div>
-                    </div>
-                    <div class="vid-title">${file.title}</div>
-                    <div class="vid-meta">Vault • ${formatBytes(file.size_bytes)}<br>${new Date(file.uploaded_at).toLocaleDateString()}</div>
-                `;
+                card.href = `/video?q=${f.slug}`; card.className = 'vid-card';
+                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
+                card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge">${type}</div></div><div class="vid-title">${f.title}</div><div class="vid-meta">Vault • ${formatBytes(f.size_bytes)}</div>`;
                 grid.appendChild(card);
             });
         }
@@ -1885,63 +1906,289 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wType').innerText = getMediaType(file.mime_type).toUpperCase();
             document.getElementById('wDate').innerText = `Uploaded on: ${new Date(file.uploaded_at).toLocaleString()}`;
             document.getElementById('wSlugPath').innerText = `Path: /f/${file.slug}`;
-            
             const downloadUrl = file.is_external ? file.external_url : `/f/${file.slug}`;
             document.getElementById('wDownload').href = downloadUrl;
 
-            const playerWrapper = document.getElementById('playerWrapper');
-            const vCanvas = document.getElementById('videoVisualizer');
+            const pw = document.getElementById('playerWrapper');
             const type = getMediaType(file.mime_type);
-            
-            playerWrapper.innerHTML = '';
-            vCanvas.style.display = 'none';
-            document.getElementById('pipBtn').style.display = type === 'video' ? 'flex' : 'none';
-            document.getElementById('subsList').innerText = 'Scanning for Subtitles...';
+            pw.innerHTML = ''; document.getElementById('videoVisualizer').style.display = 'none';
 
-            // Fetch Subtitles
+            // Fetch Subs
             let subs = [];
-            try {
-                const r = await fetch(`/api/subtitles/list/${slug}`);
-                if(r.ok) subs = await r.json();
-            } catch(e){}
+            try { const r = await fetch(`/api/subtitles/list/${slug}`); if(r.ok) subs = await r.json(); } catch(e){}
+            let trackHtml = subs.map((s,i) => `<track kind="subtitles" src="/sub/${s.sub_slug}" srclang="${s.language.substring(0,2).toLowerCase()}" label="${s.language}" ${i===0?'default':''}>`).join('');
 
-            let trackHtml = subs.map(s => `<track kind="subtitles" src="/sub/${s.sub_slug}" srclang="${s.language.substring(0,2).toLowerCase()}" label="${s.language}">`).join('');
-            if(subs.length > 0) document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
-            else document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
+            // Build Custom Player UI inside playerWrapper
+            const controlsHtml = `
+                <div class="custom-controls" id="pControls">
+                    <div class="seek-container" id="pSeek"><div class="seek-progress" id="pSeekProg"></div></div>
+                    <div class="control-row">
+                        <div class="ctrl-left">
+                            <button class="ctrl-btn" id="pPlay">▶</button>
+                            <button class="ctrl-btn" id="pNext" onclick="nextVid()">⏭</button>
+                            <div class="volume-container" style="display:flex; align-items:center;">
+                                <button class="ctrl-btn" id="pMute">🔊</button>
+                                <input type="range" class="volume-slider" id="pVol" min="0" max="1" step="0.05" value="1">
+                            </div>
+                            <span class="time-display" id="pTime">0:00 / 0:00</span>
+                        </div>
+                        <div class="ctrl-right">
+                            <button class="ctrl-btn" id="pCC" title="Subtitles">💬</button>
+                            <button class="ctrl-btn" id="pSetBtn" title="Settings">⚙️</button>
+                            <button class="ctrl-btn" id="pFull">⛶</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="settings-menu" id="pSettings">
+                    <div style="font-weight:bold; margin-bottom:5px; color:var(--yt-brand);">Playback Speed</div>
+                    <div style="display:flex; gap:5px; margin-bottom:10px;">
+                        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="setSpeed(1)">1x</button>
+                        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="setSpeed(2)">2x</button>
+                        <button class="btn" style="padding:4px 8px; font-size:11px;" onclick="setSpeed(3)">3x</button>
+                    </div>
+                    <input type="range" class="speed-slider" id="pSpeedRange" min="0.25" max="4" step="0.25" value="1">
+                    <div style="text-align:center; font-size:11px; margin-bottom:10px;" id="speedDisplay">1.00x</div>
+                    <div style="font-weight:bold; margin-bottom:5px; color:var(--yt-brand);">Quality</div>
+                    <div class="setting-item">Auto (Original File)</div>
+                    <div style="font-weight:bold; margin-top:10px; margin-bottom:5px; color:var(--yt-brand);">Subtitles</div>
+                    <div id="pCcList"></div>
+                </div>
+            `;
 
             if(type === 'video') {
-                playerWrapper.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" controls autoplay>${trackHtml}</video>`;
-                vCanvas.style.display = 'block';
-                setTimeout(() => initVisualizer('mainMedia', 'videoVisualizer', 'bar'), 500);
+                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" crossorigin="anonymous" playsinline autoplay>${trackHtml}</video>` + controlsHtml;
+                document.getElementById('videoVisualizer').style.display = 'block';
+                setTimeout(() => initVisualizer('mainMedia', 'videoVisualizer', 'bar', null), 500);
+                initCustomControls();
             } 
             else if(type === 'audio') {
                 const thumb = file.thumbnail || SVG_MUSIC;
-                playerWrapper.innerHTML = `
+                pw.innerHTML = `
                     <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'" style="display:block;">
                     <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
-                    <audio id="mainMedia" src="${downloadUrl}" controls autoplay style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:90%; z-index:20;">${trackHtml}</audio>
-                `;
-                setTimeout(() => initVisualizer('mainMedia', 'audioVisualizer', 'wave'), 500);
+                    <audio id="mainMedia" src="${downloadUrl}" crossorigin="anonymous" autoplay style="display:none;">${trackHtml}</audio>
+                ` + controlsHtml;
+                // Wait for image to load to get dominant color
+                const img = document.getElementById('audioDisc');
+                if(img.complete) {
+                    getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color));
+                } else {
+                    img.onload = () => getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color));
+                }
+                initCustomControls();
             } 
-            else if(type === 'image') {
-                playerWrapper.innerHTML = `<img class="player-element" src="${downloadUrl}">`;
-            } 
-            else {
-                playerWrapper.innerHTML = `<div style="color:#fff; font-size:18px;">No Preview Available for this Document</div>`;
-            }
-
-            const mediaEl = document.getElementById('mainMedia');
-            if(mediaEl) {
-                mediaEl.addEventListener('ended', () => {
-                    if(document.getElementById('autoplayToggle').checked) {
-                        const nextItem = document.querySelector('.related-card');
-                        if(nextItem) nextItem.click();
-                    }
-                });
+            else if(type === 'image') { pw.innerHTML = `<img class="player-element" src="${downloadUrl}">`; }
+            
+            // Populating CC List in Settings
+            const ccList = document.getElementById('pCcList');
+            if(ccList) {
+                ccList.innerHTML = `<div class="setting-item" onclick="setCC(-1)">Off</div>` + subs.map((s,i) => `<div class="setting-item" onclick="setCC(${i})">${s.language}</div>`).join('');
             }
             renderRelated(file);
         }
 
+        // --- CUSTOM CONTROLS LOGIC ---
+        function initCustomControls() {
+            const media = document.getElementById('mainMedia');
+            const pPlay = document.getElementById('pPlay');
+            const pSeek = document.getElementById('pSeek');
+            const pSeekProg = document.getElementById('pSeekProg');
+            const pTime = document.getElementById('pTime');
+            const pVol = document.getElementById('pVol');
+            const pMute = document.getElementById('pMute');
+            const pFull = document.getElementById('pFull');
+            const pControls = document.getElementById('pControls');
+            const pw = document.getElementById('playerWrapper');
+            
+            // Play/Pause
+            pPlay.onclick = () => media.paused ? media.play() : media.pause();
+            media.onplay = () => pPlay.innerText = '⏸';
+            media.onpause = () => pPlay.innerText = '▶';
+            
+            // Time & Seek
+            media.ontimeupdate = () => {
+                const percent = (media.currentTime / media.duration) * 100;
+                pSeekProg.style.width = `${percent}%`;
+                pTime.innerText = `${formatTime(media.currentTime)} / ${formatTime(media.duration || 0)}`;
+            };
+            pSeek.onclick = (e) => {
+                const rect = pSeek.getBoundingClientRect();
+                const percent = (e.clientX - rect.left) / rect.width;
+                media.currentTime = percent * media.duration;
+            };
+
+            // Volume
+            pVol.oninput = (e) => { media.volume = e.target.value; media.muted = false; pMute.innerText = media.volume > 0 ? '🔊' : '🔇'; };
+            pMute.onclick = () => { media.muted = !media.muted; pMute.innerText = media.muted ? '🔇' : '🔊'; };
+
+            // Fullscreen
+            pFull.onclick = () => {
+                if(document.fullscreenElement) document.exitFullscreen();
+                else pw.requestFullscreen();
+            };
+
+            // Settings & Speed
+            const setBtn = document.getElementById('pSetBtn');
+            const setMenu = document.getElementById('pSettings');
+            setBtn.onclick = () => setMenu.classList.toggle('show');
+            document.getElementById('pSpeedRange').oninput = (e) => { setSpeed(e.target.value); };
+
+            // Auto Hide Controls
+            pw.onmousemove = () => {
+                pControls.classList.add('active');
+                clearTimeout(controlTimeout);
+                controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
+            };
+
+            // Double Tap to Seek (Mobile friendly)
+            pw.ondblclick = (e) => {
+                const rect = pw.getBoundingClientRect();
+                if(e.clientX > rect.left + rect.width/2) media.currentTime += 10;
+                else media.currentTime -= 10;
+            };
+
+            // Autoplay Next
+            media.onended = () => {
+                if(document.getElementById('autoplayToggle').checked) nextVid();
+            };
+        }
+
+        window.setSpeed = function(val) {
+            const media = document.getElementById('mainMedia');
+            if(media) media.playbackRate = parseFloat(val);
+            document.getElementById('pSpeedRange').value = val;
+            document.getElementById('speedDisplay').innerText = parseFloat(val).toFixed(2) + 'x';
+        }
+
+        window.setCC = function(index) {
+            const media = document.getElementById('mainMedia');
+            if(!media) return;
+            for(let i=0; i<media.textTracks.length; i++) {
+                media.textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
+            }
+            document.getElementById('pSettings').classList.remove('show');
+        }
+
+        window.nextVid = function() {
+            const nextItem = document.querySelector('.related-card');
+            if(nextItem) nextItem.click();
+        }
+
+        // --- CONTEXT MENU (Disable native Right Click) ---
+        document.addEventListener('contextmenu', (e) => {
+            const pw = document.getElementById('playerWrapper');
+            if(pw && pw.contains(e.target)) {
+                e.preventDefault();
+                const cm = document.getElementById('customContext');
+                cm.style.display = 'block';
+                cm.style.left = `${e.pageX}px`;
+                cm.style.top = `${e.pageY}px`;
+            }
+        });
+        document.addEventListener('click', () => document.getElementById('customContext').style.display = 'none');
+        window.copyVidUrl = function() {
+            navigator.clipboard.writeText(window.location.href);
+            alert("Video Link Copied!");
+        }
+
+        // --- VISUALIZER ENGINE ---
+        function initVisualizer(mediaId, canvasId, mode, dominantColor) {
+            const media = document.getElementById(mediaId);
+            const canvas = document.getElementById(canvasId);
+            if(!media || !canvas) return;
+            const ctx = canvas.getContext('2d');
+            const visualColor = dominantColor || '#bc8cff';
+
+            media.addEventListener('play', () => {
+                if(currentAudioCtx) return;
+                try {
+                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    currentAudioCtx = audioCtx;
+                    media.crossOrigin = "anonymous";
+                    const analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 64; // 32 bars
+                    
+                    const source = audioCtx.createMediaElementSource(media);
+                    source.connect(analyser); analyser.connect(audioCtx.destination);
+                    
+                    const bufferLength = analyser.frequencyBinCount;
+                    const dataArray = new Uint8Array(bufferLength);
+                    
+                    function draw() {
+                        currentAnimationId = requestAnimationFrame(draw);
+                        canvas.width = canvas.parentElement.clientWidth;
+                        canvas.height = canvas.clientHeight || canvas.parentElement.clientHeight;
+                        
+                        analyser.getByteFrequencyData(dataArray);
+                        ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        
+                        const barWidth = (canvas.width / bufferLength) * 0.8; // Thin width
+                        const centerY = canvas.height / 2;
+                        let x = (canvas.width - (barWidth + 2) * bufferLength) / 2; // Center horizontally
+                        
+                        for(let i = 0; i < bufferLength; i++) {
+                            // Scale height (make it pop)
+                            const barHeight = (dataArray[i] / 255) * (canvas.height / 2.2);
+                            ctx.fillStyle = visualColor;
+                            
+                            if(mode === 'wave') {
+                                // Draw from Center Y (Up and Down meeting at base)
+                                ctx.fillRect(x, centerY - barHeight, barWidth, barHeight); // Top
+                                ctx.fillRect(x, centerY, barWidth, barHeight); // Bottom
+                            } else {
+                                // Video mode (bottom up only)
+                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight); 
+                            }
+                            x += barWidth + 2;
+                        }
+                    }
+                    draw();
+                } catch(e) { console.warn("Visualizer CORS Blocked:", e); }
+            }, {once: true});
+        }
+
+        // --- SUBTITLE SYSTEM (Auto-Detect Lang) ---
+        const dropZone = document.getElementById('dropZone');
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = '#bc8cff'; });
+        dropZone.addEventListener('dragleave', () => dropZone.style.borderColor = 'var(--yt-border)');
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault(); dropZone.style.borderColor = 'var(--yt-border)';
+            if(e.dataTransfer.files.length) { document.getElementById('subFile').files = e.dataTransfer.files; fileSelected(document.getElementById('subFile')); }
+        });
+
+        function fileSelected(input) {
+            if(input.files.length > 0) {
+                pendingSubFile = input.files[0];
+                document.getElementById('selectedFileName').innerText = `Selected: ${pendingSubFile.name}`;
+                
+                // Auto Detect Language based on filename
+                let n = pendingSubFile.name.toLowerCase();
+                let guessed = "English";
+                if(n.includes('hin') || n.includes('hi.')) guessed = "Hindi";
+                else if(n.includes('spa') || n.includes('es.')) guessed = "Spanish";
+                else if(n.includes('fre') || n.includes('fr.')) guessed = "French";
+                else if(n.includes('ben') || n.includes('bn.')) guessed = "Bengali";
+                document.getElementById('subLang').value = guessed;
+            }
+        }
+
+        function openSubModal() { document.getElementById('subModal').style.display = 'flex'; }
+        function closeSubModal() { document.getElementById('subModal').style.display = 'none'; pendingSubFile = null; document.getElementById('selectedFileName').innerText = ''; }
+
+        async function submitSubtitle() {
+            if(!pendingSubFile) return alert("Select an SRT or VTT file first.");
+            const lang = document.getElementById('subLang').value.trim();
+            if(!lang) return alert("Please type the language.");
+            const formData = new FormData();
+            formData.append('file', pendingSubFile); formData.append('media_slug', activeSlug); formData.append('language', lang);
+            try {
+                const res = await fetch('/api/subtitle/upload', { method: 'POST', body: formData });
+                if(res.ok) { alert("Subtitle Synced! Refreshing player..."); closeSubModal(); renderWatchPage(activeSlug); }
+                else alert("Upload failed.");
+            } catch(e) { alert("Network Error"); }
+        }
+
+        // --- RELATED LIST ---
         function renderRelated(currentFile) {
             const container = document.getElementById('relatedVideos');
             container.innerHTML = '';
@@ -1958,125 +2205,12 @@ MEDIA_TUBE_HTML = """
                 if(item.score === -1) return;
                 const f = item.file;
                 const card = document.createElement('a');
-                
-                // Updated Related Video Link mapping to /video?q=
-                card.href = `/video?q=${f.slug}`;
-                card.className = 'related-card';
+                card.href = `/video?q=${f.slug}`; card.className = 'related-card';
                 card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
-                
                 card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div></div><div class="related-info"><div class="related-title">${f.title}</div></div>`;
                 container.appendChild(card);
             });
         }
-
-        // --- VISUALIZER ENGINE ---
-        function initVisualizer(mediaId, canvasId, mode) {
-            const media = document.getElementById(mediaId);
-            const canvas = document.getElementById(canvasId);
-            if(!media || !canvas) return;
-            const ctx = canvas.getContext('2d');
-
-            media.addEventListener('play', () => {
-                if(currentAudioCtx) return;
-                try {
-                    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                    currentAudioCtx = audioCtx;
-                    
-                    // Allow CORS specifically for visualizer logic if supported by browser/headers
-                    media.crossOrigin = "anonymous";
-                    
-                    const analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 64; 
-                    
-                    const source = audioCtx.createMediaElementSource(media);
-                    source.connect(analyser);
-                    analyser.connect(audioCtx.destination);
-                    
-                    const bufferLength = analyser.frequencyBinCount;
-                    const dataArray = new Uint8Array(bufferLength);
-                    
-                    function draw() {
-                        currentAnimationId = requestAnimationFrame(draw);
-                        canvas.width = canvas.parentElement.clientWidth;
-                        canvas.height = canvas.clientHeight || canvas.parentElement.clientHeight;
-                        
-                        analyser.getByteFrequencyData(dataArray);
-                        ctx.clearRect(0, 0, canvas.width, canvas.height);
-                        
-                        const barWidth = (canvas.width / bufferLength) - 2;
-                        let x = 0;
-                        for(let i = 0; i < bufferLength; i++) {
-                            const barHeight = (dataArray[i] / 255) * (canvas.height / (mode==='wave'?2.2:1));
-                            const hue = i * (360 / bufferLength) + 200;
-                            ctx.fillStyle = `hsl(${hue}, 100%, 60%)`;
-                            
-                            if(mode === 'wave') {
-                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-                                ctx.fillRect(x, 0, barWidth, barHeight); 
-                            } else {
-                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight); 
-                            }
-                            x += barWidth + 2;
-                        }
-                    }
-                    draw();
-                } catch(e) { console.warn("Visualizer Init Alert (CORS might block specific raw bytes):", e); }
-            }, {once: true});
-        }
-
-        // --- SUBTITLE UPLOAD SYSTEM ---
-        const dropZone = document.getElementById('dropZone');
-        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('dragover'); });
-        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
-        dropZone.addEventListener('drop', (e) => {
-            e.preventDefault(); dropZone.classList.remove('dragover');
-            if(e.dataTransfer.files.length) { document.getElementById('subFile').files = e.dataTransfer.files; fileSelected(document.getElementById('subFile')); }
-        });
-
-        function fileSelected(input) {
-            if(input.files.length > 0) {
-                pendingSubFile = input.files[0];
-                document.getElementById('selectedFileName').innerText = `Selected: ${pendingSubFile.name}`;
-            }
-        }
-
-        function openSubModal() { document.getElementById('subModal').style.display = 'flex'; }
-        function closeSubModal() { document.getElementById('subModal').style.display = 'none'; pendingSubFile = null; document.getElementById('selectedFileName').innerText = ''; }
-
-        async function submitSubtitle() {
-            if(!pendingSubFile) return alert("Select an SRT or VTT file first.");
-            const lang = document.getElementById('subLang').value.trim();
-            if(!lang) return alert("Please type the language (e.g., English).");
-
-            const formData = new FormData();
-            formData.append('file', pendingSubFile);
-            formData.append('media_slug', activeSlug);
-            formData.append('language', lang);
-
-            try {
-                const res = await fetch('/api/subtitle/upload', { method: 'POST', body: formData });
-                if(res.ok) { alert("Subtitle Synced! Refreshing player..."); closeSubModal(); renderWatchPage(activeSlug); }
-                else alert("Upload failed.");
-            } catch(e) { alert("Network Error"); }
-        }
-
-        function toggleTheater() { document.getElementById('watchView').classList.toggle('theater-mode'); window.scrollTo({top: 0, behavior: 'smooth'}); }
-        async function togglePiP() {
-            const video = document.getElementById('mainMedia');
-            if(!video || video.tagName !== 'VIDEO') return;
-            if (document.pictureInPictureElement) await document.exitPictureInPicture();
-            else await video.requestPictureInPicture();
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if(document.activeElement.tagName === 'INPUT') return;
-            const media = document.getElementById('mainMedia');
-            if(!media) return;
-            switch(e.code) {
-                case 'Space': e.preventDefault(); media.paused ? media.play() : media.pause(); break;
-                case 'KeyF': e.preventDefault(); if(media.tagName === 'VIDEO') { if (media.requestFullscreen) media.requestFullscreen(); } break;
-            }
-        });
 
         init();
         window.onpopstate = routeHandler;
@@ -2088,5 +2222,4 @@ MEDIA_TUBE_HTML = """
 @app.get("/view", response_class=HTMLResponse)
 @app.get("/video", response_class=HTMLResponse)
 async def serve_media_tube():
-    """Serves the frontend. Routes /view (Grid) and /video (Player) are handled dynamically inside JS."""
     return HTMLResponse(content=MEDIA_TUBE_HTML)
