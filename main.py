@@ -1626,14 +1626,14 @@ MEDIA_TUBE_HTML = """
         .vid-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .vid-meta { font-size: 13px; color: var(--yt-muted); }
 
-        /* Watch Layout */
-        .watch-layout { display: flex; gap: 24px; flex-wrap: wrap; display: none; }
+        /* Watch Layout - FIXED display issue */
+        .watch-layout { display: flex; gap: 24px; flex-wrap: wrap; }
         .primary-col { flex: 1; min-width: 65%; max-width: 1200px; }
         .secondary-col { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; gap: 15px;}
         
         /* The Cinematic Player Area */
         .player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;}
-        .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5;}
+        .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
         
         /* Audio Specific Visuals */
         .audio-disc { width: 220px; height: 220px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 30px rgba(188, 140, 255, 0.4); display: none;}
@@ -1662,7 +1662,7 @@ MEDIA_TUBE_HTML = """
         .related-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; overflow: hidden; }
 
         /* Subtitle Modal */
-        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 1000; display:flex; justify-content:center; align-items:center; display:none;}
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 1000; justify-content:center; align-items:center; display:none;}
         .modal-box { background: var(--yt-card); width: 400px; padding: 25px; border-radius: 12px; border: 1px solid var(--yt-border); display:flex; flex-direction:column; gap:15px;}
         .modal-box h3 { color: var(--yt-brand); margin-bottom: 5px;}
         .drop-zone { border: 2px dashed var(--yt-border); padding: 30px; text-align: center; border-radius: 8px; cursor: pointer; color: var(--yt-muted); transition: 0.2s;}
@@ -1679,7 +1679,7 @@ MEDIA_TUBE_HTML = """
 <body>
 
     <div class="navbar">
-        <div class="logo" onclick="goHome()">▶ <span>Qlynk</span>Tube</div>
+        <div class="logo" onclick="goHome()">▶ <span>Qlynk</span>Vault</div>
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Search secure vault..." onkeyup="if(event.key === 'Enter') handleSearch()">
             <button onclick="handleSearch()">🔍</button>
@@ -1695,7 +1695,7 @@ MEDIA_TUBE_HTML = """
 
         <div id="homeView" class="video-grid hidden"></div>
 
-        <div id="watchView" class="watch-layout">
+        <div id="watchView" class="watch-layout hidden">
             <div class="primary-col">
                 <div class="player-wrapper" id="playerWrapper">
                     </div>
@@ -1815,15 +1815,21 @@ MEDIA_TUBE_HTML = """
         }
 
         function routeHandler() {
+            const path = window.location.pathname;
             const params = new URLSearchParams(window.location.search);
-            activeSlug = params.get('id');
-            const searchQ = params.get('search');
             
             if(currentAudioCtx) { currentAudioCtx.close(); currentAudioCtx = null; }
             if(currentAnimationId) cancelAnimationFrame(currentAnimationId);
 
-            if(activeSlug) renderWatchPage(activeSlug);
-            else renderHomeGrid(searchQ);
+            // New Route Handling System
+            if(path === '/video' || path === '/video/') {
+                activeSlug = params.get('q');
+                if (activeSlug) renderWatchPage(activeSlug);
+                else goHome();
+            } else {
+                const searchQ = params.get('search');
+                renderHomeGrid(searchQ);
+            }
         }
 
         function goHome() { window.history.pushState({}, '', '/view'); routeHandler(); }
@@ -1849,9 +1855,11 @@ MEDIA_TUBE_HTML = """
                 const thumb = file.thumbnail || FALLBACK_THUMB;
                 const type = getMediaType(file.mime_type);
                 const card = document.createElement('a');
-                card.href = `/view?id=${file.slug}`;
+                
+                // Updated link generation to use /video?q=
+                card.href = `/video?q=${file.slug}`;
                 card.className = 'vid-card';
-                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/view?id=${file.slug}`); routeHandler(); };
+                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${file.slug}`); routeHandler(); };
 
                 card.innerHTML = `
                     <div class="thumb-wrapper">
@@ -1902,7 +1910,7 @@ MEDIA_TUBE_HTML = """
             else document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
 
             if(type === 'video') {
-                playerWrapper.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" crossorigin="anonymous" controls autoplay>${trackHtml}</video>`;
+                playerWrapper.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" controls autoplay>${trackHtml}</video>`;
                 vCanvas.style.display = 'block';
                 setTimeout(() => initVisualizer('mainMedia', 'videoVisualizer', 'bar'), 500);
             } 
@@ -1911,7 +1919,7 @@ MEDIA_TUBE_HTML = """
                 playerWrapper.innerHTML = `
                     <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'" style="display:block;">
                     <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
-                    <audio id="mainMedia" src="${downloadUrl}" crossorigin="anonymous" controls autoplay style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:90%; z-index:20;">${trackHtml}</audio>
+                    <audio id="mainMedia" src="${downloadUrl}" controls autoplay style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:90%; z-index:20;">${trackHtml}</audio>
                 `;
                 setTimeout(() => initVisualizer('mainMedia', 'audioVisualizer', 'wave'), 500);
             } 
@@ -1950,15 +1958,18 @@ MEDIA_TUBE_HTML = """
                 if(item.score === -1) return;
                 const f = item.file;
                 const card = document.createElement('a');
-                card.href = `/view?id=${f.slug}`;
+                
+                // Updated Related Video Link mapping to /video?q=
+                card.href = `/video?q=${f.slug}`;
                 card.className = 'related-card';
-                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/view?id=${f.slug}`); routeHandler(); };
+                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
+                
                 card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div></div><div class="related-info"><div class="related-title">${f.title}</div></div>`;
                 container.appendChild(card);
             });
         }
 
-        // --- VISUALIZER ENGINE (Audio Wave & Video Bar) ---
+        // --- VISUALIZER ENGINE ---
         function initVisualizer(mediaId, canvasId, mode) {
             const media = document.getElementById(mediaId);
             const canvas = document.getElementById(canvasId);
@@ -1970,6 +1981,10 @@ MEDIA_TUBE_HTML = """
                 try {
                     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     currentAudioCtx = audioCtx;
+                    
+                    // Allow CORS specifically for visualizer logic if supported by browser/headers
+                    media.crossOrigin = "anonymous";
+                    
                     const analyser = audioCtx.createAnalyser();
                     analyser.fftSize = 64; 
                     
@@ -1997,15 +2012,15 @@ MEDIA_TUBE_HTML = """
                             
                             if(mode === 'wave') {
                                 ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-                                ctx.fillRect(x, 0, barWidth, barHeight); // Mirror Top
+                                ctx.fillRect(x, 0, barWidth, barHeight); 
                             } else {
-                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight); // Single Bottom
+                                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight); 
                             }
                             x += barWidth + 2;
                         }
                     }
                     draw();
-                } catch(e) { console.error("Visualizer Init Failed", e); }
+                } catch(e) { console.warn("Visualizer Init Alert (CORS might block specific raw bytes):", e); }
             }, {once: true});
         }
 
@@ -2071,5 +2086,7 @@ MEDIA_TUBE_HTML = """
 """
 
 @app.get("/view", response_class=HTMLResponse)
+@app.get("/video", response_class=HTMLResponse)
 async def serve_media_tube():
+    """Serves the frontend. Routes /view (Grid) and /video (Player) are handled dynamically inside JS."""
     return HTMLResponse(content=MEDIA_TUBE_HTML)
