@@ -1505,7 +1505,7 @@ async def websocket_max_endpoint(websocket: WebSocket):
     except Exception: app_metrics["active_ws"] -= 1
 
 # ==========================================
-# 11. QLYNK MEDIA TUBE (CINEMATIC VAULT, CUSTOM PLAYER & CC) - FIXED
+# 11. QLYNK MEDIA TUBE (CINEMATIC VAULT, CUSTOM PLAYER & CC)
 # ==========================================
 from fastapi import Query, Header, Cookie, HTTPException, Depends, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, FileResponse
@@ -1545,11 +1545,6 @@ def verify_view_access(password: str = Header(None), auth_token: str = Cookie(No
         elif expiry:
             del share_tokens_store[share_token] 
     raise HTTPException(status_code=401, detail="Access Expired or Denied.")
-
-def verify_auth(auth_token: str = Cookie(None)):
-    if auth_token and auth_token == SPACE_PASSWORD:
-        return auth_token
-    raise HTTPException(status_code=401, detail="Not authenticated.")
 
 # --- 🔗 Share Token API ---
 @app.post("/api/share/generate")
@@ -1671,7 +1666,7 @@ MEDIA_TUBE_HTML = """
         
         /* Audio Visuals */
         .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
-        .audio-visualizer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
+        .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
         @keyframes spin { 100% { transform: rotate(360deg); } }
         
         /* Action UI Overlay */
@@ -1727,7 +1722,7 @@ MEDIA_TUBE_HTML = """
         .related-card { display: flex; gap: 10px; cursor: pointer; text-decoration: none; color: inherit; padding: 5px; border-radius: 8px; transition: background 0.2s;}
         .related-card:hover { background: rgba(255,255,255,0.05); }
         .related-card .thumb-wrapper { width: 140px; border-radius: 8px; margin-bottom: 0; flex-shrink: 0;}
-        .related-info { display: flex; flex-direction: column; flex: 1; }
+        .related-info { display: flex; flex-direction: column; }
         .related-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; overflow: hidden; }
         .yt-pill { font-size: 12px; background: #ff0000; color: #fff; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-top: 4px; width: max-content;}
 
@@ -1761,7 +1756,7 @@ MEDIA_TUBE_HTML = """
     </div>
 
     <div class="container">
-        <h2 id="loadingText" style="text-align:center; color: var(--yt-muted); margin-top:50px;">🔄 Verifying Secure Token...</h2>
+        <h2 id="loadingText" style="text-align:center; color: var(--yt-muted); margin-top:50px;">Verifying Secure Token...</h2>
 
         <div id="homeView" class="video-grid hidden"></div>
 
@@ -1829,13 +1824,25 @@ MEDIA_TUBE_HTML = """
     </div>
 
     <script>
-        // --- CRITICAL FIX: Wait for DOM Ready ---
-        let isPageReady = false;
+        // --- AUTH & INITIALIZATION ---
+        const urlParams = new URLSearchParams(window.location.search);
+        const tokenFromUrl = urlParams.get('token');
+        if (tokenFromUrl) {
+            document.cookie = "share_token=" + tokenFromUrl + "; path=/; max-age=86400";
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
+        const isAdmin = document.cookie.includes('auth_token=');
+
+        const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
+        const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23bc8cff"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
+        
         let masterLibrary = [];
         let currentAudioCtx = null;
         let currentAnimationId = null;
         let activeSlug = null;
         let ytIdActive = null;
+        
+        // Universal Player State
         let activePlayer = null; 
         let ytPlayer = null;
         let controlTimeout;
@@ -1848,44 +1855,27 @@ MEDIA_TUBE_HTML = """
         let ytPollInterval = null;
         let pendingSubFile = null;
 
-        const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
-        const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23bc8cff"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
-        
-        // Determine if user is admin
-        const isAdmin = document.cookie.includes('auth_token=');
-
-        // Handle share token from URL
-        function handleTokenFromUrl() {
-            const urlParams = new URLSearchParams(window.location.search);
-            const tokenFromUrl = urlParams.get('token');
-            if (tokenFromUrl) {
-                document.cookie = "share_token=" + tokenFromUrl + "; path=/; max-age=86400";
-                window.history.replaceState({}, document.title, window.location.pathname);
-            }
-        }
-
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
             const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
-
         function formatTime(sec) {
             if(isNaN(sec)) return '0:00';
             let m = Math.floor(sec / 60); let s = Math.floor(sec % 60);
             return m + ':' + (s < 10 ? '0' : '') + s;
         }
-
         function getMediaType(m) {
             if(!m) return 'file'; if(m.startsWith('video/')) return 'video';
             if(m.startsWith('audio/')) return 'audio'; if(m.startsWith('image/')) return 'image';
             return 'file';
         }
         
+        // Robust YT Regex - Extract YouTube ID from URLs and plain IDs
         function extractYtId(url) {
             const patterns = [
                 /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))((\w|-){11})(?:\S+)?$/,
-                /^((\w|-){11})$/
+                /^((\w|-){11})$/ // Plain YouTube ID
             ];
             for(let p of patterns) {
                 const match = url.trim().match(p);
@@ -1894,6 +1884,7 @@ MEDIA_TUBE_HTML = """
             return null;
         }
 
+        // Dominant Color Engine with CORS fallback
         function applyDominantColor(imgSrc, fallback = '#bc8cff') {
             const img = new Image();
             img.crossOrigin = "Anonymous";
@@ -1918,49 +1909,26 @@ MEDIA_TUBE_HTML = """
             window.currentThemeColor = color;
         }
 
-        // --- INIT FUNCTION WITH ERROR HANDLING ---
         async function init() {
-            console.log("🔧 Initializing Qlynk Media Tube...");
-            handleTokenFromUrl();
-            
             try {
-                console.log("📡 Fetching media library...");
-                const res = await fetch('/api/media_library', {
-                    credentials: 'include',
-                    headers: { 'Accept': 'application/json' }
-                });
-                
-                console.log("📊 Response status:", res.status);
-                
-                if(res.status === 401) {
-                    document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED</b><br><small>Please authenticate first</small>";
-                    return;
-                }
-                
-                if(!res.ok) {
-                    throw new Error(`HTTP ${res.status}`);
-                }
-                
-                masterLibrary = await res.json();
-                console.log("✅ Loaded", masterLibrary.length, "media files");
+                const res = await fetch('/api/media_library');
+                if(res.status === 401) return document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED</b>";
                 
                 if(isAdmin) {
                     document.getElementById('shareBtn').style.display = 'block';
+                    document.getElementById('addSubBtn').style.display = 'flex';
+                } else {
+                    document.getElementById('wDownload').style.display = 'none';
+                    document.getElementById('addSubBtn').style.display = 'none';
                 }
                 
+                masterLibrary = await res.json();
                 document.getElementById('loadingText').classList.add('hidden');
-                isPageReady = true;
                 routeHandler();
-                
-            } catch(e) { 
-                console.error("❌ Init Error:", e);
-                document.getElementById('loadingText').innerHTML = "⚠️ <b>Connection Error</b><br><small>" + e.message + "</small>";
-            }
+            } catch(e) { document.getElementById('loadingText').innerText = "Connection Error."; }
         }
 
         function routeHandler() {
-            if (!isPageReady) return;
-            
             const path = window.location.pathname;
             const params = new URLSearchParams(window.location.search);
             
@@ -1968,7 +1936,7 @@ MEDIA_TUBE_HTML = """
             if(currentAudioCtx) { currentAudioCtx.close(); currentAudioCtx = null; }
             if(currentAnimationId) cancelAnimationFrame(currentAnimationId);
             if(ytPollInterval) clearInterval(ytPollInterval);
-            if(ytPlayer && typeof ytPlayer.destroy === 'function') ytPlayer.destroy();
+            if(ytPlayer && ytPlayer.destroy) ytPlayer.destroy();
             setThemeColor('#bc8cff');
 
             if(path === '/video' || path === '/video/') {
@@ -2004,23 +1972,17 @@ MEDIA_TUBE_HTML = """
                 const q = searchQuery.toLowerCase();
                 data = masterLibrary.filter(f => f.title.toLowerCase().includes(q) || f.slug.toLowerCase().includes(q));
             }
-            
-            if(data.length === 0) {
-                grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; padding: 40px; color: var(--yt-muted);">No media found</div>';
-                return;
-            }
-            
             data.forEach(f => {
                 const type = getMediaType(f.mime_type);
                 const card = document.createElement('a');
-                card.href = `/video?q=${f.slug}`; 
-                card.className = 'vid-card';
+                card.href = `/video?q=${f.slug}`; card.className = 'vid-card';
                 card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
                 card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge">${type}</div></div><div class="vid-title">${f.title}</div><div class="vid-meta">Vault • ${formatBytes(f.size_bytes)}</div>`;
                 grid.appendChild(card);
             });
         }
 
+        // --- MEDIA SESSION API (Bluetooth & Keyboard keys) ---
         function setupMediaSession(title, artist, artworkSrc) {
             if ('mediaSession' in navigator) {
                 navigator.mediaSession.metadata = new MediaMetadata({
@@ -2089,6 +2051,7 @@ MEDIA_TUBE_HTML = """
             `;
         }
 
+        // --- RENDER LOCAL WATCH PAGE ---
         async function renderWatchPage(slug) {
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('watchView').classList.remove('hidden');
@@ -2106,11 +2069,10 @@ MEDIA_TUBE_HTML = """
 
             const pw = document.getElementById('playerWrapper');
             const type = getMediaType(file.mime_type);
-            pw.innerHTML = ''; 
-            document.getElementById('videoVisualizer').style.display = 'none';
+            pw.innerHTML = ''; document.getElementById('videoVisualizer').style.display = 'none';
 
             let subs = [];
-            try { const r = await fetch(`/api/subtitles/list/${encodeURIComponent(slug)}`); if(r.ok) subs = await r.json(); } catch(e){console.log("Subs load error:", e)}
+            try { const r = await fetch(`/api/subtitles/list/${encodeURIComponent(slug)}`); if(r.ok) subs = await r.json(); } catch(e){}
             let trackHtml = subs.map((s,i) => `<track kind="subtitles" src="/sub/${s.sub_slug}" srclang="${s.language.substring(0,2).toLowerCase()}" label="${s.language}" ${i===0?'default':''}>`).join('');
 
             applyDominantColor(file.thumbnail || FALLBACK_THUMB);
@@ -2141,6 +2103,7 @@ MEDIA_TUBE_HTML = """
             
             const mediaEl = document.getElementById('mainMedia');
             if(mediaEl) {
+                // Map HTML5 Media to Universal Interface
                 activePlayer = {
                     play: () => mediaEl.play(),
                     pause: () => mediaEl.pause(),
@@ -2158,13 +2121,14 @@ MEDIA_TUBE_HTML = """
                 mediaEl.play().catch(e => console.log("Autoplay blocked."));
                 mediaEl.addEventListener('ended', handleMediaEnded);
                 mediaEl.ontimeupdate = updateProgressUI;
-                mediaEl.onplay = () => { const p = document.getElementById('pPlay'); if(p) p.innerText = '⏸'; };
-                mediaEl.onpause = () => { const p = document.getElementById('pPlay'); if(p) p.innerText = '▶'; };
+                mediaEl.onplay = () => document.getElementById('pPlay').innerText = '⏸';
+                mediaEl.onpause = () => document.getElementById('pPlay').innerText = '▶';
             }
             initCustomControls();
             renderHybridRelated(file.title);
         }
 
+        // --- RENDER YOUTUBE HYBRID PAGE ---
         function renderYtPage(ytId) {
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('watchView').classList.remove('hidden');
@@ -2183,6 +2147,7 @@ MEDIA_TUBE_HTML = """
             pw.innerHTML = `<div id="ytContainer" class="yt-container"><div id="ytPlayerDiv" style="width:100%; height:100%;"></div></div>` + getControlsHtml();
             document.getElementById('videoVisualizer').style.display = 'block';
 
+            // Init YT Player
             ytPlayer = new YT.Player('ytPlayerDiv', {
                 videoId: ytId,
                 width: '100%',
@@ -2200,6 +2165,7 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wTitle').innerText = ytPlayer.getVideoData().title;
             setupMediaSession(ytPlayer.getVideoData().title, 'YouTube Stream', `https://img.youtube.com/vi/${ytIdActive}/maxresdefault.jpg`);
             
+            // Map YT to Universal Interface
             activePlayer = {
                 play: () => ytPlayer.playVideo(),
                 pause: () => ytPlayer.pauseVideo(),
@@ -2216,15 +2182,18 @@ MEDIA_TUBE_HTML = """
 
             initCustomControls();
             
+            // Sync Quality Levels
             const qList = ytPlayer.getAvailableQualityLevels();
             if(qList && qList.length > 0) {
                 document.getElementById('ytQualitySection').style.display = 'block';
                 document.getElementById('pYtQualityList').innerHTML = qList.map(q => `<button class="btn" style="padding:4px 8px; font-size:11px;" onclick="ytPlayer.setPlaybackQuality('${q}')">${q}</button>`).join('');
             }
 
+            // Sync YT Captions to menu
             const ccList = document.getElementById('pCcList');
             if(ccList) {
-                ccList.innerHTML = `<div class="setting-item" onclick="ytPlayer.unloadModule('captions')">Off</div><div class="setting-item" onclick="ytPlayer.loadModule('captions')">Auto Enable YT CC</div>`;
+                ccList.innerHTML = `<div class="setting-item" onclick="ytPlayer.unloadModule('captions')">Off</div>
+                                    <div class="setting-item" onclick="ytPlayer.loadModule('captions')">Auto Enable YT CC</div>`;
             }
 
             ytPollInterval = setInterval(updateProgressUI, 500);
@@ -2233,7 +2202,6 @@ MEDIA_TUBE_HTML = """
 
         function onYtStateChange(event) {
             const pPlay = document.getElementById('pPlay');
-            if(!pPlay) return;
             if (event.data == YT.PlayerState.PLAYING) pPlay.innerText = '⏸';
             else if (event.data == YT.PlayerState.PAUSED) pPlay.innerText = '▶';
             else if (event.data == YT.PlayerState.ENDED) handleMediaEnded();
@@ -2270,15 +2238,14 @@ MEDIA_TUBE_HTML = """
             drawYt();
         }
 
+        // --- UNIVERSAL CONTROL LOGIC ---
         function updateProgressUI() {
             if(!activePlayer) return;
             const cur = activePlayer.currentTime();
             const dur = activePlayer.duration();
             const percent = dur > 0 ? (cur / dur) * 100 : 0;
-            const prog = document.getElementById('pSeekProg');
-            const time = document.getElementById('pTime');
-            if(prog) prog.style.width = `${percent}%`;
-            if(time) time.innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
+            document.getElementById('pSeekProg').style.width = `${percent}%`;
+            document.getElementById('pTime').innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
         }
 
         function initCustomControls() {
@@ -2289,8 +2256,6 @@ MEDIA_TUBE_HTML = """
             const pw = document.getElementById('playerWrapper');
             const pControls = document.getElementById('pControls');
             
-            if(!pPlay || !pSeek || !activePlayer) return;
-            
             pPlay.onclick = () => activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
             
             pSeek.onclick = (e) => {
@@ -2298,34 +2263,28 @@ MEDIA_TUBE_HTML = """
                 activePlayer.seek(((e.clientX - rect.left) / rect.width) * activePlayer.duration());
             };
 
-            if(pVol) pVol.oninput = (e) => { 
+            pVol.oninput = (e) => { 
                 activePlayer.setVolume(e.target.value); 
-                if(pMute) pMute.innerText = e.target.value > 0 ? '🔊' : '🔇'; 
+                pMute.innerText = e.target.value > 0 ? '🔊' : '🔇'; 
             };
             
-            if(pMute) pMute.onclick = () => { 
+            pMute.onclick = () => { 
                 activePlayer.toggleMute(); 
                 pMute.innerText = activePlayer.isMuted() ? '🔇' : '🔊'; 
-                if(pVol) pVol.value = activePlayer.isMuted() ? 0 : activePlayer.getVolume();
+                pVol.value = activePlayer.isMuted() ? 0 : activePlayer.getVolume();
             };
             
-            const pFull = document.getElementById('pFull');
-            if(pFull) pFull.onclick = () => { document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen(); };
-            
-            const pSetBtn = document.getElementById('pSetBtn');
-            if(pSetBtn) pSetBtn.onclick = (e) => { e.stopPropagation(); const menu = document.getElementById('pSettings'); if(menu) menu.classList.toggle('show'); };
-            
-            const pSpeedRange = document.getElementById('pSpeedRange');
-            if(pSpeedRange) pSpeedRange.oninput = (e) => { setSpeed(e.target.value); };
+            document.getElementById('pFull').onclick = () => { document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen(); };
+            document.getElementById('pSetBtn').onclick = (e) => { e.stopPropagation(); document.getElementById('pSettings').classList.toggle('show'); };
+            document.getElementById('pSpeedRange').oninput = (e) => { setSpeed(e.target.value); };
 
             pw.onmousemove = () => {
-                if(pControls) {
-                    pControls.classList.add('active');
-                    clearTimeout(controlTimeout);
-                    controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
-                }
+                pControls.classList.add('active');
+                clearTimeout(controlTimeout);
+                controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
             };
 
+            // Smart Center Click
             pw.onclick = (e) => {
                 if(e.target.closest('.custom-controls') || e.target.closest('.settings-menu')) return;
                 if(e.detail === 1) { 
@@ -2354,23 +2313,18 @@ MEDIA_TUBE_HTML = """
         window.setSpeed = function(val) {
             normalSpeed = parseFloat(val);
             if(activePlayer) activePlayer.setSpeed(normalSpeed);
-            const range = document.getElementById('pSpeedRange');
-            const display = document.getElementById('speedDisplay');
-            if(range) range.value = normalSpeed;
-            if(display) display.innerText = normalSpeed.toFixed(2) + 'x';
+            document.getElementById('pSpeedRange').value = normalSpeed;
+            document.getElementById('speedDisplay').innerText = normalSpeed.toFixed(2) + 'x';
         }
 
         window.toggleRepeat = function() {
             isRepeat = !isRepeat;
-            const btn = document.getElementById('pRepeat');
-            if(btn) btn.classList.toggle('active-state', isRepeat);
+            document.getElementById('pRepeat').classList.toggle('active-state', isRepeat);
             showActionIcon(isRepeat ? '🔁 Repeat On' : '🔁 Repeat Off');
         }
-
         window.toggleShuffle = function() {
             isShuffle = !isShuffle;
-            const btn = document.getElementById('pShuffle');
-            if(btn) btn.classList.toggle('active-state', isShuffle);
+            document.getElementById('pShuffle').classList.toggle('active-state', isShuffle);
             showActionIcon(isShuffle ? '🔀 Shuffle On' : '🔀 Shuffle Off');
         }
 
@@ -2380,7 +2334,7 @@ MEDIA_TUBE_HTML = """
                 const cards = document.querySelectorAll('.related-card');
                 if(cards.length > 0) cards[Math.floor(Math.random() * cards.length)].click();
             }
-            else { const autoplay = document.getElementById('autoplayToggle'); if(autoplay && autoplay.checked) nextVid(); }
+            else if (document.getElementById('autoplayToggle').checked) nextVid();
         }
 
         window.nextVid = function() {
@@ -2388,7 +2342,7 @@ MEDIA_TUBE_HTML = """
             if(nextItem) nextItem.click();
         }
 
-        // KEYBOARD & SPACE BAR LOGIC
+        // --- SPACEBAR PRO & KEYBOARD HUB ---
         document.addEventListener('keydown', (e) => {
             if(document.activeElement.tagName === 'INPUT' || !activePlayer) return;
 
@@ -2401,8 +2355,7 @@ MEDIA_TUBE_HTML = """
                     if(!isSpaceHolding && spacePressTime > 0 && (Date.now() - spacePressTime > 250)) {
                         isSpaceHolding = true;
                         activePlayer.setSpeed(2.0);
-                        const ff = document.getElementById('ffOverlay');
-                        if(ff) ff.style.display = 'flex';
+                        document.getElementById('ffOverlay').style.display = 'flex';
                     }
                     break;
                 case 'ArrowRight':
@@ -2413,16 +2366,14 @@ MEDIA_TUBE_HTML = """
                     e.preventDefault(); 
                     let vU = Math.min(1, activePlayer.getVolume() + 0.05);
                     activePlayer.setVolume(vU);
-                    const pVolUp = document.getElementById('pVol');
-                    if(pVolUp) pVolUp.value = vU;
+                    document.getElementById('pVol').value = vU;
                     showActionIcon(`🔊 ${Math.round(vU * 100)}%`);
                     break;
                 case 'ArrowDown':
                     e.preventDefault(); 
                     let vD = Math.max(0, activePlayer.getVolume() - 0.05);
                     activePlayer.setVolume(vD);
-                    const pVolDown = document.getElementById('pVol');
-                    if(pVolDown) pVolDown.value = vD;
+                    document.getElementById('pVol').value = vD;
                     showActionIcon(vD === 0 ? '🔇 Muted' : `🔉 ${Math.round(vD * 100)}%`);
                     break;
                 case 'KeyF': 
@@ -2435,7 +2386,6 @@ MEDIA_TUBE_HTML = """
                 case 'KeyM': 
                     e.preventDefault(); 
                     activePlayer.toggleMute();
-                    showActionIcon(activePlayer.isMuted() ? '
                     showActionIcon(activePlayer.isMuted() ? '🔇 Muted' : '🔊 Unmuted');
                     break;
             }
@@ -2449,8 +2399,7 @@ MEDIA_TUBE_HTML = """
                 if(isSpaceHolding) {
                     isSpaceHolding = false;
                     activePlayer.setSpeed(normalSpeed);
-                    const ff = document.getElementById('ffOverlay');
-                    if(ff) ff.style.display = 'none';
+                    document.getElementById('ffOverlay').style.display = 'none';
                 } else if(spacePressTime > 0 && (Date.now() - spacePressTime < 250)) {
                     if(activePlayer) {
                         activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
@@ -2467,11 +2416,9 @@ MEDIA_TUBE_HTML = """
                 e.preventDefault();
                 const cm = document.getElementById('customContext');
                 cm.style.display = 'block';
-                cm.style.left = `${e.pageX}px`; 
-                cm.style.top = `${e.pageY}px`;
+                cm.style.left = `${e.pageX}px`; cm.style.top = `${e.pageY}px`;
             }
         });
-
         document.addEventListener('click', (e) => {
             document.getElementById('customContext').style.display = 'none';
             const setMenu = document.getElementById('pSettings');
@@ -2479,11 +2426,7 @@ MEDIA_TUBE_HTML = """
                 setMenu.classList.remove('show');
             }
         });
-
-        window.copyVidUrl = function() { 
-            navigator.clipboard.writeText(window.location.href); 
-            alert("Video Link Copied!"); 
-        }
+        window.copyVidUrl = function() { navigator.clipboard.writeText(window.location.href); alert("Video Link Copied!"); }
 
         function initVisualizer(mediaId, canvasId, mode, dominantColor) {
             const media = document.getElementById(mediaId);
@@ -2500,8 +2443,7 @@ MEDIA_TUBE_HTML = """
                     const analyser = audioCtx.createAnalyser();
                     analyser.fftSize = 64;
                     const source = audioCtx.createMediaElementSource(media);
-                    source.connect(analyser); 
-                    analyser.connect(audioCtx.destination);
+                    source.connect(analyser); analyser.connect(audioCtx.destination);
                     const bufferLength = analyser.frequencyBinCount;
                     const dataArray = new Uint8Array(bufferLength);
                     
@@ -2530,6 +2472,7 @@ MEDIA_TUBE_HTML = """
         }
 
         // Subtitle Modal Functions
+        
         function openSubModal() { 
             document.getElementById('subModal').style.display = 'flex'; 
         }
@@ -2596,6 +2539,126 @@ MEDIA_TUBE_HTML = """
             // 1. Local Database Matches - Smart scoring
             const currentWords = queryText.toLowerCase().split(/[\s_\-\.]+/).filter(w => w.length > 2);
             let scoredList = masterLibrary.map(f => {
-                if(f.slug === activeSlug || f.slug === (ytIdActive ? null : activeSlug)) return {file: f, score: -*
-                    
+                if(f.slug === activeSlug || f.slug === (ytIdActive ? null : activeSlug)) return {file: f, score: -1};
+                let score = 0;
+                const titleWords = f.title.toLowerCase().split(/[\s_\-\.]+/);
+                titleWords.forEach(w => { if(currentWords.includes(w)) score++; });
+                return {file: f, score: score};
+            });
+            
+            scoredList.sort((a,b) => b.score - a.score || new Date(b.file.uploaded_at) - new Date(a.file.uploaded_at));
+            
+            scoredList.slice(0, 6).forEach(item => {
+                if(item.score === -1) return;
+                const f = item.file;
+                const card = document.createElement('a');
+                card.href = `/video?q=${f.slug}`; 
+                card.className = 'related-card';
+                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
+                card.innerHTML = `
+                    <div class="thumb-wrapper">
+                        <img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'">
+                        <div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div>
+                    </div>
+                    <div class="related-info">
+                        <div class="related-title">${f.title}</div>
+                        <span style="font-size:11px; color:var(--yt-muted);">Vault</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+
+            // 2. YouTube Public Suggest API (JSONP - No Auth Required)
+            if(queryText.length > 3 && !ytIdActive) {
+                const script = document.createElement('script');
+                window.ytSuggestCallback = function(data) {
+                    if(data && data[1]) {
+                        data[1].slice(0, 4).forEach(suggestion => {
+                            const sc = document.createElement('a');
+                            sc.className = 'related-card'; 
+                            sc.href = "#";
+                            sc.style.cursor = 'pointer';
+                            sc.onclick = (e) => { 
+                                e.preventDefault(); 
+                                document.getElementById('searchInput').value = suggestion[0]; 
+                                handleSearch(); 
+                            };
+                            sc.innerHTML = `
+                                <div class="thumb-wrapper" style="background:linear-gradient(135deg, #1a1a1a, #333); display:flex; align-items:center; justify-content:center; font-size:24px; border: 1px solid #ff0000;">
+                                    🔍
+                                </div>
+                                <div class="related-info">
+                                    <div class="related-title" style="text-transform:capitalize;">${suggestion[0]}</div>
+                                    <div class="yt-pill">YouTube</div>
+                                </div>
+                            `;
+                            container.appendChild(sc);
+                        });
+                    }
+                };
+                script.src = `https://suggestqueries.google.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(queryText)}&callback=ytSuggestCallback`;
+                script.onerror = () => console.log("YT suggestions unavailable");
+                document.body.appendChild(script);
+            }
+        }
+
+        // Theater Mode Toggle
+        function toggleTheater() { 
+            const watchView = document.getElementById('watchView');
+            watchView.classList.toggle('theater-mode'); 
+            window.scrollTo({top: 0, behavior: 'smooth'}); 
+        }
         
+        // Picture-in-Picture Toggle
+        async function togglePiP() {
+            const video = document.getElementById('mainMedia');
+            if(!video || video.tagName !== 'VIDEO') {
+                showActionIcon('🔲 PiP not available');
+                return;
+            }
+            try {
+                if (document.pictureInPictureElement) {
+                    await document.exitPictureInPicture();
+                    showActionIcon('🔲 PiP Disabled');
+                } else {
+                    await video.requestPictureInPicture();
+                    showActionIcon('🔲 PiP Enabled');
+                }
+            } catch(e) {
+                console.error('PiP error:', e);
+                showActionIcon('🔲 PiP Error');
+            }
+        }
+
+        // Generate Share Link for Guests
+        async function generateShareLink() {
+            try {
+                const res = await fetch('/api/share/generate', {method: 'POST'});
+                if(res.ok) {
+                    const data = await res.json();
+                    const shareUrl = window.location.origin + window.location.pathname + `?token=${data.share_token}`;
+                    navigator.clipboard.writeText(shareUrl);
+                    showActionIcon('🔗 Share link copied!');
+                } else {
+                    alert('Failed to generate share link.');
+                }
+            } catch(e) {
+                console.error('Share generation error:', e);
+                alert('Error generating share link.');
+            }
+        }
+
+        // Initialize app on page load
+        init();
+        
+        // Handle back/forward buttons
+        window.onpopstate = routeHandler;
+    </script>
+</body>
+</html>
+"""
+
+@app.get("/view", response_class=HTMLResponse)
+@app.get("/video", response_class=HTMLResponse)
+async def serve_media_tube():
+    return HTMLResponse(content=MEDIA_TUBE_HTML)
