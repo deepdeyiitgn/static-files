@@ -724,7 +724,7 @@ async def generate_sitemap(request: Request):
         """)
         
         # 2. Social & Redirects (Priority 0.7)
-        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/clock"]
+        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/status", "/clock"]
         for link in social_links:
             urls.append(f"""
             <url>
