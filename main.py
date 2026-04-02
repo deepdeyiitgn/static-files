@@ -1551,7 +1551,11 @@ async def generate_share_token(token: str = Depends(verify_auth)):
 @app.get("/api/media_library")
 async def fetch_media_library(access: dict = Depends(verify_view_access)):
     db = get_db()
-    filtered_files = [f for f in db.get("files", []) if not f.get("is_external")]
+    # Yahan condition add ki hai ki mime_type sirf video/ ya audio/ se start hona chahiye
+    filtered_files = [
+        f for f in db.get("files", []) 
+        if not f.get("is_external") and str(f.get("mime_type", "")).startswith(("video/", "audio/"))
+    ]
     return sorted(filtered_files, key=lambda x: x.get("uploaded_at", ""), reverse=True)
 
 # --- 📝 Subtitle Upload API ---
