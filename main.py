@@ -534,7 +534,7 @@ async def process_advanced_upload(
         "download_url": f"/f/{final_slug}"
     }
     
-@app.put("/api/rest/{current_slug}")
+@app.put("/api/rest/{current_slug:path}")
 async def update_file_metadata(
     current_slug: str,
     new_slug: str = Form(None),
@@ -563,7 +563,7 @@ async def update_file_metadata(
             
     raise HTTPException(status_code=404, detail="File record not found for update.")
 
-@app.delete("/api/rest/{slug}")
+@app.delete("/api/rest/{slug:path}")
 async def delete_file_permanently(slug: str, token: str = Depends(verify_auth)):
     db = get_db()
     files_list = db.get("files", [])
@@ -609,7 +609,7 @@ async def get_server_stats(token: str = Depends(verify_auth)):
 # ==========================================
 # 6. PUBLIC CONTENT DELIVERY NETWORK (CDN)
 # ==========================================
-@app.get("/f/{slug}")
+@app.get("/f/{slug:path}")
 async def serve_file_publicly(slug: str):
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
