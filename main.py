@@ -783,60 +783,92 @@ async def serve_sitemap(request: Request):
 
 
 # ==========================================
-# 10. MAX-LEVEL DATACENTER TELEMETRY (SEO OPTIMIZED)
+# 10. MAX-LEVEL DATACENTER TELEMETRY (SEO + SECURE LOGS)
 # ==========================================
 import psutil
 import platform
 import time
 import socket
 import logging
+import json
+import asyncio
+import aiohttp
 from collections import deque
 from fastapi import WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-# --- API & App Health Tracking ---
+# --- App Metrics & Memory Stores ---
 app_metrics = {
-    "req_total": 0,
-    "status_200": 0,
-    "status_4xx": 0,
-    "status_5xx": 0,
-    "active_ws": 0,
-    "start_time": time.time()
+    "req_total": 0, "status_200": 0, "status_4xx": 0, "status_5xx": 0,
+    "active_ws": 0, "start_time": time.time()
 }
 latency_history = deque([0]*20, maxlen=20)
-live_logs = deque(maxlen=30)
 
-# Custom Log Handler for Live Terminal
-class WebsocketLogHandler(logging.Handler):
-    def emit(self, record):
-        log_entry = self.format(record)
-        live_logs.appendleft(log_entry)
+hf_run_logs = deque(maxlen=50)
+hf_build_logs = deque(maxlen=50)
 
-ws_logger = logging.getLogger("QlynkHost")
-ws_handler = WebsocketLogHandler()
-ws_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', "%H:%M:%S"))
-ws_logger.addHandler(ws_handler)
+# Hardware Info Extractor (Direct from Linux Kernel)
+def get_deep_hardware_specs():
+    info = {"model": platform.processor(), "vendor": "Unknown", "cache": "Unknown", "microcode": "Unknown"}
+    try:
+        with open("/proc/cpuinfo", "r") as f:
+            for line in f:
+                if "model name" in line and info["model"] in ["", "Unknown"]:
+                    info["model"] = line.split(":")[1].strip()
+                elif "vendor_id" in line and info["vendor"] == "Unknown":
+                    info["vendor"] = line.split(":")[1].strip()
+                elif "cache size" in line and info["cache"] == "Unknown":
+                    info["cache"] = line.split(":")[1].strip()
+                elif "microcode" in line and info["microcode"] == "Unknown":
+                    info["microcode"] = line.split(":")[1].strip()
+    except:
+        pass
+    return info
 
-# Middleware to intercept and track API health
+# Background Async Task to Stream HF Space Logs
+async def stream_hf_logs(log_type="run", target_deque=hf_run_logs):
+    space_id = os.environ.get("SPACE_ID", "deydeep/static-files")
+    url = f"https://huggingface.co/api/spaces/{space_id}/logs/{log_type}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"} if HF_TOKEN else {}
+    
+    while True:
+        try:
+            if not HF_TOKEN:
+                target_deque.appendleft("[SYSTEM] HF_TOKEN missing. Cannot fetch HF logs.")
+                await asyncio.sleep(60)
+                continue
+                
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=None) as resp:
+                    async for line in resp.content:
+                        if line:
+                            decoded = line.decode('utf-8').strip()
+                            if decoded.startswith('data:'):
+                                log_data = decoded[5:].strip()
+                                try:
+                                    parsed = json.loads(log_data)
+                                    msg = parsed.get("message", "...")
+                                    timestamp = parsed.get("date", "").split("T")[1][:8] if "T" in parsed.get("date", "") else ""
+                                    target_deque.appendleft(f"[{timestamp}] {msg}" if timestamp else msg)
+                                except:
+                                    pass
+        except Exception as e:
+            await asyncio.sleep(5) # Reconnect delay on stream drop
+
+# API Health Middleware
 class TelemetryMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
         app_metrics["req_total"] += 1
-        
         try:
             response = await call_next(request)
-            if 200 <= response.status_code < 300:
-                app_metrics["status_200"] += 1
-            elif 400 <= response.status_code < 500:
-                app_metrics["status_4xx"] += 1
-            elif response.status_code >= 500:
-                app_metrics["status_5xx"] += 1
-                
-            process_time = (time.time() - start_time) * 1000
-            latency_history.append(process_time)
-            return response
+            if 200 <= response.status_code < 300: app_metrics["status_200"] += 1
+            elif 400 <= response.status_code < 500: app_metrics["status_4xx"] += 1
+            elif response.status_code >= 500: app_metrics["status_5xx"] += 1
             
+            latency_history.append((time.time() - start_time) * 1000)
+            return response
         except Exception as e:
             app_metrics["status_5xx"] += 1
             raise e
@@ -864,42 +896,30 @@ STATUS_DASHBOARD_HTML = """
     <link rel="apple-touch-icon" sizes="180x180" href="//qlynk.vercel.app/quicklink-logo.png">
 
     <style>
-        :root {
-            --bg-color: #0d1117; --card-bg: #161b22; --text-main: #c9d1d9; --text-muted: #8b949e;
-            --accent-green: #2ea043; --accent-blue: #58a6ff; --accent-red: #da3633; --accent-yellow: #d29922;
-            --border: #30363d;
-        }
+        :root { --bg-color: #0d1117; --card-bg: #161b22; --text-main: #c9d1d9; --text-muted: #8b949e; --accent-green: #2ea043; --accent-blue: #58a6ff; --accent-red: #da3633; --accent-yellow: #d29922; --border: #30363d; }
         body { font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 20px; font-size: 13px; }
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
         .header h1 { margin: 0; font-size: 20px; color: #fff; font-family: -apple-system, sans-serif;}
-        
         .badge-container { display: flex; gap: 15px; }
         .badge { background: #1f2428; border: 1px solid var(--border); padding: 5px 12px; border-radius: 6px; display: flex; align-items: center; gap: 8px; }
         .pulse { width: 8px; height: 8px; background-color: var(--accent-green); border-radius: 50%; box-shadow: 0 0 8px var(--accent-green); }
         .danger { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
-        
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; }
         .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 15px; }
         .card h2 { margin: 0 0 15px 0; font-size: 14px; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-        
         .stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px dashed #30363d; padding-bottom: 4px; }
         .stat-label { color: var(--text-muted); }
-        .stat-val { font-weight: bold; color: #fff; }
-        
+        .stat-val { font-weight: bold; color: #fff; text-align: right; }
         .bar-bg { width: 100%; background: #000; border-radius: 3px; height: 6px; overflow: hidden; margin-top: 5px; }
         .bar-fill { height: 100%; background: var(--accent-green); width: 0%; transition: width 0.3s ease; }
-        
         .core-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
         .core-box { background: #000; border: 1px solid var(--border); padding: 5px; border-radius: 4px; text-align: center; }
         .core-val { font-size: 11px; margin-top: 3px; color: var(--accent-green); }
-        
-        .terminal { background: #000; border: 1px solid var(--border); padding: 10px; border-radius: 6px; height: 200px; overflow-y: auto; font-size: 11px; color: #3fb950; line-height: 1.4; }
+        .terminal { background: #000; border: 1px solid var(--border); padding: 10px; border-radius: 6px; height: 250px; overflow-y: auto; font-size: 11px; color: #3fb950; line-height: 1.4; white-space: pre-wrap; word-wrap: break-word;}
         .terminal span.error { color: var(--accent-red); }
         .terminal span.warn { color: var(--accent-yellow); }
-        
-        .top-procs { font-size: 11px; width: 100%; border-collapse: collapse; }
-        .top-procs th { text-align: left; color: var(--text-muted); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
-        .top-procs td { padding: 4px 0; border-bottom: 1px dashed #30363d; }
+        .terminal span.sys { color: var(--accent-blue); }
+        .lock-screen { display:flex; justify-content:center; align-items:center; height:100%; color:var(--accent-red); font-weight:bold; font-size:14px; flex-direction:column; gap:10px;}
     </style>
 </head>
 <body>
@@ -907,19 +927,19 @@ STATUS_DASHBOARD_HTML = """
     <div class="header">
         <h1>⚡ Qlynk Storage Node - Status</h1>
         <div class="badge-container">
-            <div class="badge"><div class="pulse" id="ws-pulse"></div> WS Ping: <span id="ws-ping">...</span>ms</div>
-            <div class="badge">Uptime: <span id="sys-uptime">...</span></div>
+            <div class="badge"><div class="pulse" id="ws-pulse"></div> Ping: <span id="ws-ping">...</span>ms</div>
+            <div class="badge">Host Uptime: <span id="sys-uptime">...</span></div>
         </div>
     </div>
 
     <div class="grid">
         <div class="card">
-            <h2>🖥️ Host Architecture</h2>
-            <div class="stat-row"><span class="stat-label">Hostname</span><span class="stat-val" id="sys-host">Loading...</span></div>
-            <div class="stat-row"><span class="stat-label">OS</span><span class="stat-val" id="sys-os">Loading...</span></div>
-            <div class="stat-row"><span class="stat-label">Processor</span><span class="stat-val" id="sys-cpu-name" style="font-size:11px; max-width:60%; text-align:right;">Loading...</span></div>
-            <div class="stat-row"><span class="stat-label">CPU Freq</span><span class="stat-val" id="sys-cpu-freq">Loading...</span></div>
-            <div class="stat-row"><span class="stat-label">Python / Engine</span><span class="stat-val" id="sys-py">Loading...</span></div>
+            <h2>🖧 Deep Hardware Specs</h2>
+            <div class="stat-row"><span class="stat-label">CPU Model</span><span class="stat-val" id="spec-model" style="font-size:11px; max-width:65%;">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">CPU Vendor</span><span class="stat-val" id="spec-vendor">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">L-Cache Size</span><span class="stat-val" id="spec-cache">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">Microcode</span><span class="stat-val" id="spec-micro">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">Core Temp</span><span class="stat-val" id="spec-temp" style="color:var(--accent-yellow);">Loading...</span></div>
         </div>
 
         <div class="card">
@@ -927,125 +947,108 @@ STATUS_DASHBOARD_HTML = """
             <div class="stat-row"><span class="stat-label">Total System Load</span><span class="stat-val" id="cpu-total">0%</span></div>
             <div class="bar-bg" style="height: 10px; margin-bottom: 15px;"><div class="bar-fill" id="cpu-total-bar" style="background: var(--accent-blue);"></div></div>
             <div class="stat-label" style="font-size: 11px;">Logical Core Threads (<span id="core-count">0</span>)</div>
-            <div class="core-grid" id="cpu-cores">
-                </div>
+            <div class="core-grid" id="cpu-cores"></div>
         </div>
 
         <div class="card">
             <h2>💾 Memory & Storage I/O</h2>
             <div class="stat-row"><span class="stat-label">RAM Usage</span><span class="stat-val" id="ram-txt">0/0 GB</span></div>
             <div class="bar-bg"><div class="bar-fill" id="ram-bar"></div></div>
-            
-            <div class="stat-row" style="margin-top: 15px;"><span class="stat-label">Swap / Virtual Memory</span><span class="stat-val" id="swap-txt">0%</span></div>
+            <div class="stat-row" style="margin-top: 15px;"><span class="stat-label">Swap Memory</span><span class="stat-val" id="swap-txt">0%</span></div>
             <div class="bar-bg"><div class="bar-fill" id="swap-bar" style="background: var(--text-muted);"></div></div>
-
             <div class="stat-row" style="margin-top: 15px;"><span class="stat-label">Disk Storage (/)</span><span class="stat-val" id="disk-txt">0/0 GB</span></div>
             <div class="bar-bg"><div class="bar-fill" id="disk-bar" style="background: var(--accent-blue);"></div></div>
         </div>
 
         <div class="card">
             <h2>🌐 Network Bandwidth (Live)</h2>
-            <div class="stat-row"><span class="stat-label">Traffic Downloaded</span><span class="stat-val" id="net-total-recv">0 MB</span></div>
-            <div class="stat-row"><span class="stat-label">Traffic Uploaded</span><span class="stat-val" id="net-total-sent">0 MB</span></div>
+            <div class="stat-row"><span class="stat-label">Total Downloaded</span><span class="stat-val" id="net-total-recv">0 MB</span></div>
+            <div class="stat-row"><span class="stat-label">Total Uploaded</span><span class="stat-val" id="net-total-sent">0 MB</span></div>
             <div class="stat-row" style="margin-top: 15px; color: var(--accent-blue);"><span class="stat-label">Speed Down ⬇</span><span class="stat-val" id="net-speed-down">0 KB/s</span></div>
             <div class="stat-row" style="color: var(--accent-green);"><span class="stat-label">Speed Up ⬆</span><span class="stat-val" id="net-speed-up">0 KB/s</span></div>
             <div class="stat-row"><span class="stat-label">Active Connections</span><span class="stat-val" id="net-conn">0</span></div>
         </div>
 
         <div class="card">
-            <h2>🚦 API / Sub-System Health</h2>
+            <h2>🚦 API Health & Architecture</h2>
+            <div class="stat-row"><span class="stat-label">App Uptime</span><span class="stat-val" id="app-uptime">0m</span></div>
             <div class="stat-row"><span class="stat-label">Avg API Latency</span><span class="stat-val" id="api-latency">0 ms</span></div>
-            <div class="stat-row"><span class="stat-label">Total Requests Handled</span><span class="stat-val" id="api-req">0</span></div>
+            <div class="stat-row"><span class="stat-label">Requests Handled</span><span class="stat-val" id="api-req">0</span></div>
             <div class="stat-row"><span class="stat-label">200 OK (Success)</span><span class="stat-val" style="color:var(--accent-green);" id="api-200">0</span></div>
             <div class="stat-row"><span class="stat-label">4xx / 5xx (Errors)</span><span class="stat-val" style="color:var(--accent-red);" id="api-err">0</span></div>
-            <div class="stat-row"><span class="stat-label">Active WebSockets</span><span class="stat-val" id="api-ws">0</span></div>
+            <div class="stat-row"><span class="stat-label">Python Engine</span><span class="stat-val" id="sys-py">Loading...</span></div>
         </div>
 
-        <div class="card" style="grid-column: 1 / -1;">
-            <h2>📝 Live Server Logs (Terminal)</h2>
-            <div class="terminal" id="term-logs">
-                Waiting for server logs...
-            </div>
+        <div class="card" style="grid-column: span 1;">
+            <h2>🚀 Live Container Run Logs</h2>
+            <div class="terminal" id="term-run-logs">Waiting for connection...</div>
+        </div>
+        
+        <div class="card" style="grid-column: span 1;">
+            <h2>🛠️ Live Image Build Logs</h2>
+            <div class="terminal" id="term-build-logs">Waiting for connection...</div>
         </div>
     </div>
 
     <script>
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${window.location.host}/ws/status_max`;
-        let ws;
-        let pingStart = 0;
-
-        function updateColor(percent, el) {
-            if(percent < 60) el.style.backgroundColor = "var(--accent-green)";
-            else if(percent < 85) el.style.backgroundColor = "var(--accent-yellow)";
-            else el.style.backgroundColor = "var(--accent-red)";
-        }
+        let ws; let pingStart = 0;
 
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
             const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
+        
+        function parseLogText(l) {
+            let html = l.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            if(html.toLowerCase().includes('error') || html.toLowerCase().includes('traceback')) return `<span class="error">${html}</span>`;
+            if(html.toLowerCase().includes('warn')) return `<span class="warn">${html}</span>`;
+            if(html.includes('[SYSTEM]')) return `<span class="sys">${html}</span>`;
+            return html;
+        }
 
         function connectWS() {
             ws = new WebSocket(wsUrl);
-
             ws.onopen = () => {
                 document.getElementById('ws-pulse').classList.remove('danger');
-                setInterval(() => {
-                    if(ws.readyState === WebSocket.OPEN) {
-                        pingStart = performance.now();
-                        ws.send("ping");
-                    }
-                }, 2000);
+                setInterval(() => { if(ws.readyState === WebSocket.OPEN) { pingStart = performance.now(); ws.send("ping"); } }, 2000);
             };
 
             ws.onmessage = (event) => {
-                if(event.data === "pong") {
-                    document.getElementById('ws-ping').innerText = Math.round(performance.now() - pingStart);
-                    return;
-                }
-
+                if(event.data === "pong") { document.getElementById('ws-ping').innerText = Math.round(performance.now() - pingStart); return; }
                 const d = JSON.parse(event.data);
 
-                // App Health
-                document.getElementById('sys-uptime').innerText = d.app.uptime;
+                // App & System Health
+                document.getElementById('sys-uptime').innerText = d.sys.host_uptime;
+                document.getElementById('app-uptime').innerText = d.app.app_uptime;
                 document.getElementById('api-latency').innerText = `${d.app.avg_latency} ms`;
                 document.getElementById('api-req').innerText = d.app.req_total;
                 document.getElementById('api-200').innerText = d.app.status_200;
                 document.getElementById('api-err').innerText = d.app.status_4xx + d.app.status_5xx;
-                document.getElementById('api-ws').innerText = d.app.active_ws;
-
-                // Hardware / Architecture (Static Mostly)
-                document.getElementById('sys-host').innerText = d.sys.hostname;
-                document.getElementById('sys-os').innerText = d.sys.os;
-                document.getElementById('sys-cpu-name').innerText = d.sys.cpu_model;
-                document.getElementById('sys-cpu-freq').innerText = d.sys.cpu_freq;
+                
+                // Hardware Specs
                 document.getElementById('sys-py').innerText = d.sys.python;
+                document.getElementById('spec-model').innerText = d.hw.model;
+                document.getElementById('spec-vendor').innerText = d.hw.vendor;
+                document.getElementById('spec-cache').innerText = d.hw.cache;
+                document.getElementById('spec-micro').innerText = d.hw.microcode;
+                document.getElementById('spec-temp').innerText = d.hw.temp;
 
                 // CPU
                 document.getElementById('cpu-total').innerText = `${d.cpu.total}%`;
                 document.getElementById('cpu-total-bar').style.width = `${d.cpu.total}%`;
-                updateColor(d.cpu.total, document.getElementById('cpu-total-bar'));
-                
                 document.getElementById('core-count').innerText = d.cpu.cores.length;
-                const coresHTML = d.cpu.cores.map((c, i) => {
-                    let col = c < 60 ? 'var(--accent-green)' : (c < 85 ? 'var(--accent-yellow)' : 'var(--accent-red)');
-                    return `<div class="core-box">C${i}<div class="core-val" style="color:${col}">${c}%</div></div>`;
-                }).join('');
-                document.getElementById('cpu-cores').innerHTML = coresHTML;
+                document.getElementById('cpu-cores').innerHTML = d.cpu.cores.map((c, i) => `<div class="core-box">C${i}<div class="core-val" style="color:${c<60?'#2ea043':c<85?'#d29922':'#da3633'}">${c}%</div></div>`).join('');
 
                 // RAM & Disk
                 document.getElementById('ram-txt').innerText = `${d.ram.used_gb} / ${d.ram.total_gb} GB (${d.ram.percent}%)`;
                 document.getElementById('ram-bar').style.width = `${d.ram.percent}%`;
-                updateColor(d.ram.percent, document.getElementById('ram-bar'));
-
                 document.getElementById('swap-txt').innerText = `${d.swap.percent}%`;
                 document.getElementById('swap-bar').style.width = `${d.swap.percent}%`;
-
                 document.getElementById('disk-txt').innerText = `${d.disk.used_gb} / ${d.disk.total_gb} GB (${d.disk.percent}%)`;
                 document.getElementById('disk-bar').style.width = `${d.disk.percent}%`;
-                updateColor(d.disk.percent, document.getElementById('disk-bar'));
 
                 // Network
                 document.getElementById('net-total-recv').innerText = formatBytes(d.net.total_recv);
@@ -1054,15 +1057,14 @@ STATUS_DASHBOARD_HTML = """
                 document.getElementById('net-speed-up').innerText = `${formatBytes(d.net.speed_sent)}/s`;
                 document.getElementById('net-conn').innerText = d.net.active_conns;
 
-                // Logs
-                if(d.logs.length > 0) {
-                    const logHtml = d.logs.map(l => {
-                        let html = l;
-                        if(l.includes('[ERROR]')) html = `<span class="error">${l}</span>`;
-                        else if(l.includes('[WARNING]')) html = `<span class="warn">${l}</span>`;
-                        return html;
-                    }).join('<br>');
-                    document.getElementById('term-logs').innerHTML = logHtml;
+                // Secure Logs Render
+                if (!d.auth_valid) {
+                    const lockHtml = `<div class="lock-screen"><span>🔒 ACCESS DENIED</span><span style="color:var(--text-muted); font-weight:normal; text-align:center;">You are not logged in.<br>Authenticate via Dashboard to view container logs.</span></div>`;
+                    document.getElementById('term-run-logs').innerHTML = lockHtml;
+                    document.getElementById('term-build-logs').innerHTML = lockHtml;
+                } else {
+                    document.getElementById('term-run-logs').innerHTML = d.logs_run.length ? d.logs_run.map(parseLogText).join('<br>') : "<i>No run logs yet...</i>";
+                    document.getElementById('term-build-logs').innerHTML = d.logs_build.length ? d.logs_build.map(parseLogText).join('<br>') : "<i>No build logs yet...</i>";
                 }
             };
 
@@ -1072,25 +1074,29 @@ STATUS_DASHBOARD_HTML = """
                 setTimeout(connectWS, 3000);
             };
         }
-
         connectWS();
     </script>
 </body>
 </html>
 """
 
-def b_to_gb(b):
-    return round(b / (1024 ** 3), 2)
-
 def format_uptime(seconds):
     m, s = divmod(int(seconds), 60)
     h, m = divmod(m, 60)
     d, h = divmod(h, 24)
-    return f"{d}d {h}h {m}m"
+    if d > 0: return f"{d}d {h}h {m}m"
+    return f"{h}h {m}m {s}s"
+
+# Global task tracker
+bg_tasks_started = False
 
 @app.get("/status", response_class=HTMLResponse)
 async def serve_max_telemetry():
-    """Serves the SEO Optimized Datacenter Dashboard"""
+    global bg_tasks_started
+    if not bg_tasks_started:
+        asyncio.create_task(stream_hf_logs("run", hf_run_logs))
+        asyncio.create_task(stream_hf_logs("build", hf_build_logs))
+        bg_tasks_started = True
     return HTMLResponse(content=STATUS_DASHBOARD_HTML)
 
 @app.websocket("/ws/status_max")
@@ -1098,7 +1104,11 @@ async def websocket_max_endpoint(websocket: WebSocket):
     await websocket.accept()
     app_metrics["active_ws"] += 1
     
-    # Store previous network stats to calculate speed (bytes/sec)
+    # 🔒 Authentication Check via Cookie
+    auth_cookie = websocket.cookies.get("auth_token", "")
+    is_authenticated = (auth_cookie == os.environ.get("SPACE_PASSWORD")) and bool(auth_cookie)
+    
+    hw_info = get_deep_hardware_specs()
     prev_net = psutil.net_io_counters()
     prev_time = time.time()
     
@@ -1116,59 +1126,67 @@ async def websocket_max_endpoint(websocket: WebSocket):
             curr_net = psutil.net_io_counters()
             time_diff = curr_time - prev_time
             
-            speed_recv = (curr_net.bytes_recv - prev_net.bytes_recv) / time_diff if time_diff > 0 else 0
-            speed_sent = (curr_net.bytes_sent - prev_net.bytes_sent) / time_diff if time_diff > 0 else 0
-            
-            prev_net = curr_net
-            prev_time = curr_time
-
-            cpu_freq = psutil.cpu_freq()
-            freq_str = f"{round(cpu_freq.current, 2)} MHz" if cpu_freq else "Unknown"
+            speed_recv = max(0, (curr_net.bytes_recv - prev_net.bytes_recv) / time_diff) if time_diff > 0 else 0
+            speed_sent = max(0, (curr_net.bytes_sent - prev_net.bytes_sent) / time_diff) if time_diff > 0 else 0
+            prev_net, prev_time = curr_net, curr_time
 
             avg_lat = round(sum(latency_history)/len(latency_history), 2) if latency_history else 0
+            
+            # Thermal Extraction (Often restricted in containers)
+            temps = "N/A (Hypervisor Block)"
+            if hasattr(psutil, "sensors_temperatures"):
+                try:
+                    sensor_data = psutil.sensors_temperatures()
+                    if sensor_data:
+                        first_sensor = list(sensor_data.values())[0][0]
+                        temps = f"{first_sensor.current}°C"
+                except: pass
 
             payload = {
+                "auth_valid": is_authenticated,
                 "sys": {
-                    "hostname": socket.gethostname(),
-                    "os": f"{platform.system()} {platform.release()}",
-                    "cpu_model": platform.processor() or "Container Virtual CPU",
-                    "cpu_freq": freq_str,
-                    "python": platform.python_version()
+                    "python": platform.python_version(),
+                    "host_uptime": format_uptime(curr_time - psutil.boot_time())
+                },
+                "hw": {
+                    "model": hw_info["model"],
+                    "vendor": hw_info["vendor"],
+                    "cache": hw_info["cache"],
+                    "microcode": hw_info["microcode"],
+                    "temp": temps
                 },
                 "cpu": {
                     "total": psutil.cpu_percent(interval=None),
                     "cores": psutil.cpu_percent(interval=None, percpu=True)
                 },
                 "ram": {
-                    "total_gb": b_to_gb(psutil.virtual_memory().total),
-                    "used_gb": b_to_gb(psutil.virtual_memory().used),
+                    "total_gb": round(psutil.virtual_memory().total / (1024**3), 2),
+                    "used_gb": round(psutil.virtual_memory().used / (1024**3), 2),
                     "percent": psutil.virtual_memory().percent
                 },
-                "swap": {
-                    "percent": psutil.swap_memory().percent
-                },
+                "swap": {"percent": psutil.swap_memory().percent},
                 "disk": {
-                    "total_gb": b_to_gb(psutil.disk_usage('/').total),
-                    "used_gb": b_to_gb(psutil.disk_usage('/').used),
+                    "total_gb": round(psutil.disk_usage('/').total / (1024**3), 2),
+                    "used_gb": round(psutil.disk_usage('/').used / (1024**3), 2),
                     "percent": psutil.disk_usage('/').percent
                 },
                 "net": {
                     "total_recv": curr_net.bytes_recv,
                     "total_sent": curr_net.bytes_sent,
-                    "speed_recv": max(0, speed_recv),
-                    "speed_sent": max(0, speed_sent),
+                    "speed_recv": speed_recv,
+                    "speed_sent": speed_sent,
                     "active_conns": len(psutil.net_connections(kind='inet'))
                 },
                 "app": {
-                    "uptime": format_uptime(curr_time - app_metrics["start_time"]),
+                    "app_uptime": format_uptime(curr_time - app_metrics["start_time"]),
                     "req_total": app_metrics["req_total"],
                     "status_200": app_metrics["status_200"],
                     "status_4xx": app_metrics["status_4xx"],
                     "status_5xx": app_metrics["status_5xx"],
-                    "active_ws": app_metrics["active_ws"],
                     "avg_latency": avg_lat
                 },
-                "logs": list(live_logs)
+                "logs_run": list(hf_run_logs) if is_authenticated else [],
+                "logs_build": list(hf_build_logs) if is_authenticated else []
             }
             
             await websocket.send_json(payload)
@@ -1176,6 +1194,5 @@ async def websocket_max_endpoint(websocket: WebSocket):
 
     except WebSocketDisconnect:
         app_metrics["active_ws"] -= 1
-    except Exception as e:
+    except Exception:
         app_metrics["active_ws"] -= 1
-        ws_logger.error(f"WS Disconnected: {e}")
