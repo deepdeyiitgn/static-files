@@ -1633,9 +1633,12 @@ MEDIA_TUBE_HTML = """
         .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
         
         /* Audio Visuals */
-        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: none;}
+        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block;}
         .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
         @keyframes spin { 100% { transform: rotate(360deg); } }
+        
+        /* Hold 2x Overlay */
+        .fast-forward-overlay { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: bold; z-index: 100; display: none; pointer-events: none; align-items: center; gap: 8px;}
         
         /* Custom Controls Overlay */
         .custom-controls { position: absolute; bottom: 0; left: 0; width: 100%; padding: 40px 20px 10px 20px; background: linear-gradient(transparent, rgba(0,0,0,0.9)); z-index: 50; display: flex; flex-direction: column; gap: 8px; opacity: 0; transition: opacity 0.3s;}
@@ -1655,7 +1658,7 @@ MEDIA_TUBE_HTML = """
         
         /* Volume Slider */
         .volume-slider { width: 0px; opacity: 0; transition: 0.3s; -webkit-appearance: none; background: transparent; cursor: pointer;}
-        .volume-container:hover .volume-slider { width: 80px; opacity: 1; margin-left: 5px;}
+        .volume-container:hover .volume-slider, .volume-slider.active { width: 80px; opacity: 1; margin-left: 5px;}
         .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%; background: var(--yt-brand); margin-top: -4px;}
         .volume-slider::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px;}
 
@@ -1679,11 +1682,13 @@ MEDIA_TUBE_HTML = """
         .watch-actions { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--yt-border); padding-bottom: 15px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;}
         .channel-info { display: flex; align-items: center; gap: 12px; }
         .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--yt-brand); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 18px; color: #000;}
+        
         .action-btns { display: flex; gap: 10px; flex-wrap: wrap;}
         .btn { display: flex; align-items: center; gap: 8px; background: var(--yt-card); color: #fff; border: none; padding: 8px 16px; border-radius: 20px; cursor: pointer; font-weight: 500; font-size: 14px; transition: 0.2s;}
         .btn:hover { background: var(--yt-hover); }
         .btn-primary { background: var(--yt-text); color: #000; text-decoration: none;}
         .btn-share { background: var(--yt-brand); color: #000; font-weight: bold; border-radius: 4px; }
+        
         .description-box { background: var(--yt-card); padding: 15px; border-radius: 12px; font-size: 14px; line-height: 1.5; color: #e1e1e1;}
         .related-card { display: flex; gap: 10px; cursor: pointer; text-decoration: none; color: inherit; }
         .related-card .thumb-wrapper { width: 160px; border-radius: 8px; margin-bottom: 0; flex-shrink: 0;}
@@ -1746,14 +1751,15 @@ MEDIA_TUBE_HTML = """
                     <div class="action-btns">
                         <button class="btn" onclick="openSubModal()" id="addSubBtn" style="display:none;">➕ Add CC</button>
                         <button class="btn" onclick="toggleTheater()">📺 Theater</button>
+                        <button class="btn" onclick="togglePiP()" id="pipBtn">🔲 PiP</button>
                         <a href="#" class="btn btn-primary" id="wDownload" download>⬇ Download</a>
                     </div>
                 </div>
 
                 <div class="description-box">
                     <span id="wDate">Uploaded on: Unknown</span>
-                    <div id="wSlugPath" style="margin-bottom: 10px; font-family: monospace; color: var(--yt-brand);"></div>
-                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active.</p>
+                    <div id="subsList" style="margin-bottom: 10px; color: var(--accent-green); font-size:12px;"></div>
+                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active. Subtitles (SRT/VTT) auto-converted.</p>
                 </div>
             </div>
 
@@ -1808,6 +1814,8 @@ MEDIA_TUBE_HTML = """
         let activeSlug = null;
         let pendingSubFile = null;
         let controlTimeout;
+        let isSpaceHolding = false;
+        let normalSpeed = 1.0;
 
         // UI Utils
         function formatBytes(bytes) {
@@ -1904,8 +1912,7 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wTitle').innerText = file.title;
             document.getElementById('wSize').innerText = formatBytes(file.size_bytes);
             document.getElementById('wType').innerText = getMediaType(file.mime_type).toUpperCase();
-            document.getElementById('wDate').innerText = `Uploaded on: ${new Date(file.uploaded_at).toLocaleString()}`;
-            document.getElementById('wSlugPath').innerText = `Path: /f/${file.slug}`;
+            document.getElementById('wDate').innerText = `Uploaded on: ${new Date(file.uploaded_at).toLocaleDateString()}`;
             const downloadUrl = file.is_external ? file.external_url : `/f/${file.slug}`;
             document.getElementById('wDownload').href = downloadUrl;
 
@@ -1918,8 +1925,9 @@ MEDIA_TUBE_HTML = """
             try { const r = await fetch(`/api/subtitles/list/${slug}`); if(r.ok) subs = await r.json(); } catch(e){}
             let trackHtml = subs.map((s,i) => `<track kind="subtitles" src="/sub/${s.sub_slug}" srclang="${s.language.substring(0,2).toLowerCase()}" label="${s.language}" ${i===0?'default':''}>`).join('');
 
-            // Build Custom Player UI inside playerWrapper
+            // Build Custom Player UI
             const controlsHtml = `
+                <div class="fast-forward-overlay" id="ffOverlay">Fast Forwarding 2x ▶▶</div>
                 <div class="custom-controls" id="pControls">
                     <div class="seek-container" id="pSeek"><div class="seek-progress" id="pSeekProg"></div></div>
                     <div class="control-row">
@@ -1964,30 +1972,30 @@ MEDIA_TUBE_HTML = """
             else if(type === 'audio') {
                 const thumb = file.thumbnail || SVG_MUSIC;
                 pw.innerHTML = `
-                    <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'" style="display:block;">
+                    <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'">
                     <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
                     <audio id="mainMedia" src="${downloadUrl}" crossorigin="anonymous" autoplay style="display:none;">${trackHtml}</audio>
                 ` + controlsHtml;
-                // Wait for image to load to get dominant color
+                // Wait for image to get dominant color
                 const img = document.getElementById('audioDisc');
-                if(img.complete) {
-                    getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color));
-                } else {
-                    img.onload = () => getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color));
-                }
+                if(img.complete) { getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color)); }
+                else { img.onload = () => getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color)); }
                 initCustomControls();
             } 
             else if(type === 'image') { pw.innerHTML = `<img class="player-element" src="${downloadUrl}">`; }
             
-            // Populating CC List in Settings
+            // Populating CC List
             const ccList = document.getElementById('pCcList');
             if(ccList) {
                 ccList.innerHTML = `<div class="setting-item" onclick="setCC(-1)">Off</div>` + subs.map((s,i) => `<div class="setting-item" onclick="setCC(${i})">${s.language}</div>`).join('');
             }
+            if(subs.length > 0) document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
+            else document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
+            
             renderRelated(file);
         }
 
-        // --- CUSTOM CONTROLS LOGIC ---
+        // --- CUSTOM CONTROLS LOGIC & KEYBOARD SHORTCUTS ---
         function initCustomControls() {
             const media = document.getElementById('mainMedia');
             const pPlay = document.getElementById('pPlay');
@@ -2017,7 +2025,7 @@ MEDIA_TUBE_HTML = """
                 media.currentTime = percent * media.duration;
             };
 
-            // Volume
+            // Volume (Show slider visually on hover/focus)
             pVol.oninput = (e) => { media.volume = e.target.value; media.muted = false; pMute.innerText = media.volume > 0 ? '🔊' : '🔇'; };
             pMute.onclick = () => { media.muted = !media.muted; pMute.innerText = media.muted ? '🔇' : '🔊'; };
 
@@ -2027,7 +2035,7 @@ MEDIA_TUBE_HTML = """
                 else pw.requestFullscreen();
             };
 
-            // Settings & Speed
+            // Settings
             const setBtn = document.getElementById('pSetBtn');
             const setMenu = document.getElementById('pSettings');
             setBtn.onclick = () => setMenu.classList.toggle('show');
@@ -2040,24 +2048,22 @@ MEDIA_TUBE_HTML = """
                 controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
             };
 
-            // Double Tap to Seek (Mobile friendly)
+            // Mobile Double Tap
             pw.ondblclick = (e) => {
                 const rect = pw.getBoundingClientRect();
                 if(e.clientX > rect.left + rect.width/2) media.currentTime += 10;
                 else media.currentTime -= 10;
             };
 
-            // Autoplay Next
-            media.onended = () => {
-                if(document.getElementById('autoplayToggle').checked) nextVid();
-            };
+            media.onended = () => { if(document.getElementById('autoplayToggle').checked) nextVid(); };
         }
 
         window.setSpeed = function(val) {
             const media = document.getElementById('mainMedia');
-            if(media) media.playbackRate = parseFloat(val);
-            document.getElementById('pSpeedRange').value = val;
-            document.getElementById('speedDisplay').innerText = parseFloat(val).toFixed(2) + 'x';
+            normalSpeed = parseFloat(val);
+            if(media) media.playbackRate = normalSpeed;
+            document.getElementById('pSpeedRange').value = normalSpeed;
+            document.getElementById('speedDisplay').innerText = normalSpeed.toFixed(2) + 'x';
         }
 
         window.setCC = function(index) {
@@ -2073,6 +2079,79 @@ MEDIA_TUBE_HTML = """
             const nextItem = document.querySelector('.related-card');
             if(nextItem) nextItem.click();
         }
+
+        // --- ADVANCED KEYBOARD SHORTCUTS ---
+        document.addEventListener('keydown', (e) => {
+            if(document.activeElement.tagName === 'INPUT') return;
+            const media = document.getElementById('mainMedia');
+            if(!media) return;
+
+            switch(e.code) {
+                case 'Space': 
+                    e.preventDefault();
+                    if(!e.repeat && !isSpaceHolding) {
+                        isSpaceHolding = true;
+                        // Start 2x Playback
+                        media.playbackRate = 2.0;
+                        document.getElementById('ffOverlay').style.display = 'flex';
+                    }
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault(); media.currentTime += 5;
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault(); media.currentTime -= 5;
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault(); 
+                    media.volume = Math.min(1, media.volume + 0.05);
+                    document.getElementById('pVol').value = media.volume;
+                    document.getElementById('pVol').classList.add('active');
+                    setTimeout(() => document.getElementById('pVol').classList.remove('active'), 1000);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault(); 
+                    media.volume = Math.max(0, media.volume - 0.05);
+                    document.getElementById('pVol').value = media.volume;
+                    document.getElementById('pVol').classList.add('active');
+                    setTimeout(() => document.getElementById('pVol').classList.remove('active'), 1000);
+                    break;
+                case 'KeyF': 
+                    e.preventDefault(); 
+                    const pw = document.getElementById('playerWrapper');
+                    if(document.fullscreenElement) document.exitFullscreen();
+                    else pw.requestFullscreen(); 
+                    break;
+                case 'KeyT':
+                    e.preventDefault(); toggleTheater();
+                    break;
+                case 'KeyI':
+                    e.preventDefault(); togglePiP();
+                    break;
+                case 'KeyM': 
+                    e.preventDefault(); 
+                    media.muted = !media.muted; 
+                    document.getElementById('pMute').innerText = media.muted ? '🔇' : '🔊';
+                    break;
+            }
+        });
+
+        // Spacebar Release (Stop 2x speed)
+        document.addEventListener('keyup', (e) => {
+            if(document.activeElement.tagName === 'INPUT') return;
+            const media = document.getElementById('mainMedia');
+            if(!media) return;
+
+            if(e.code === 'Space') {
+                e.preventDefault();
+                isSpaceHolding = false;
+                media.playbackRate = normalSpeed;
+                document.getElementById('ffOverlay').style.display = 'none';
+                
+                // If it was just a quick click (no hold detected time-wise), toggle play/pause
+                media.paused ? media.play() : media.pause();
+            }
+        });
 
         // --- CONTEXT MENU (Disable native Right Click) ---
         document.addEventListener('contextmenu', (e) => {
@@ -2210,6 +2289,14 @@ MEDIA_TUBE_HTML = """
                 card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div></div><div class="related-info"><div class="related-title">${f.title}</div></div>`;
                 container.appendChild(card);
             });
+        }
+
+        function toggleTheater() { document.getElementById('watchView').classList.toggle('theater-mode'); window.scrollTo({top: 0, behavior: 'smooth'}); }
+        async function togglePiP() {
+            const video = document.getElementById('mainMedia');
+            if(!video || video.tagName !== 'VIDEO') return;
+            if (document.pictureInPictureElement) await document.exitPictureInPicture();
+            else await video.requestPictureInPicture();
         }
 
         init();
