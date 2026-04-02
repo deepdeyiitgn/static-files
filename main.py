@@ -783,178 +783,215 @@ async def serve_sitemap(request: Request):
 
 
 # ==========================================
-# 10. REAL-TIME TELEMETRY DASHBOARD (WEBSOCKETS)
+# 10. MAX-LEVEL DATACENTER TELEMETRY (SEO OPTIMIZED)
 # ==========================================
 import psutil
 import platform
 import time
-from fastapi import WebSocket, WebSocketDisconnect
+import socket
+import logging
+from collections import deque
+from fastapi import WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
-# HTML, CSS, and JS injected purely via memory (Virtual Route)
+# --- API & App Health Tracking ---
+app_metrics = {
+    "req_total": 0,
+    "status_200": 0,
+    "status_4xx": 0,
+    "status_5xx": 0,
+    "active_ws": 0,
+    "start_time": time.time()
+}
+latency_history = deque([0]*20, maxlen=20)
+live_logs = deque(maxlen=30)
+
+# Custom Log Handler for Live Terminal
+class WebsocketLogHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = self.format(record)
+        live_logs.appendleft(log_entry)
+
+ws_logger = logging.getLogger("QlynkHost")
+ws_handler = WebsocketLogHandler()
+ws_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s', "%H:%M:%S"))
+ws_logger.addHandler(ws_handler)
+
+# Middleware to intercept and track API health
+class TelemetryMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        app_metrics["req_total"] += 1
+        
+        try:
+            response = await call_next(request)
+            if 200 <= response.status_code < 300:
+                app_metrics["status_200"] += 1
+            elif 400 <= response.status_code < 500:
+                app_metrics["status_4xx"] += 1
+            elif response.status_code >= 500:
+                app_metrics["status_5xx"] += 1
+                
+            process_time = (time.time() - start_time) * 1000
+            latency_history.append(process_time)
+            return response
+            
+        except Exception as e:
+            app_metrics["status_5xx"] += 1
+            raise e
+
+app.add_middleware(TelemetryMiddleware)
+
+# --- Virtual HTML payload (SEO + Full Specs) ---
 STATUS_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlynk Host - Live Telemetry</title>
+    <title>Qlynk Storage Node - Live Telemetry & Status</title>
+    <meta name="description" content="Live system telemetry, network bandwidth, API health, and hardware processing status for the Qlynk Storage Node Datacenter.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://static.qlynk.me/status" />
+    
+    <link rel="icon" type="image/x-icon" href="//qlynk.vercel.app/favicon.ico" sizes="16x16 32x32">
+    <link rel="icon" type="image/png" sizes="16x16" href="//qlynk.vercel.app/quicklink-logo.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="//qlynk.vercel.app/quicklink-logo.png">
+    <link rel="icon" type="image/png" sizes="192x192" href="//qlynk.vercel.app/quicklink-logo.png">
+    <link rel="icon" type="image/png" sizes="512x512" href="//qlynk.vercel.app/quicklink-logo.png">
+    <link rel="icon" type="image/svg+xml" href="//qlynk.vercel.app/quicklink-logo.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="//qlynk.vercel.app/quicklink-logo.png">
+
     <style>
         :root {
-            --bg-color: #0d1117;
-            --card-bg: #161b22;
-            --text-main: #c9d1d9;
-            --text-muted: #8b949e;
-            --accent-green: #2ea043;
-            --accent-blue: #58a6ff;
-            --accent-red: #da3633;
+            --bg-color: #0d1117; --card-bg: #161b22; --text-main: #c9d1d9; --text-muted: #8b949e;
+            --accent-green: #2ea043; --accent-blue: #58a6ff; --accent-red: #da3633; --accent-yellow: #d29922;
             --border: #30363d;
         }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            background-color: var(--bg-color);
-            color: var(--text-main);
-            margin: 0;
-            padding: 20px;
-        }
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid var(--border);
-            padding-bottom: 20px;
-            margin-bottom: 20px;
-        }
-        .header h1 { margin: 0; font-size: 24px; color: #fff; }
-        .ping-badge {
-            background: #1f2428;
-            border: 1px solid var(--border);
-            padding: 5px 15px;
-            border-radius: 20px;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .pulse {
-            width: 10px; height: 10px;
-            background-color: var(--accent-green);
-            border-radius: 50%;
-            box-shadow: 0 0 10px var(--accent-green);
-            animation: blink 1.5s infinite;
-        }
-        @keyframes blink { 0% {opacity: 1;} 50% {opacity: 0.4;} 100% {opacity: 1;} }
+        body { font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 20px; font-size: 13px; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
+        .header h1 { margin: 0; font-size: 20px; color: #fff; font-family: -apple-system, sans-serif;}
         
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: 20px;
-        }
-        .card {
-            background: var(--card-bg);
-            border: 1px solid var(--border);
-            border-radius: 10px;
-            padding: 20px;
-        }
-        .card h2 { margin-top: 0; font-size: 18px; color: var(--accent-blue); border-bottom: 1px solid var(--border); padding-bottom: 10px;}
+        .badge-container { display: flex; gap: 15px; }
+        .badge { background: #1f2428; border: 1px solid var(--border); padding: 5px 12px; border-radius: 6px; display: flex; align-items: center; gap: 8px; }
+        .pulse { width: 8px; height: 8px; background-color: var(--accent-green); border-radius: 50%; box-shadow: 0 0 8px var(--accent-green); }
+        .danger { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
         
-        .metric { margin-bottom: 15px; }
-        .metric-header { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 5px; }
-        .bar-bg { width: 100%; background: var(--bg-color); border-radius: 5px; height: 10px; overflow: hidden; border: 1px solid var(--border); }
-        .bar-fill { height: 100%; background: var(--accent-green); width: 0%; transition: width 0.3s ease, background-color 0.3s ease; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 15px; }
+        .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 15px; }
+        .card h2 { margin: 0 0 15px 0; font-size: 14px; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
         
-        .api-list { list-style: none; padding: 0; margin: 0; }
-        .api-item { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px dashed var(--border); font-size: 14px;}
-        .status-ok { color: var(--accent-green); font-weight: bold; }
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px dashed #30363d; padding-bottom: 4px; }
+        .stat-label { color: var(--text-muted); }
+        .stat-val { font-weight: bold; color: #fff; }
         
-        #cpu-cores { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        .core-box { font-size: 12px; }
+        .bar-bg { width: 100%; background: #000; border-radius: 3px; height: 6px; overflow: hidden; margin-top: 5px; }
+        .bar-fill { height: 100%; background: var(--accent-green); width: 0%; transition: width 0.3s ease; }
         
-        .sys-info { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+        .core-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+        .core-box { background: #000; border: 1px solid var(--border); padding: 5px; border-radius: 4px; text-align: center; }
+        .core-val { font-size: 11px; margin-top: 3px; color: var(--accent-green); }
+        
+        .terminal { background: #000; border: 1px solid var(--border); padding: 10px; border-radius: 6px; height: 200px; overflow-y: auto; font-size: 11px; color: #3fb950; line-height: 1.4; }
+        .terminal span.error { color: var(--accent-red); }
+        .terminal span.warn { color: var(--accent-yellow); }
+        
+        .top-procs { font-size: 11px; width: 100%; border-collapse: collapse; }
+        .top-procs th { text-align: left; color: var(--text-muted); border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+        .top-procs td { padding: 4px 0; border-bottom: 1px dashed #30363d; }
     </style>
 </head>
 <body>
 
     <div class="header">
-        <h1>🚀 Datacenter Telemetry</h1>
-        <div class="ping-badge">
-            <div class="pulse" id="conn-indicator"></div>
-            WebSocket Ping: <span id="ping-text">...</span> ms
+        <h1>⚡ Qlynk Storage Node - Status</h1>
+        <div class="badge-container">
+            <div class="badge"><div class="pulse" id="ws-pulse"></div> WS Ping: <span id="ws-ping">...</span>ms</div>
+            <div class="badge">Uptime: <span id="sys-uptime">...</span></div>
         </div>
     </div>
 
     <div class="grid">
         <div class="card">
-            <h2>🌐 Sub-Systems Health</h2>
-            <ul class="api-list">
-                <li class="api-item"><span>Mega REST API Engine</span> <span class="status-ok">ONLINE</span></li>
-                <li class="api-item"><span>YT-DLP Processing Core</span> <span class="status-ok">STANDBY</span></li>
-                <li class="api-item"><span>Dataset Database Tunnel</span> <span class="status-ok">CONNECTED</span></li>
-                <li class="api-item"><span>Frontend CDN Delivery</span> <span class="status-ok">ACTIVE</span></li>
-                <li class="api-item"><span>Virtual Sitemap Cache</span> <span class="status-ok">RUNNING</span></li>
-            </ul>
+            <h2>🖥️ Host Architecture</h2>
+            <div class="stat-row"><span class="stat-label">Hostname</span><span class="stat-val" id="sys-host">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">OS</span><span class="stat-val" id="sys-os">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">Processor</span><span class="stat-val" id="sys-cpu-name" style="font-size:11px; max-width:60%; text-align:right;">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">CPU Freq</span><span class="stat-val" id="sys-cpu-freq">Loading...</span></div>
+            <div class="stat-row"><span class="stat-label">Python / Engine</span><span class="stat-val" id="sys-py">Loading...</span></div>
         </div>
 
         <div class="card">
-            <h2>💾 Memory & Storage</h2>
-            <div class="metric">
-                <div class="metric-header"><span>RAM Usage</span> <span id="ram-text">0 / 0 GB (0%)</span></div>
-                <div class="bar-bg"><div class="bar-fill" id="ram-bar"></div></div>
-            </div>
-            <div class="metric">
-                <div class="metric-header"><span>Virtual Memory (Swap)</span> <span id="swap-text">0%</span></div>
-                <div class="bar-bg"><div class="bar-fill" id="swap-bar" style="background: #8b949e;"></div></div>
-            </div>
-            <div class="metric" style="margin-top: 20px;">
-                <div class="metric-header"><span>System ROM (Disk /)</span> <span id="disk-text">0 / 0 GB (0%)</span></div>
-                <div class="bar-bg"><div class="bar-fill" id="disk-bar" style="background: var(--accent-blue);"></div></div>
-            </div>
-        </div>
-
-        <div class="card">
-            <h2>⚙️ Processor Core Threads</h2>
-            <div class="metric">
-                <div class="metric-header"><span>Total CPU Load</span> <span id="cpu-total-text">0%</span></div>
-                <div class="bar-bg" style="height: 15px;"><div class="bar-fill" id="cpu-total-bar" style="background: var(--accent-blue);"></div></div>
-            </div>
-            <div id="cpu-cores" style="margin-top: 15px;">
+            <h2>⚙️ Multi-Core Processing</h2>
+            <div class="stat-row"><span class="stat-label">Total System Load</span><span class="stat-val" id="cpu-total">0%</span></div>
+            <div class="bar-bg" style="height: 10px; margin-bottom: 15px;"><div class="bar-fill" id="cpu-total-bar" style="background: var(--accent-blue);"></div></div>
+            <div class="stat-label" style="font-size: 11px;">Logical Core Threads (<span id="core-count">0</span>)</div>
+            <div class="core-grid" id="cpu-cores">
                 </div>
         </div>
 
         <div class="card">
-            <h2>🖥️ Host System Info</h2>
-            <div class="sys-info">
-                <strong>OS:</strong> <span id="sys-os">Loading...</span><br>
-                <strong>Architecture:</strong> <span id="sys-arch">Loading...</span><br>
-                <strong>Processor:</strong> <span id="sys-proc">Loading...</span><br>
-                <strong>Boot Time:</strong> <span id="sys-boot">Loading...</span><br>
-                <strong>Python Core:</strong> <span id="sys-py">Loading...</span><br>
-                <div style="margin-top: 10px; font-size: 11px; color: var(--accent-red);">
-                    *Heat/Thermal sensors might be restricted by container hypervisor.
-                </div>
+            <h2>💾 Memory & Storage I/O</h2>
+            <div class="stat-row"><span class="stat-label">RAM Usage</span><span class="stat-val" id="ram-txt">0/0 GB</span></div>
+            <div class="bar-bg"><div class="bar-fill" id="ram-bar"></div></div>
+            
+            <div class="stat-row" style="margin-top: 15px;"><span class="stat-label">Swap / Virtual Memory</span><span class="stat-val" id="swap-txt">0%</span></div>
+            <div class="bar-bg"><div class="bar-fill" id="swap-bar" style="background: var(--text-muted);"></div></div>
+
+            <div class="stat-row" style="margin-top: 15px;"><span class="stat-label">Disk Storage (/)</span><span class="stat-val" id="disk-txt">0/0 GB</span></div>
+            <div class="bar-bg"><div class="bar-fill" id="disk-bar" style="background: var(--accent-blue);"></div></div>
+        </div>
+
+        <div class="card">
+            <h2>🌐 Network Bandwidth (Live)</h2>
+            <div class="stat-row"><span class="stat-label">Traffic Downloaded</span><span class="stat-val" id="net-total-recv">0 MB</span></div>
+            <div class="stat-row"><span class="stat-label">Traffic Uploaded</span><span class="stat-val" id="net-total-sent">0 MB</span></div>
+            <div class="stat-row" style="margin-top: 15px; color: var(--accent-blue);"><span class="stat-label">Speed Down ⬇</span><span class="stat-val" id="net-speed-down">0 KB/s</span></div>
+            <div class="stat-row" style="color: var(--accent-green);"><span class="stat-label">Speed Up ⬆</span><span class="stat-val" id="net-speed-up">0 KB/s</span></div>
+            <div class="stat-row"><span class="stat-label">Active Connections</span><span class="stat-val" id="net-conn">0</span></div>
+        </div>
+
+        <div class="card">
+            <h2>🚦 API / Sub-System Health</h2>
+            <div class="stat-row"><span class="stat-label">Avg API Latency</span><span class="stat-val" id="api-latency">0 ms</span></div>
+            <div class="stat-row"><span class="stat-label">Total Requests Handled</span><span class="stat-val" id="api-req">0</span></div>
+            <div class="stat-row"><span class="stat-label">200 OK (Success)</span><span class="stat-val" style="color:var(--accent-green);" id="api-200">0</span></div>
+            <div class="stat-row"><span class="stat-label">4xx / 5xx (Errors)</span><span class="stat-val" style="color:var(--accent-red);" id="api-err">0</span></div>
+            <div class="stat-row"><span class="stat-label">Active WebSockets</span><span class="stat-val" id="api-ws">0</span></div>
+        </div>
+
+        <div class="card" style="grid-column: 1 / -1;">
+            <h2>📝 Live Server Logs (Terminal)</h2>
+            <div class="terminal" id="term-logs">
+                Waiting for server logs...
             </div>
         </div>
     </div>
 
     <script>
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const wsUrl = `${protocol}//${window.location.host}/ws/status`;
+        const wsUrl = `${protocol}//${window.location.host}/ws/status_max`;
         let ws;
         let pingStart = 0;
 
-        function updateColor(percent, elementId) {
-            const el = document.getElementById(elementId);
+        function updateColor(percent, el) {
             if(percent < 60) el.style.backgroundColor = "var(--accent-green)";
-            else if(percent < 85) el.style.backgroundColor = "#d29922"; // Yellow
+            else if(percent < 85) el.style.backgroundColor = "var(--accent-yellow)";
             else el.style.backgroundColor = "var(--accent-red)";
         }
 
-        function connectWebSocket() {
+        function formatBytes(bytes) {
+            if(bytes === 0) return '0 B';
+            const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function connectWS() {
             ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
-                document.getElementById('conn-indicator').style.backgroundColor = 'var(--accent-green)';
-                document.getElementById('conn-indicator').style.animation = 'blink 1s infinite';
-                // Start pinging mechanism
+                document.getElementById('ws-pulse').classList.remove('danger');
                 setInterval(() => {
                     if(ws.readyState === WebSocket.OPEN) {
                         pingStart = performance.now();
@@ -964,138 +1001,181 @@ STATUS_DASHBOARD_HTML = """
             };
 
             ws.onmessage = (event) => {
-                // Handle Ping Response
                 if(event.data === "pong") {
-                    const latency = Math.round(performance.now() - pingStart);
-                    document.getElementById('ping-text').innerText = latency;
+                    document.getElementById('ws-ping').innerText = Math.round(performance.now() - pingStart);
                     return;
                 }
 
-                // Handle Telemetry JSON
-                const data = JSON.parse(event.data);
+                const d = JSON.parse(event.data);
+
+                // App Health
+                document.getElementById('sys-uptime').innerText = d.app.uptime;
+                document.getElementById('api-latency').innerText = `${d.app.avg_latency} ms`;
+                document.getElementById('api-req').innerText = d.app.req_total;
+                document.getElementById('api-200').innerText = d.app.status_200;
+                document.getElementById('api-err').innerText = d.app.status_4xx + d.app.status_5xx;
+                document.getElementById('api-ws').innerText = d.app.active_ws;
+
+                // Hardware / Architecture (Static Mostly)
+                document.getElementById('sys-host').innerText = d.sys.hostname;
+                document.getElementById('sys-os').innerText = d.sys.os;
+                document.getElementById('sys-cpu-name').innerText = d.sys.cpu_model;
+                document.getElementById('sys-cpu-freq').innerText = d.sys.cpu_freq;
+                document.getElementById('sys-py').innerText = d.sys.python;
+
+                // CPU
+                document.getElementById('cpu-total').innerText = `${d.cpu.total}%`;
+                document.getElementById('cpu-total-bar').style.width = `${d.cpu.total}%`;
+                updateColor(d.cpu.total, document.getElementById('cpu-total-bar'));
                 
-                // RAM
-                document.getElementById('ram-text').innerText = `${data.ram.used_gb} / ${data.ram.total_gb} GB (${data.ram.percent}%)`;
-                document.getElementById('ram-bar').style.width = `${data.ram.percent}%`;
-                updateColor(data.ram.percent, 'ram-bar');
+                document.getElementById('core-count').innerText = d.cpu.cores.length;
+                const coresHTML = d.cpu.cores.map((c, i) => {
+                    let col = c < 60 ? 'var(--accent-green)' : (c < 85 ? 'var(--accent-yellow)' : 'var(--accent-red)');
+                    return `<div class="core-box">C${i}<div class="core-val" style="color:${col}">${c}%</div></div>`;
+                }).join('');
+                document.getElementById('cpu-cores').innerHTML = coresHTML;
 
-                // Swap
-                document.getElementById('swap-text').innerText = `${data.swap.percent}%`;
-                document.getElementById('swap-bar').style.width = `${data.swap.percent}%`;
+                // RAM & Disk
+                document.getElementById('ram-txt').innerText = `${d.ram.used_gb} / ${d.ram.total_gb} GB (${d.ram.percent}%)`;
+                document.getElementById('ram-bar').style.width = `${d.ram.percent}%`;
+                updateColor(d.ram.percent, document.getElementById('ram-bar'));
 
-                // Disk
-                document.getElementById('disk-text').innerText = `${data.disk.used_gb} / ${data.disk.total_gb} GB (${data.disk.percent}%)`;
-                document.getElementById('disk-bar').style.width = `${data.disk.percent}%`;
-                updateColor(data.disk.percent, 'disk-bar');
+                document.getElementById('swap-txt').innerText = `${d.swap.percent}%`;
+                document.getElementById('swap-bar').style.width = `${d.swap.percent}%`;
 
-                // CPU Total
-                document.getElementById('cpu-total-text').innerText = `${data.cpu.total_percent}%`;
-                document.getElementById('cpu-total-bar').style.width = `${data.cpu.total_percent}%`;
-                updateColor(data.cpu.total_percent, 'cpu-total-bar');
+                document.getElementById('disk-txt').innerText = `${d.disk.used_gb} / ${d.disk.total_gb} GB (${d.disk.percent}%)`;
+                document.getElementById('disk-bar').style.width = `${d.disk.percent}%`;
+                updateColor(d.disk.percent, document.getElementById('disk-bar'));
 
-                // CPU Individual Cores
-                const coresContainer = document.getElementById('cpu-cores');
-                coresContainer.innerHTML = '';
-                data.cpu.cores_percent.forEach((percent, index) => {
-                    let color = "var(--accent-green)";
-                    if(percent > 60) color = "#d29922";
-                    if(percent > 85) color = "var(--accent-red)";
-                    
-                    coresContainer.innerHTML += `
-                        <div class="core-box">
-                            <div style="display:flex; justify-content:space-between;"><span>Core ${index}</span><span>${percent}%</span></div>
-                            <div class="bar-bg" style="height:6px; margin-top:3px;"><div class="bar-fill" style="width:${percent}%; background:${color};"></div></div>
-                        </div>
-                    `;
-                });
+                // Network
+                document.getElementById('net-total-recv').innerText = formatBytes(d.net.total_recv);
+                document.getElementById('net-total-sent').innerText = formatBytes(d.net.total_sent);
+                document.getElementById('net-speed-down').innerText = `${formatBytes(d.net.speed_recv)}/s`;
+                document.getElementById('net-speed-up').innerText = `${formatBytes(d.net.speed_sent)}/s`;
+                document.getElementById('net-conn').innerText = d.net.active_conns;
 
-                // System Info (Set once mostly)
-                document.getElementById('sys-os').innerText = data.system.os;
-                document.getElementById('sys-arch').innerText = data.system.machine;
-                document.getElementById('sys-proc').innerText = data.system.processor || "Container Virtual CPU";
-                document.getElementById('sys-boot').innerText = data.system.boot_time;
-                document.getElementById('sys-py').innerText = data.system.python_ver;
+                // Logs
+                if(d.logs.length > 0) {
+                    const logHtml = d.logs.map(l => {
+                        let html = l;
+                        if(l.includes('[ERROR]')) html = `<span class="error">${l}</span>`;
+                        else if(l.includes('[WARNING]')) html = `<span class="warn">${l}</span>`;
+                        return html;
+                    }).join('<br>');
+                    document.getElementById('term-logs').innerHTML = logHtml;
+                }
             };
 
             ws.onclose = () => {
-                document.getElementById('conn-indicator').style.backgroundColor = 'var(--accent-red)';
-                document.getElementById('conn-indicator').style.animation = 'none';
-                document.getElementById('ping-text').innerText = "DISCONNECTED";
-                setTimeout(connectWebSocket, 3000); // Auto-reconnect
+                document.getElementById('ws-pulse').classList.add('danger');
+                document.getElementById('ws-ping').innerText = "DISC";
+                setTimeout(connectWS, 3000);
             };
         }
 
-        connectWebSocket();
+        connectWS();
     </script>
 </body>
 </html>
 """
 
-def bytes_to_gb(bytes_value):
-    return round(bytes_value / (1024 ** 3), 2)
+def b_to_gb(b):
+    return round(b / (1024 ** 3), 2)
+
+def format_uptime(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    d, h = divmod(h, 24)
+    return f"{d}d {h}h {m}m"
 
 @app.get("/status", response_class=HTMLResponse)
-async def serve_telemetry_dashboard():
-    """Serves the Virtual HTML for the Telemetry Dashboard"""
+async def serve_max_telemetry():
+    """Serves the SEO Optimized Datacenter Dashboard"""
     return HTMLResponse(content=STATUS_DASHBOARD_HTML)
 
-@app.websocket("/ws/status")
-async def websocket_telemetry_endpoint(websocket: WebSocket):
-    """Real-Time Tunnel for Server Metrics"""
+@app.websocket("/ws/status_max")
+async def websocket_max_endpoint(websocket: WebSocket):
     await websocket.accept()
+    app_metrics["active_ws"] += 1
+    
+    # Store previous network stats to calculate speed (bytes/sec)
+    prev_net = psutil.net_io_counters()
+    prev_time = time.time()
+    
     try:
         while True:
-            # Check for incoming pings to calculate frontend latency
             try:
                 msg = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
                 if msg == "ping":
                     await websocket.send_text("pong")
                     continue
             except asyncio.TimeoutError:
-                pass # Normal, no ping received this cycle
+                pass
 
-            # Gather Live Hardware Telemetry
-            cpu_total = psutil.cpu_percent(interval=None)
-            cpu_cores = psutil.cpu_percent(interval=None, percpu=True)
-            ram = psutil.virtual_memory()
-            swap = psutil.swap_memory()
-            disk = psutil.disk_usage('/')
+            curr_time = time.time()
+            curr_net = psutil.net_io_counters()
+            time_diff = curr_time - prev_time
             
-            boot_time = datetime.fromtimestamp(psutil.boot_time()).strftime("%Y-%m-%d %H:%M:%S")
+            speed_recv = (curr_net.bytes_recv - prev_net.bytes_recv) / time_diff if time_diff > 0 else 0
+            speed_sent = (curr_net.bytes_sent - prev_net.bytes_sent) / time_diff if time_diff > 0 else 0
+            
+            prev_net = curr_net
+            prev_time = curr_time
+
+            cpu_freq = psutil.cpu_freq()
+            freq_str = f"{round(cpu_freq.current, 2)} MHz" if cpu_freq else "Unknown"
+
+            avg_lat = round(sum(latency_history)/len(latency_history), 2) if latency_history else 0
 
             payload = {
+                "sys": {
+                    "hostname": socket.gethostname(),
+                    "os": f"{platform.system()} {platform.release()}",
+                    "cpu_model": platform.processor() or "Container Virtual CPU",
+                    "cpu_freq": freq_str,
+                    "python": platform.python_version()
+                },
                 "cpu": {
-                    "total_percent": cpu_total,
-                    "cores_percent": cpu_cores,
-                    "logical_cores": psutil.cpu_count(logical=True),
-                    "physical_cores": psutil.cpu_count(logical=False)
+                    "total": psutil.cpu_percent(interval=None),
+                    "cores": psutil.cpu_percent(interval=None, percpu=True)
                 },
                 "ram": {
-                    "total_gb": bytes_to_gb(ram.total),
-                    "used_gb": bytes_to_gb(ram.used),
-                    "percent": ram.percent
+                    "total_gb": b_to_gb(psutil.virtual_memory().total),
+                    "used_gb": b_to_gb(psutil.virtual_memory().used),
+                    "percent": psutil.virtual_memory().percent
                 },
                 "swap": {
-                    "percent": swap.percent
+                    "percent": psutil.swap_memory().percent
                 },
                 "disk": {
-                    "total_gb": bytes_to_gb(disk.total),
-                    "used_gb": bytes_to_gb(disk.used),
-                    "percent": disk.percent
+                    "total_gb": b_to_gb(psutil.disk_usage('/').total),
+                    "used_gb": b_to_gb(psutil.disk_usage('/').used),
+                    "percent": psutil.disk_usage('/').percent
                 },
-                "system": {
-                    "os": f"{platform.system()} {platform.release()}",
-                    "machine": platform.machine(),
-                    "processor": platform.processor(),
-                    "boot_time": boot_time,
-                    "python_ver": platform.python_version()
-                }
+                "net": {
+                    "total_recv": curr_net.bytes_recv,
+                    "total_sent": curr_net.bytes_sent,
+                    "speed_recv": max(0, speed_recv),
+                    "speed_sent": max(0, speed_sent),
+                    "active_conns": len(psutil.net_connections(kind='inet'))
+                },
+                "app": {
+                    "uptime": format_uptime(curr_time - app_metrics["start_time"]),
+                    "req_total": app_metrics["req_total"],
+                    "status_200": app_metrics["status_200"],
+                    "status_4xx": app_metrics["status_4xx"],
+                    "status_5xx": app_metrics["status_5xx"],
+                    "active_ws": app_metrics["active_ws"],
+                    "avg_latency": avg_lat
+                },
+                "logs": list(live_logs)
             }
             
             await websocket.send_json(payload)
-            await asyncio.sleep(1) # Updates every 1 second continuously
+            await asyncio.sleep(1) 
 
     except WebSocketDisconnect:
-        logger.info("Telemetry Dashboard Client Disconnected.")
+        app_metrics["active_ws"] -= 1
     except Exception as e:
-        logger.error(f"WebSocket Error: {e}")    
+        app_metrics["active_ws"] -= 1
+        ws_logger.error(f"WS Disconnected: {e}")
