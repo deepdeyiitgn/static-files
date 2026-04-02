@@ -783,7 +783,7 @@ async def serve_sitemap(request: Request):
 
 
 # ==========================================
-# 10. OMNISCIENT DATACENTER TELEMETRY (GOD-MODE)
+# 10. TITAN-CLASS OMNISCIENT TELEMETRY (THE ULTIMATE NODE)
 # ==========================================
 import psutil
 import platform
@@ -794,6 +794,8 @@ import json
 import asyncio
 import aiohttp
 import subprocess
+import math
+import statistics
 from collections import deque
 from fastapi import WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
@@ -804,21 +806,50 @@ app_metrics = {
     "req_total": 0, "status_200": 0, "status_4xx": 0, "status_5xx": 0,
     "active_ws": 0, "start_time": time.time()
 }
-# Track individual API endpoint speeds
+
+# API Endpoint Tracking (Detailed)
 api_latencies = {
-    "REST Upload Engine": deque(maxlen=10),
-    "CDN File Stream": deque(maxlen=10),
-    "WebSocket Tunnel": deque(maxlen=10),
-    "Telemetry Node": deque(maxlen=10),
-    "Frontend UI": deque(maxlen=10),
-    "System Other": deque(maxlen=10)
+    "REST Upload Engine": deque(maxlen=20),
+    "CDN File Stream": deque(maxlen=20),
+    "WebSocket Tunnel": deque(maxlen=20),
+    "Telemetry Node": deque(maxlen=20),
+    "Frontend UI": deque(maxlen=20),
+    "System Backend": deque(maxlen=20)
 }
 
-hf_run_logs = deque(maxlen=100)
-hf_build_logs = deque(maxlen=100)
+hf_run_logs = deque(maxlen=150)
+hf_build_logs = deque(maxlen=150)
 server_net_info = {"ip": "Fetching...", "location": "Fetching..."}
 
-# Deep Hardware Info Extractor
+# Server Network Quality Tracker
+server_ping_jitter = {"ping": 0.0, "jitter": 0.0, "status": "Checking..."}
+
+# --- Background Task: Server Ping & Jitter ---
+async def track_server_network_quality():
+    while True:
+        try:
+            # Ping Google DNS to check server outbound latency
+            cmd = ["ping", "-c", "4", "8.8.8.8"]
+            process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            stdout, _ = await process.communicate()
+            output = stdout.decode('utf-8')
+            
+            if "avg" in output or "mdev" in output:
+                # Parse ping output: min/avg/max/mdev
+                lines = output.split('\n')
+                for line in lines:
+                    if "rtt" in line or "round-trip" in line:
+                        parts = line.split("=")[1].strip().split(" ")[0].split("/")
+                        server_ping_jitter["ping"] = round(float(parts[1]), 2) # avg
+                        server_ping_jitter["jitter"] = round(float(parts[3]), 2) # mdev (jitter)
+                        server_ping_jitter["status"] = "Optimal" if server_ping_jitter["ping"] < 50 else "Stable"
+            else:
+                server_ping_jitter["status"] = "Ping Blocked"
+        except:
+            server_ping_jitter["status"] = "Restricted by HF"
+        await asyncio.sleep(10)
+
+# --- Deep Hardware Extractor ---
 def get_deep_hardware_specs():
     info = {"model": platform.processor(), "vendor": "Unknown", "cache": "Unknown", "microcode": "Unknown", "os": f"{platform.system()} {platform.release()}"}
     try:
@@ -831,9 +862,8 @@ def get_deep_hardware_specs():
     except: pass
     return info
 
-# GPU Extractor (Nvidia-SMI)
 def get_gpu_specs():
-    gpu = {"name": "No GPU (CPU Only)", "util": "0%", "temp": "N/A", "mem_used": "0", "mem_total": "0"}
+    gpu = {"name": "No Dedicated GPU (CPU Compute)", "util": "0%", "temp": "N/A", "mem_used": "0", "mem_total": "0"}
     try:
         res = subprocess.check_output(['nvidia-smi', '--query-gpu=name,utilization.gpu,temperature.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'], text=True)
         if res:
@@ -842,7 +872,6 @@ def get_gpu_specs():
     except: pass
     return gpu
 
-# Background Async Task to Fetch Server IP Once
 async def fetch_server_identity():
     try:
         async with aiohttp.ClientSession() as session:
@@ -851,10 +880,9 @@ async def fetch_server_identity():
                 server_net_info["ip"] = data.get("query", "Hidden")
                 server_net_info["location"] = f"{data.get('city', '')}, {data.get('country', '')}"
     except:
-        server_net_info["ip"] = "Hidden Proxy"
+        server_net_info["ip"] = "Hidden Proxy Hub"
         server_net_info["location"] = "HF Datacenter Zone"
 
-# Robust Log Streamer
 async def stream_hf_logs(log_type="run", target_deque=hf_run_logs):
     space_id = os.environ.get("SPACE_ID", "deydeep/static-files")
     url = f"https://huggingface.co/api/spaces/{space_id}/logs/{log_type}"
@@ -863,7 +891,7 @@ async def stream_hf_logs(log_type="run", target_deque=hf_run_logs):
     while True:
         try:
             if not HF_TOKEN:
-                target_deque.appendleft("[SYSTEM] HF_TOKEN missing. Logs locked.")
+                target_deque.appendleft("[SYSTEM] Security Lock: HF_TOKEN missing in env.")
                 await asyncio.sleep(60); continue
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers, timeout=None) as resp:
@@ -876,11 +904,10 @@ async def stream_hf_logs(log_type="run", target_deque=hf_run_logs):
                                     parsed = json.loads(log_data)
                                     msg = parsed.get("message", str(parsed))
                                     target_deque.appendleft(msg)
-                                except:
-                                    target_deque.appendleft(log_data)
-        except Exception as e: await asyncio.sleep(5) 
+                                except: target_deque.appendleft(log_data)
+        except Exception: await asyncio.sleep(5) 
 
-# API Health Middleware (Categorized)
+# --- Telemetry Middleware ---
 class TelemetryMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
@@ -899,8 +926,7 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             elif path.startswith("/ws"): api_latencies["WebSocket Tunnel"].append(latency)
             elif path.startswith("/status"): api_latencies["Telemetry Node"].append(latency)
             elif path == "/": api_latencies["Frontend UI"].append(latency)
-            else: api_latencies["System Other"].append(latency)
-            
+            else: api_latencies["System Backend"].append(latency)
             return response
         except Exception as e:
             app_metrics["status_5xx"] += 1
@@ -908,31 +934,41 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(TelemetryMiddleware)
 
-# --- Virtual HTML payload ---
+# --- The Massive Virtual HTML Payload (SEO, Mobile, Export) ---
 STATUS_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlynk Storage Node - Omniscient Telemetry</title>
-    <meta name="robots" content="noindex, nofollow">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Qlynk Node - Titan Telemetry | Live Server Status</title>
+    <meta name="description" content="God-Mode real-time datacenter monitoring, API matrix latency, multi-core analysis, and live network I/O for Qlynk Storage System.">
+    <meta name="keywords" content="server status, telemetry, qlynk host, API ping, network bandwidth, container logs">
+    <meta name="author" content="Deep Dey">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://static.qlynk.me/status" />
+    
     <link rel="icon" type="image/png" href="//qlynk.vercel.app/quicklink-logo.png">
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
     <style>
         :root { --bg-color: #0d1117; --card-bg: #161b22; --text-main: #c9d1d9; --text-muted: #8b949e; --accent-green: #2ea043; --accent-blue: #58a6ff; --accent-red: #da3633; --accent-yellow: #d29922; --border: #30363d; --accent-purple: #bc8cff;}
-        body { font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 20px; font-size: 13px; }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
-        .header h1 { margin: 0; font-size: 20px; color: #fff; font-family: -apple-system, sans-serif;}
-        .badge-container { display: flex; gap: 15px; }
-        .badge { background: #1f2428; border: 1px solid var(--border); padding: 5px 12px; border-radius: 6px; display: flex; align-items: center; gap: 8px; font-weight: bold;}
+        * { box-sizing: border-box; }
+        body { font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 20px; font-size: 13px; overflow-x: hidden;}
+        
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;}
+        .header h1 { margin: 0; font-size: 22px; color: #fff; font-family: -apple-system, sans-serif;}
+        .badge-container { display: flex; gap: 10px; flex-wrap: wrap;}
+        .badge { background: #1f2428; border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; display: flex; align-items: center; gap: 8px; font-weight: bold;}
         .pulse { width: 8px; height: 8px; background-color: var(--accent-green); border-radius: 50%; box-shadow: 0 0 8px var(--accent-green); }
         .danger { background-color: var(--accent-red); box-shadow: 0 0 8px var(--accent-red); }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; }
         
-        .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 15px; position: relative; }
-        .card h2 { margin: 0 0 15px 0; font-size: 14px; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-        .stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px dashed #30363d; padding-bottom: 4px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; }
+        .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 15px; position: relative; display: flex; flex-direction: column;}
+        .card h2 { margin: 0 0 15px 0; font-size: 14px; color: var(--accent-blue); text-transform: uppercase; letter-spacing: 1px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: flex; justify-content: space-between;}
+        
+        .stat-row { display: flex; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px dashed #30363d; padding-bottom: 4px; align-items: center;}
         .stat-label { color: var(--text-muted); }
         .stat-val { font-weight: bold; color: #fff; text-align: right; }
         .locked-val { color: var(--accent-red); font-style: italic; font-size: 11px; }
@@ -940,42 +976,67 @@ STATUS_DASHBOARD_HTML = """
         .bar-bg { width: 100%; background: #000; border-radius: 3px; height: 6px; overflow: hidden; margin-top: 5px; }
         .bar-fill { height: 100%; background: var(--accent-green); width: 0%; transition: width 0.3s ease; }
         
-        .core-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
+        .core-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(70px, 1fr)); gap: 6px; margin-top: 10px; }
         .core-box { background: #000; border: 1px solid var(--border); padding: 5px; border-radius: 4px; text-align: center; }
         .core-val { font-size: 11px; margin-top: 3px; font-weight:bold;}
         .core-meta { font-size: 9px; color: var(--text-muted); }
         
-        .terminal { background: #000; border: 1px solid var(--border); padding: 10px; border-radius: 6px; height: 400px; overflow-y: auto; font-size: 12px; color: #3fb950; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;}
+        .terminal { background: #000; border: 1px solid var(--border); padding: 12px; border-radius: 6px; height: 400px; overflow-y: auto; font-size: 12px; color: #3fb950; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; font-family: monospace;}
         .terminal span.error { color: var(--accent-red); font-weight: bold;}
         .terminal span.warn { color: var(--accent-yellow); }
         .terminal span.sys { color: var(--accent-blue); }
         
-        .proc-table { width: 100%; text-align: left; border-collapse: collapse; font-size: 11px; }
+        .proc-table { width: 100%; text-align: left; border-collapse: collapse; font-size: 11px; margin-top: auto;}
         .proc-table th { border-bottom: 1px solid var(--border); padding-bottom: 5px; color: var(--text-muted); }
         .proc-table td { padding: 4px 0; border-bottom: 1px dashed #30363d; }
-        .full-width { grid-column: 1 / -1; } /* Forces Logs to take entire row */
+        .full-width { grid-column: 1 / -1; } 
         
-        .condition-badge { display:inline-block; padding: 2px 6px; border-radius: 4px; font-size:10px; font-weight:bold; margin-top:5px;}
+        .condition-badge { display:inline-block; padding: 4px 8px; border-radius: 4px; font-size:11px; font-weight:bold; margin-top:5px; border: 1px solid var(--border); background: #000;}
+        
+        /* Export Buttons Matrix */
+        .export-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+        .btn { padding: 8px; border: 1px solid var(--border); background: #1f2428; color: #fff; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; transition: 0.2s; text-align: center;}
+        .btn:hover { background: var(--accent-blue); color: #000; border-color: var(--accent-blue); }
+        .btn-pdf { background: var(--accent-red); color: #fff; border-color: var(--accent-red); }
+        .btn-pdf:hover { background: #ff5c5c; }
+        
+        /* Mobile Responsiveness */
+        @media (max-width: 768px) {
+            .grid { grid-template-columns: 1fr; }
+            .header { flex-direction: column; align-items: flex-start; }
+            .badge-container { width: 100%; justify-content: space-between; }
+            .terminal { height: 300px; }
+            body { padding: 10px; }
+        }
+        
+        /* Print Styles */
+        @media print {
+            body { background: #fff; color: #000; padding: 0; }
+            .card { break-inside: avoid; border: 1px solid #ccc; background: #fff; color: #000;}
+            .stat-val, .core-val, h2, .badge { color: #000 !important; }
+            .terminal { background: #f0f0f0; color: #000; border: 1px solid #ccc; }
+            .export-grid, .btn { display: none; }
+        }
     </style>
 </head>
-<body>
+<body id="telemetry-dashboard">
 
     <div class="header">
-        <h1>👁️ Qlynk Storage Node - Omniscient</h1>
+        <h1>👁️ Titan Node - Omniscient Status</h1>
         <div class="badge-container">
-            <div class="badge"><div class="pulse" id="ws-pulse"></div> Client Ping: <span id="ws-ping">...</span>ms</div>
-            <div class="badge">App Engine: <span id="app-uptime">...</span></div>
+            <div class="badge">App Engine: <span id="app-uptime" style="color:var(--accent-blue); margin-left:5px;">...</span></div>
+            <div class="badge">System OS: <span id="sys-uptime" style="color:var(--accent-purple); margin-left:5px;">...</span></div>
         </div>
     </div>
 
     <div class="grid">
         <div class="card">
-            <h2>🌍 Network Identity & Client Condition</h2>
-            <div class="stat-row"><span class="stat-label">Server Target Location</span><span class="stat-val" id="net-loc">Loading...</span></div>
+            <h2>🌍 Network Identity & User Link</h2>
+            <div class="stat-row"><span class="stat-label">Server Host Region</span><span class="stat-val" id="net-loc">Loading...</span></div>
             <div class="stat-row"><span class="stat-label">Server Ext. IP Address</span><span class="stat-val" id="net-server-ip">Loading...</span></div>
             <div class="stat-row" style="margin-top:15px;"><span class="stat-label">Your Client IP</span><span class="stat-val" id="net-client-ip" style="color:var(--accent-purple);">Loading...</span></div>
-            <div class="stat-row"><span class="stat-label">Your Max Downlink</span><span class="stat-val" id="client-down">Loading...</span></div>
-            <div style="text-align:right;"><span id="client-condition" class="condition-badge" style="background:#000; border:1px solid #30363d;">Analyzing Route...</span></div>
+            <div class="stat-row"><span class="stat-label">Client Latency & Jitter</span><span class="stat-val"><span id="ws-ping">0</span> ms | <span id="ws-jitter" style="color:var(--accent-yellow);">0</span> ms</span></div>
+            <div style="text-align:right;"><span id="client-condition" class="condition-badge">Analyzing Route...</span></div>
         </div>
 
         <div class="card">
@@ -983,48 +1044,67 @@ STATUS_DASHBOARD_HTML = """
             <div class="stat-row"><span class="stat-label">Operating System</span><span class="stat-val" id="spec-os">Loading...</span></div>
             <div class="stat-row"><span class="stat-label">CPU Model</span><span class="stat-val" id="spec-model" style="font-size:10px; max-width:65%;">Loading...</span></div>
             <div class="stat-row"><span class="stat-label">L-Cache Size</span><span class="stat-val" id="spec-cache">Loading...</span></div>
-            <div class="stat-row"><span class="stat-label">Display Interface</span><span class="stat-val" style="color:var(--text-muted);">Headless (No Output)</span></div>
             
-            <div class="stat-row" style="margin-top:15px;"><span class="stat-label">GPU Model</span><span class="stat-val" id="gpu-model" style="color:var(--accent-purple);">Loading...</span></div>
+            <div class="stat-row" style="margin-top:15px;"><span class="stat-label">GPU Module</span><span class="stat-val" id="gpu-model" style="color:var(--accent-purple); font-size:10px;">Loading...</span></div>
             <div class="stat-row"><span class="stat-label">GPU Memory / Temp</span><span class="stat-val" id="gpu-stats">Loading...</span></div>
         </div>
 
-        <div class="card">
-            <h2>⚙️ Per-Core Engine Deep Dive</h2>
-            <div class="stat-row"><span class="stat-label">Total System Load</span><span class="stat-val" id="cpu-total">0%</span></div>
+        <div class="card" style="grid-column: span 1;">
+            <h2>⚙️ Core-by-Core Analytics</h2>
+            <div class="stat-row"><span class="stat-label">Master CPU Load</span><span class="stat-val" id="cpu-total">0%</span></div>
             <div class="bar-bg" style="height: 10px; margin-bottom: 10px;"><div class="bar-fill" id="cpu-total-bar" style="background: var(--accent-blue);"></div></div>
-            <div class="stat-label" style="font-size: 11px;">Logical Core Threads (<span id="core-count">0</span>) | Freq & Temp (OS Dependent)</div>
+            <div class="stat-label" style="font-size: 11px;">Active Threads: <span id="core-count" style="color:var(--accent-green); font-weight:bold;">0</span> (Freq Mhz)</div>
             <div class="core-grid" id="cpu-cores"></div>
         </div>
 
         <div class="card">
-            <h2>☁️ HF Dataset Quota & Disk I/O</h2>
-            <div class="stat-row"><span class="stat-label">RAM Usage</span><span class="stat-val" id="ram-txt">0/0 GB</span></div>
+            <h2>☁️ Datacenter Memory & Cloud Quota</h2>
+            <div class="stat-row"><span class="stat-label">RAM Consumption</span><span class="stat-val" id="ram-txt">0/0 GB</span></div>
             <div class="bar-bg"><div class="bar-fill" id="ram-bar"></div></div>
             
-            <div class="stat-row" style="margin-top: 15px;"><span class="stat-label">HF Storage Quota (Max 50GB)</span><span class="stat-val" id="hf-txt">0/0 GB</span></div>
+            <div class="stat-row" style="margin-top: 15px;"><span class="stat-label" id="hf-label">HF Storage Quota (Limit)</span><span class="stat-val" id="hf-txt">0/0 GB</span></div>
             <div class="bar-bg"><div class="bar-fill" id="hf-bar" style="background: var(--accent-purple);"></div></div>
-            <div class="stat-row"><span class="stat-label" style="font-size:10px;">Available Cloud Space</span><span class="stat-val" id="hf-avail" style="font-size:10px;">0 GB</span></div>
+            <div class="stat-row"><span class="stat-label" style="font-size:10px;">Available Cloud Block</span><span class="stat-val" id="hf-avail" style="font-size:10px; color:var(--accent-green);">0 GB</span></div>
 
-            <div class="stat-row" style="margin-top: 15px; color:var(--accent-yellow);"><span class="stat-label">Disk Read Speed (Root)</span><span class="stat-val" id="disk-read">0 MB/s</span></div>
-            <div class="stat-row" style="color:var(--accent-red);"><span class="stat-label">Disk Write Speed (Root)</span><span class="stat-val" id="disk-write">0 MB/s</span></div>
+            <div class="stat-row" style="margin-top: 15px; color:var(--accent-yellow);"><span class="stat-label">Root Disk Read (I/O)</span><span class="stat-val" id="disk-read">0 MB/s</span></div>
+            <div class="stat-row" style="color:var(--accent-red);"><span class="stat-label">Root Disk Write (I/O)</span><span class="stat-val" id="disk-write">0 MB/s</span></div>
         </div>
 
         <div class="card">
-            <h2>📡 Server Data Speed & API Latency</h2>
-            <div class="stat-row"><span class="stat-label" style="color:var(--accent-blue);">Server Download ⬇</span><span class="stat-val" id="net-speed-down">0 KB/s</span></div>
-            <div class="stat-row"><span class="stat-label" style="color:var(--accent-green);">Server Upload ⬆</span><span class="stat-val" id="net-speed-up">0 KB/s</span></div>
-            <div style="border-top: 1px solid var(--border); margin-top:10px; padding-top:10px;">
-                <div class="stat-row" style="color:var(--text-muted); font-size:10px;"><span>ENDPOINT NAME</span><span>SPEED (MS)</span></div>
-                <div id="api-latencies"></div>
+            <h2>📡 Server Uplink & Downlink</h2>
+            <div class="stat-row"><span class="stat-label" style="color:var(--accent-blue);">Server Live Download ⬇</span><span class="stat-val" id="net-speed-down">0 KB/s</span></div>
+            <div class="stat-row"><span class="stat-label" style="color:var(--accent-green);">Server Live Upload ⬆</span><span class="stat-val" id="net-speed-up">0 KB/s</span></div>
+            <div class="stat-row" style="margin-top:15px;"><span class="stat-label">Total Outbound Transfer</span><span class="stat-val" id="net-sent-total">0 GB</span></div>
+            <div class="stat-row"><span class="stat-label">Server Ping & Jitter</span><span class="stat-val"><span id="svr-ping">0</span> ms | <span id="svr-jitter" style="color:var(--accent-yellow);">0</span> ms</span></div>
+        </div>
+
+        <div class="card">
+            <h2>🚦 API Matrix Endpoints Status</h2>
+            <div style="display:flex; justify-content:space-between; color:var(--text-muted); font-size:10px; margin-bottom:5px; border-bottom:1px solid var(--border); padding-bottom:5px;">
+                <span>ENDPOINT LAYER</span><span>AVG PING (MS)</span>
+            </div>
+            <div id="api-latencies"></div>
+            <div class="stat-row" style="margin-top:10px; border-top:1px dashed var(--border); padding-top:10px;">
+                <span class="stat-label">Total Requests Handled</span><span class="stat-val" id="req-total" style="color:var(--accent-blue);">0</span>
             </div>
         </div>
 
         <div class="card">
-            <h2>🔥 Top 5 Resource Hogs</h2>
+            <h2>🔥 High Load Processes</h2>
             <table class="proc-table" id="proc-table">
                 <tr><th>Process Name</th><th>CPU %</th><th>RAM %</th></tr>
             </table>
+        </div>
+
+        <div class="card">
+            <h2>💾 Telemetry Data Export</h2>
+            <p style="font-size:11px; color:var(--text-muted); margin-bottom:10px;">Extract the current real-time telemetry array into external formats for auditing and analysis.</p>
+            <div class="export-grid">
+                <div class="btn btn-pdf" onclick="window.print()">Print / PDF</div>
+                <div class="btn" onclick="exportJSON()">Export JSON</div>
+                <div class="btn" onclick="exportMD()">Export Markdown</div>
+                <div class="btn" onclick="exportPNG()">Snapshot (PNG)</div>
+            </div>
         </div>
 
         <div class="card full-width">
@@ -1041,7 +1121,12 @@ STATUS_DASHBOARD_HTML = """
     <script>
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const wsUrl = `${protocol}//${window.location.host}/ws/status_max`;
-        let ws; let pingStart = 0; let clientPing = 999;
+        let ws; 
+        
+        // Jitter Calculation Variables
+        let pingStart = 0; 
+        let pingHistory = [];
+        let lastPayload = null; // Store for Export
 
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
@@ -1068,36 +1153,48 @@ STATUS_DASHBOARD_HTML = """
 
             ws.onmessage = (event) => {
                 if(event.data === "pong") { 
-                    clientPing = Math.round(performance.now() - pingStart);
-                    document.getElementById('ws-ping').innerText = clientPing; 
+                    let latency = Math.round(performance.now() - pingStart);
+                    pingHistory.push(latency);
+                    if(pingHistory.length > 10) pingHistory.shift();
                     
-                    // Client Condition Logic
-                    let clientDown = navigator.connection ? navigator.connection.downlink : 0;
+                    let jitter = 0;
+                    if(pingHistory.length > 1) {
+                        let diffs = [];
+                        for(let i=1; i<pingHistory.length; i++) diffs.push(Math.abs(pingHistory[i] - pingHistory[i-1]));
+                        jitter = Math.round(diffs.reduce((a,b)=>a+b,0) / diffs.length);
+                    }
+                    
+                    document.getElementById('ws-ping').innerText = latency; 
+                    document.getElementById('ws-jitter').innerText = jitter;
+                    
                     let condEl = document.getElementById('client-condition');
-                    document.getElementById('client-down').innerText = clientDown > 0 ? `${clientDown} Mbps` : 'Hidden by Browser';
-                    
-                    if(clientPing < 150 && clientDown > 5) {
-                        condEl.innerText = "🚀 Optimal Route (Uploads will be fast)";
+                    if(latency < 150 && jitter < 30) {
+                        condEl.innerText = "🚀 Optimal Route (Max Speed)";
                         condEl.style.color = "var(--accent-green)";
-                    } else if (clientPing < 400) {
-                        condEl.innerText = "⚠️ Stable Route (Moderate Speeds)";
+                        condEl.style.borderColor = "var(--accent-green)";
+                    } else if (latency < 400) {
+                        condEl.innerText = "⚠️ Stable Route (Mod. Speed)";
                         condEl.style.color = "var(--accent-yellow)";
+                        condEl.style.borderColor = "var(--accent-yellow)";
                     } else {
-                        condEl.innerText = "🐢 Poor Route (Expect Slow Uploads)";
+                        condEl.innerText = "🐢 Poor Route (High Latency)";
                         condEl.style.color = "var(--accent-red)";
+                        condEl.style.borderColor = "var(--accent-red)";
                     }
                     return; 
                 }
                 
                 const d = JSON.parse(event.data);
+                lastPayload = d; // Cache for export
 
                 // Identity
                 document.getElementById('net-loc').innerHTML = d.auth_valid ? d.identity.location : lockText();
                 document.getElementById('net-server-ip').innerHTML = d.auth_valid ? d.identity.server_ip : lockText();
                 document.getElementById('net-client-ip').innerHTML = d.auth_valid ? d.identity.client_ip : lockText();
 
-                // HW & GPU
+                // HW & Engine
                 document.getElementById('app-uptime').innerText = d.sys.app_uptime;
+                document.getElementById('sys-uptime').innerText = d.sys.host_uptime;
                 document.getElementById('spec-os').innerText = d.hw.os;
                 document.getElementById('spec-model').innerHTML = d.auth_valid ? d.hw.model : lockText();
                 document.getElementById('spec-cache').innerText = d.hw.cache;
@@ -1110,33 +1207,40 @@ STATUS_DASHBOARD_HTML = """
                 document.getElementById('cpu-total-bar').style.width = `${d.cpu.total}%`;
                 document.getElementById('core-count').innerText = d.cpu.cores.length;
                 document.getElementById('cpu-cores').innerHTML = d.cpu.cores.map((c, i) => {
-                    let freq = d.cpu.freqs[i] ? `${Math.round(d.cpu.freqs[i])}Mhz` : 'SysLock';
+                    let freq = d.cpu.freqs[i] ? `${Math.round(d.cpu.freqs[i])}` : 'SysLock';
                     return `<div class="core-box">
-                        <div style="font-size:10px; color:#fff;">Thread ${i}</div>
+                        <div style="font-size:10px; color:#fff;">T-${i}</div>
                         <div class="core-val" style="color:${c<60?'#2ea043':c<85?'#d29922':'#da3633'}">${c}%</div>
                         <div class="core-meta">${freq}</div>
                     </div>`;
                 }).join('');
 
-                // Storage & RAM
+                // Storage & Dynamic HF Limit
                 document.getElementById('ram-txt').innerText = `${d.ram.used_gb} / ${d.ram.total_gb} GB (${d.ram.percent}%)`;
                 document.getElementById('ram-bar').style.width = `${d.ram.percent}%`;
                 
-                document.getElementById('hf-txt').innerHTML = d.auth_valid ? `${d.app.hf_used} / 50.00 GB (${d.app.hf_percent}%)` : lockText();
+                document.getElementById('hf-label').innerText = `HF Quota (Limit: ${d.app.hf_limit_gb}GB)`;
+                document.getElementById('hf-txt').innerHTML = d.auth_valid ? `${d.app.hf_used} / ${d.app.hf_limit_gb} GB (${d.app.hf_percent}%)` : lockText();
                 document.getElementById('hf-bar').style.width = d.auth_valid ? `${d.app.hf_percent}%` : '0%';
                 document.getElementById('hf-avail').innerHTML = d.auth_valid ? `${d.app.hf_avail} GB Available` : lockText();
 
                 document.getElementById('disk-read').innerText = formatBytes(d.disk.read_speed) + '/s';
                 document.getElementById('disk-write').innerText = formatBytes(d.disk.write_speed) + '/s';
 
-                // Server Network & Endpoints
+                // Server Network
                 document.getElementById('net-speed-down').innerText = `${formatBytes(d.net.speed_recv)}/s`;
                 document.getElementById('net-speed-up').innerText = `${formatBytes(d.net.speed_sent)}/s`;
+                document.getElementById('net-sent-total').innerText = formatBytes(d.net.total_sent);
                 
+                document.getElementById('svr-ping').innerText = d.net.server_ping;
+                document.getElementById('svr-jitter').innerText = d.net.server_jitter;
+
+                // API Latencies
                 document.getElementById('api-latencies').innerHTML = Object.entries(d.app.api_speeds).map(([k,v]) => {
-                    let c = v < 100 ? 'var(--accent-green)' : (v < 500 ? 'var(--accent-yellow)' : 'var(--accent-red)');
+                    let c = v < 50 ? 'var(--accent-green)' : (v < 200 ? 'var(--accent-yellow)' : 'var(--accent-red)');
                     return `<div class="stat-row" style="margin-bottom:4px;"><span class="stat-label">${k}</span><span class="stat-val" style="color:${c}">${v} ms</span></div>`;
                 }).join('');
+                document.getElementById('req-total').innerText = d.app.req_total;
 
                 // Top Procs
                 if(d.auth_valid) {
@@ -1146,7 +1250,7 @@ STATUS_DASHBOARD_HTML = """
 
                 // Logs (Expanded)
                 if (!d.auth_valid) {
-                    const lockHtml = `<div style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--accent-red); font-size:16px;">🔒 OMNISCIENT LOCK: Enter Dashboard Password to View System Core Output.</div>`;
+                    const lockHtml = `<div class="lock-screen" style="display:flex; justify-content:center; align-items:center; height:100%; color:var(--accent-red); font-size:16px;">🔒 OMNISCIENT LOCK: Enter Datacenter Password in Home UI to decode logs.</div>`;
                     document.getElementById('term-run-logs').innerHTML = lockHtml;
                     document.getElementById('term-build-logs').innerHTML = lockHtml;
                 } else {
@@ -1163,6 +1267,43 @@ STATUS_DASHBOARD_HTML = """
             };
         }
         connectWS();
+
+        // --- Export Functions ---
+        function triggerDownload(content, filename, type) {
+            const blob = new Blob([content], { type: type });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            a.click();
+        }
+
+        function exportJSON() {
+            if(!lastPayload) return alert("Waiting for data...");
+            triggerDownload(JSON.stringify(lastPayload, null, 4), `Qlynk_Telemetry_${new Date().getTime()}.json`, 'application/json');
+        }
+
+        function exportMD() {
+            if(!lastPayload) return alert("Waiting for data...");
+            let md = `# Qlynk Node Telemetry Report\n*Generated: ${new Date().toISOString()}*\n\n`;
+            md += `## System Info\n- **OS:** ${lastPayload.sys.os}\n- **App Uptime:** ${lastPayload.sys.app_uptime}\n- **CPU:** ${lastPayload.hw.model}\n\n`;
+            md += `## Memory & Storage\n- **RAM:** ${lastPayload.ram.used_gb}/${lastPayload.ram.total_gb} GB\n- **HF Cloud Limit:** ${lastPayload.app.hf_limit_gb} GB\n\n`;
+            md += `## API Status\n`;
+            for(let [k,v] of Object.entries(lastPayload.app.api_speeds)) md += `- **${k}:** ${v}ms\n`;
+            triggerDownload(md, `Qlynk_Telemetry_${new Date().getTime()}.md`, 'text/markdown');
+        }
+
+        function exportPNG() {
+            if(typeof html2canvas === 'undefined') return alert("Canvas Library Loading... Please wait.");
+            // Temporarily hide terminal logs to make image smaller
+            document.querySelectorAll('.full-width').forEach(e => e.style.display = 'none');
+            html2canvas(document.body, { backgroundColor: '#0d1117' }).then(canvas => {
+                document.querySelectorAll('.full-width').forEach(e => e.style.display = 'flex'); // restore
+                const a = document.createElement('a');
+                a.href = canvas.toDataURL("image/png");
+                a.download = `Qlynk_Snapshot_${new Date().getTime()}.png`;
+                a.click();
+            });
+        }
     </script>
 </body>
 </html>
@@ -1182,6 +1323,7 @@ async def serve_max_telemetry():
         asyncio.create_task(stream_hf_logs("run", hf_run_logs))
         asyncio.create_task(stream_hf_logs("build", hf_build_logs))
         asyncio.create_task(fetch_server_identity())
+        asyncio.create_task(track_server_network_quality())
         bg_tasks_started = True
     return HTMLResponse(content=STATUS_DASHBOARD_HTML)
 
@@ -1213,13 +1355,14 @@ async def websocket_max_endpoint(websocket: WebSocket):
             curr_disk = psutil.disk_io_counters()
             time_diff = curr_time - prev_time
             
+            # I/O Deltas
             speed_recv = max(0, (curr_net.bytes_recv - prev_net.bytes_recv) / time_diff) if time_diff > 0 else 0
             speed_sent = max(0, (curr_net.bytes_sent - prev_net.bytes_sent) / time_diff) if time_diff > 0 else 0
             disk_read_speed = max(0, (curr_disk.read_bytes - prev_disk.read_bytes) / time_diff) if curr_disk and prev_disk and time_diff > 0 else 0
             disk_write_speed = max(0, (curr_disk.write_bytes - prev_disk.write_bytes) / time_diff) if curr_disk and prev_disk and time_diff > 0 else 0
             prev_net, prev_disk, prev_time = curr_net, curr_disk, curr_time
             
-            # Top Procs
+            # Top Procs Search
             top_procs = []
             if is_authenticated:
                 procs = []
@@ -1229,17 +1372,20 @@ async def websocket_max_endpoint(websocket: WebSocket):
                 procs = sorted(procs, key=lambda x: x['cpu_percent'] or 0, reverse=True)[:5]
                 top_procs = [{"name": p['name'][:15], "cpu": f"{round(p['cpu_percent'] or 0, 1)}%", "ram": f"{round(p['memory_percent'] or 0, 1)}%"} for p in procs]
 
-            # HF Capacity Math (50GB Soft Limit)
-            hf_used_val = 0; hf_perc = 0; hf_avail = 50.00
+            # Dynamic HF Limit calculation
+            hf_used_val = 0; hf_perc = 0; 
+            dynamic_hf_limit_gb = 50.00 # Default if unfetchable
+            hf_avail = dynamic_hf_limit_gb
+            
             if is_authenticated:
                 try:
                     hf_used_val = get_db().get("total_size_bytes", 0)
                     hf_gb = hf_used_val / (1024**3)
-                    hf_perc = min(100.0, round((hf_gb / 50.0) * 100, 2))
-                    hf_avail = max(0.0, round(50.0 - hf_gb, 2))
+                    hf_perc = min(100.0, round((hf_gb / dynamic_hf_limit_gb) * 100, 2))
+                    hf_avail = max(0.0, round(dynamic_hf_limit_gb - hf_gb, 2))
                 except: pass
 
-            # API Avg Speeds
+            # Compile API Speeds
             avg_apis = {}
             for k, v in api_latencies.items():
                 avg_apis[k] = round(sum(v)/len(v), 2) if v else 0
@@ -1254,13 +1400,13 @@ async def websocket_max_endpoint(websocket: WebSocket):
             payload = {
                 "auth_valid": is_authenticated,
                 "identity": {"server_ip": server_net_info["ip"], "location": server_net_info["location"], "client_ip": client_ip},
-                "sys": {"os": hw_info["os"], "app_uptime": format_uptime(curr_time - app_metrics["start_time"])},
+                "sys": {"os": hw_info["os"], "app_uptime": format_uptime(curr_time - app_metrics["start_time"]), "host_uptime": format_uptime(curr_time - psutil.boot_time())},
                 "hw": {"model": hw_info["model"], "vendor": hw_info["vendor"], "cache": hw_info["cache"], "microcode": hw_info["microcode"], "gpu": gpu_info},
                 "cpu": {"total": psutil.cpu_percent(interval=None), "cores": psutil.cpu_percent(interval=None, percpu=True), "freqs": cpu_freqs},
                 "ram": {"total_gb": round(psutil.virtual_memory().total/(1024**3), 2), "used_gb": round(psutil.virtual_memory().used/(1024**3), 2), "percent": psutil.virtual_memory().percent},
                 "disk": {"read_speed": disk_read_speed, "write_speed": disk_write_speed},
-                "net": {"speed_recv": speed_recv, "speed_sent": speed_sent},
-                "app": {"hf_used": format_size(hf_used_val), "hf_percent": hf_perc, "hf_avail": hf_avail, "api_speeds": avg_apis},
+                "net": {"speed_recv": speed_recv, "speed_sent": speed_sent, "total_sent": curr_net.bytes_sent, "server_ping": server_ping_jitter["ping"], "server_jitter": server_ping_jitter["jitter"]},
+                "app": {"hf_used": format_size(hf_used_val), "hf_percent": hf_perc, "hf_avail": hf_avail, "hf_limit_gb": dynamic_hf_limit_gb, "api_speeds": avg_apis, "req_total": app_metrics["req_total"]},
                 "procs": top_procs,
                 "logs_run": list(hf_run_logs) if is_authenticated else [],
                 "logs_build": list(hf_build_logs) if is_authenticated else []
