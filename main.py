@@ -1551,7 +1551,7 @@ async def generate_share_token(token: str = Depends(verify_auth)):
 @app.get("/api/media_library")
 async def fetch_media_library(access: dict = Depends(verify_view_access)):
     db = get_db()
-    # Yahan condition add ki hai ki mime_type sirf video/ ya audio/ se start hona chahiye
+    # Filter for videos and audios only
     filtered_files = [
         f for f in db.get("files", []) 
         if not f.get("is_external") and str(f.get("mime_type", "")).startswith(("video/", "audio/"))
@@ -1568,7 +1568,7 @@ async def upload_subtitle(
 ):
     content = (await file.read()).decode('utf-8', errors='ignore')
     
-    # Auto Convert SRT to WebVTT for HTML5 compatibility
+    # Auto Convert SRT to WebVTT
     if file.filename.endswith('.srt') or not content.startswith('WEBVTT'):
         content = "WEBVTT\n\n" + content.replace(',', '.')
         
@@ -1597,7 +1597,8 @@ async def upload_subtitle(
     
     return {"status": "success", "message": f"Subtitle ({language}) linked to media."}
 
-@app.get("/api/subtitles/list/{media_slug}")
+# Fixed parameter path capturing for slugs with slashes
+@app.get("/api/subtitles/list/{media_slug:path}")
 async def list_subtitles(media_slug: str, access: dict = Depends(verify_view_access)):
     db = get_sub_db()
     return [s for s in db.get("subtitles", []) if s["media_slug"] == media_slug]
@@ -1638,7 +1639,6 @@ MEDIA_TUBE_HTML = """
         
         .container { padding: 24px; max-width: 1600px; margin: 0 auto; }
         
-        /* Grid */
         .video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; row-gap: 40px; }
         .vid-card { cursor: pointer; text-decoration: none; color: inherit; display: flex; flex-direction: column; transition: transform 0.2s;}
         .vid-card:hover { transform: scale(1.02); }
@@ -1648,12 +1648,11 @@ MEDIA_TUBE_HTML = """
         .vid-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .vid-meta { font-size: 13px; color: var(--yt-muted); }
 
-        /* Watch Layout */
         .watch-layout { display: flex; gap: 24px; flex-wrap: wrap; }
         .primary-col { flex: 1; min-width: 65%; max-width: 1200px; }
         .secondary-col { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; gap: 15px;}
         
-        /* --- CUSTOM PLAYER ARCHITECTURE --- */
+        /* PLAYER ARCHITECTURE */
         .player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;}
         .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
         
@@ -1662,32 +1661,29 @@ MEDIA_TUBE_HTML = """
         .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
         @keyframes spin { 100% { transform: rotate(360deg); } }
         
-        /* Hold 2x Overlay */
+        /* Action UI Overlay (Play, Vol, Seek) */
+        .action-icon-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.7); color: #fff; padding: 15px 25px; border-radius: 50px; font-size: 24px; font-weight: bold; z-index: 80; opacity: 0; pointer-events: none; display: flex; align-items: center; gap: 10px; transition: opacity 0.2s; backdrop-filter: blur(5px);}
+        .action-icon-overlay.show { opacity: 1; }
         .fast-forward-overlay { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: bold; z-index: 100; display: none; pointer-events: none; align-items: center; gap: 8px;}
         
-        /* Custom Controls Overlay */
         .custom-controls { position: absolute; bottom: 0; left: 0; width: 100%; padding: 40px 20px 10px 20px; background: linear-gradient(transparent, rgba(0,0,0,0.9)); z-index: 50; display: flex; flex-direction: column; gap: 8px; opacity: 0; transition: opacity 0.3s;}
         .player-wrapper:hover .custom-controls, .custom-controls.active { opacity: 1; }
         
-        /* Seek Bar (Violet Theme) */
         .seek-container { width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; cursor: pointer; position: relative; transition: height 0.1s;}
         .seek-container:hover { height: 8px; }
         .seek-progress { height: 100%; background: var(--yt-brand); border-radius: 3px; width: 0%; pointer-events: none;}
         
-        /* Control Buttons */
         .control-row { display: flex; justify-content: space-between; align-items: center; color: #fff;}
         .ctrl-left, .ctrl-right { display: flex; align-items: center; gap: 15px; }
         .ctrl-btn { background: none; border: none; color: #fff; font-size: 20px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s;}
         .ctrl-btn:hover { color: var(--yt-brand); }
         .time-display { font-size: 13px; font-family: monospace;}
         
-        /* Volume Slider */
         .volume-slider { width: 0px; opacity: 0; transition: 0.3s; -webkit-appearance: none; background: transparent; cursor: pointer;}
         .volume-container:hover .volume-slider, .volume-slider.active { width: 80px; opacity: 1; margin-left: 5px;}
         .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 12px; width: 12px; border-radius: 50%; background: var(--yt-brand); margin-top: -4px;}
         .volume-slider::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px;}
 
-        /* Settings Menu & Subtitles Menu */
         .settings-menu { position: absolute; bottom: 60px; right: 20px; background: rgba(28,28,28,0.95); border-radius: 8px; padding: 10px; z-index: 60; display: none; flex-direction: column; min-width: 200px; border: 1px solid var(--yt-border); backdrop-filter: blur(10px);}
         .settings-menu.show { display: flex; }
         .setting-item { display: flex; justify-content: space-between; padding: 10px; font-size: 13px; cursor: pointer; border-radius: 4px;}
@@ -1696,12 +1692,10 @@ MEDIA_TUBE_HTML = """
         .speed-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: var(--yt-brand); margin-top: -5px;}
         .speed-slider::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px;}
 
-        /* Custom Context Menu */
         .custom-context { position: absolute; background: #212121; border: 1px solid var(--yt-border); border-radius: 4px; padding: 5px 0; z-index: 1000; display: none; box-shadow: 0 4px 10px rgba(0,0,0,0.5);}
         .context-item { padding: 8px 20px; font-size: 13px; cursor: pointer; color: #fff;}
         .context-item:hover { background: var(--yt-hover); }
 
-        /* Meta & Actions */
         .watch-title { font-size: 20px; font-weight: bold; margin: 15px 0 5px 0; word-break: break-all;}
         .video-visualizer { width: 100%; height: 30px; margin-bottom: 10px; border-radius: 4px; display: none; pointer-events: none;}
         .watch-actions { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--yt-border); padding-bottom: 15px; margin-bottom: 15px; flex-wrap: wrap; gap: 10px;}
@@ -1720,7 +1714,6 @@ MEDIA_TUBE_HTML = """
         .related-info { display: flex; flex-direction: column; }
         .related-title { font-size: 14px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; overflow: hidden; }
 
-        /* Subtitle Modal */
         .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.8); z-index: 2000; justify-content:center; align-items:center; display:none;}
         .modal-box { background: var(--yt-card); width: 400px; padding: 25px; border-radius: 12px; border: 1px solid var(--yt-border); display:flex; flex-direction:column; gap:15px;}
         .drop-zone { border: 2px dashed var(--yt-border); padding: 30px; text-align: center; border-radius: 8px; cursor: pointer; color: var(--yt-muted); transition: 0.2s;}
@@ -1730,8 +1723,6 @@ MEDIA_TUBE_HTML = """
         .hidden { display: none !important; }
         .theater-mode .primary-col { min-width: 100%; max-width: 100%; }
         .theater-mode .secondary-col { width: 100%; margin-top: 20px;}
-        
-        /* CC Styling override */
         ::cue { background-color: rgba(0,0,0,0.8); color: white; font-family: sans-serif; font-size: 100%; }
 
         @media(max-width: 1000px) { .primary-col { min-width: 100%; } .secondary-col { width: 100%; } .search-box { width: 60%; } }
@@ -1760,7 +1751,7 @@ MEDIA_TUBE_HTML = """
         <div id="watchView" class="watch-layout hidden">
             <div class="primary-col">
                 <div class="player-wrapper" id="playerWrapper">
-                    </div>
+                </div>
                 
                 <h1 class="watch-title" id="wTitle">Loading...</h1>
                 <canvas id="videoVisualizer" class="video-visualizer"></canvas>
@@ -1782,9 +1773,9 @@ MEDIA_TUBE_HTML = """
                 </div>
 
                 <div class="description-box">
-                    <span id="wDate">Uploaded on: Unknown</span>
+                    <span id="wDate" style="display:block; margin-bottom:8px; color:var(--yt-muted);">Uploaded on: Unknown</span>
                     <div id="subsList" style="margin-bottom: 10px; color: var(--accent-green); font-size:12px;"></div>
-                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active. Subtitles (SRT/VTT) auto-converted.</p>
+                    <p>Protected by Qlynk AES Verification. Native Audio/Video frequency parsing active. Subtitles auto-converted. Background media controls supported.</p>
                 </div>
             </div>
 
@@ -1821,7 +1812,7 @@ MEDIA_TUBE_HTML = """
     </div>
 
     <script>
-        // --- AUTH & ROLES ---
+        // --- AUTH & INITIALIZATION ---
         const urlParams = new URLSearchParams(window.location.search);
         const tokenFromUrl = urlParams.get('token');
         if (tokenFromUrl) {
@@ -1839,10 +1830,11 @@ MEDIA_TUBE_HTML = """
         let activeSlug = null;
         let pendingSubFile = null;
         let controlTimeout;
+        let clickTimer = null;
         let isSpaceHolding = false;
+        let spacePressTime = 0;
         let normalSpeed = 1.0;
 
-        // UI Utils
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
             const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -1927,6 +1919,34 @@ MEDIA_TUBE_HTML = """
             });
         }
 
+        // --- MEDIA SESSION API (Bluetooth & Keyboard keys) ---
+        function setupMediaSession(file) {
+            if ('mediaSession' in navigator) {
+                navigator.mediaSession.metadata = new MediaMetadata({
+                    title: file.title,
+                    artist: 'Qlynk Vault',
+                    album: 'Private Media',
+                    artwork: [ { src: file.thumbnail || FALLBACK_THUMB, sizes: '512x512', type: 'image/png' } ]
+                });
+
+                navigator.mediaSession.setActionHandler('play', () => { const m = document.getElementById('mainMedia'); if(m) m.play(); });
+                navigator.mediaSession.setActionHandler('pause', () => { const m = document.getElementById('mainMedia'); if(m) m.pause(); });
+                navigator.mediaSession.setActionHandler('seekbackward', (d) => { const m = document.getElementById('mainMedia'); if(m) m.currentTime = Math.max(m.currentTime - (d.seekOffset || 5), 0); });
+                navigator.mediaSession.setActionHandler('seekforward', (d) => { const m = document.getElementById('mainMedia'); if(m) m.currentTime = Math.min(m.currentTime + (d.seekOffset || 5), m.duration); });
+                navigator.mediaSession.setActionHandler('nexttrack', () => { window.nextVid(); });
+                navigator.mediaSession.setActionHandler('previoustrack', () => { const m = document.getElementById('mainMedia'); if(m) m.currentTime = 0; });
+            }
+        }
+
+        window.showActionIcon = function(text) {
+            const icon = document.getElementById('actionIcon');
+            if(!icon) return;
+            icon.innerText = text;
+            icon.classList.add('show');
+            clearTimeout(window.iconTimeout);
+            window.iconTimeout = setTimeout(() => icon.classList.remove('show'), 600);
+        }
+
         async function renderWatchPage(slug) {
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('watchView').classList.remove('hidden');
@@ -1938,6 +1958,7 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wSize').innerText = formatBytes(file.size_bytes);
             document.getElementById('wType').innerText = getMediaType(file.mime_type).toUpperCase();
             document.getElementById('wDate').innerText = `Uploaded on: ${new Date(file.uploaded_at).toLocaleDateString()}`;
+            
             const downloadUrl = file.is_external ? file.external_url : `/f/${file.slug}`;
             document.getElementById('wDownload').href = downloadUrl;
 
@@ -1945,13 +1966,12 @@ MEDIA_TUBE_HTML = """
             const type = getMediaType(file.mime_type);
             pw.innerHTML = ''; document.getElementById('videoVisualizer').style.display = 'none';
 
-            // Fetch Subs
             let subs = [];
             try { const r = await fetch(`/api/subtitles/list/${slug}`); if(r.ok) subs = await r.json(); } catch(e){}
             let trackHtml = subs.map((s,i) => `<track kind="subtitles" src="/sub/${s.sub_slug}" srclang="${s.language.substring(0,2).toLowerCase()}" label="${s.language}" ${i===0?'default':''}>`).join('');
 
-            // Build Custom Player UI
             const controlsHtml = `
+                <div class="action-icon-overlay" id="actionIcon"></div>
                 <div class="fast-forward-overlay" id="ffOverlay">Fast Forwarding 2x ▶▶</div>
                 <div class="custom-controls" id="pControls">
                     <div class="seek-container" id="pSeek"><div class="seek-progress" id="pSeekProg"></div></div>
@@ -1981,15 +2001,13 @@ MEDIA_TUBE_HTML = """
                     </div>
                     <input type="range" class="speed-slider" id="pSpeedRange" min="0.25" max="4" step="0.25" value="1">
                     <div style="text-align:center; font-size:11px; margin-bottom:10px;" id="speedDisplay">1.00x</div>
-                    <div style="font-weight:bold; margin-bottom:5px; color:var(--yt-brand);">Quality</div>
-                    <div class="setting-item">Auto (Original File)</div>
-                    <div style="font-weight:bold; margin-top:10px; margin-bottom:5px; color:var(--yt-brand);">Subtitles</div>
+                    <div style="font-weight:bold; margin-bottom:5px; color:var(--yt-brand);">Subtitles</div>
                     <div id="pCcList"></div>
                 </div>
             `;
 
             if(type === 'video') {
-                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" crossorigin="anonymous" playsinline autoplay>${trackHtml}</video>` + controlsHtml;
+                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${downloadUrl}" crossorigin="anonymous" playsinline>${trackHtml}</video>` + controlsHtml;
                 document.getElementById('videoVisualizer').style.display = 'block';
                 setTimeout(() => initVisualizer('mainMedia', 'videoVisualizer', 'bar', null), 500);
                 initCustomControls();
@@ -1999,9 +2017,8 @@ MEDIA_TUBE_HTML = """
                 pw.innerHTML = `
                     <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'">
                     <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
-                    <audio id="mainMedia" src="${downloadUrl}" crossorigin="anonymous" autoplay style="display:none;">${trackHtml}</audio>
+                    <audio id="mainMedia" src="${downloadUrl}" crossorigin="anonymous" style="display:none;">${trackHtml}</audio>
                 ` + controlsHtml;
-                // Wait for image to get dominant color
                 const img = document.getElementById('audioDisc');
                 if(img.complete) { getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color)); }
                 else { img.onload = () => getDominantColor(img, (color) => initVisualizer('mainMedia', 'audioVisualizer', 'wave', color)); }
@@ -2009,7 +2026,8 @@ MEDIA_TUBE_HTML = """
             } 
             else if(type === 'image') { pw.innerHTML = `<img class="player-element" src="${downloadUrl}">`; }
             
-            // Populating CC List
+            setupMediaSession(file);
+            
             const ccList = document.getElementById('pCcList');
             if(ccList) {
                 ccList.innerHTML = `<div class="setting-item" onclick="setCC(-1)">Off</div>` + subs.map((s,i) => `<div class="setting-item" onclick="setCC(${i})">${s.language}</div>`).join('');
@@ -2017,10 +2035,16 @@ MEDIA_TUBE_HTML = """
             if(subs.length > 0) document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
             else document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
             
+            const mediaEl = document.getElementById('mainMedia');
+            if(mediaEl) {
+                mediaEl.play().catch(e => console.log("Autoplay blocked by browser. User must click first."));
+                mediaEl.addEventListener('ended', () => {
+                    if(document.getElementById('autoplayToggle').checked) nextVid();
+                });
+            }
             renderRelated(file);
         }
 
-        // --- CUSTOM CONTROLS LOGIC & KEYBOARD SHORTCUTS ---
         function initCustomControls() {
             const media = document.getElementById('mainMedia');
             const pPlay = document.getElementById('pPlay');
@@ -2033,12 +2057,10 @@ MEDIA_TUBE_HTML = """
             const pControls = document.getElementById('pControls');
             const pw = document.getElementById('playerWrapper');
             
-            // Play/Pause
             pPlay.onclick = () => media.paused ? media.play() : media.pause();
             media.onplay = () => pPlay.innerText = '⏸';
             media.onpause = () => pPlay.innerText = '▶';
             
-            // Time & Seek
             media.ontimeupdate = () => {
                 const percent = (media.currentTime / media.duration) * 100;
                 pSeekProg.style.width = `${percent}%`;
@@ -2046,42 +2068,57 @@ MEDIA_TUBE_HTML = """
             };
             pSeek.onclick = (e) => {
                 const rect = pSeek.getBoundingClientRect();
-                const percent = (e.clientX - rect.left) / rect.width;
-                media.currentTime = percent * media.duration;
+                media.currentTime = ((e.clientX - rect.left) / rect.width) * media.duration;
             };
 
-            // Volume (Show slider visually on hover/focus)
             pVol.oninput = (e) => { media.volume = e.target.value; media.muted = false; pMute.innerText = media.volume > 0 ? '🔊' : '🔇'; };
             pMute.onclick = () => { media.muted = !media.muted; pMute.innerText = media.muted ? '🔇' : '🔊'; };
+            pFull.onclick = () => { document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen(); };
 
-            // Fullscreen
-            pFull.onclick = () => {
-                if(document.fullscreenElement) document.exitFullscreen();
-                else pw.requestFullscreen();
-            };
-
-            // Settings
             const setBtn = document.getElementById('pSetBtn');
             const setMenu = document.getElementById('pSettings');
-            setBtn.onclick = () => setMenu.classList.toggle('show');
+            setBtn.onclick = (e) => { e.stopPropagation(); setMenu.classList.toggle('show'); };
             document.getElementById('pSpeedRange').oninput = (e) => { setSpeed(e.target.value); };
 
-            // Auto Hide Controls
             pw.onmousemove = () => {
                 pControls.classList.add('active');
                 clearTimeout(controlTimeout);
                 controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
             };
 
-            // Mobile Double Tap
-            pw.ondblclick = (e) => {
-                const rect = pw.getBoundingClientRect();
-                if(e.clientX > rect.left + rect.width/2) media.currentTime += 10;
-                else media.currentTime -= 10;
+            // Smart Center Click & Double Click
+            pw.onclick = (e) => {
+                if(e.target.closest('.custom-controls') || e.target.closest('.settings-menu')) return;
+                if(e.detail === 1) { 
+                    clickTimer = setTimeout(() => {
+                        media.paused ? media.play() : media.pause();
+                        showActionIcon(media.paused ? '⏸ Pause' : '▶ Play');
+                    }, 200); 
+                }
             };
 
-            media.onended = () => { if(document.getElementById('autoplayToggle').checked) nextVid(); };
+            pw.ondblclick = (e) => {
+                e.preventDefault();
+                clearTimeout(clickTimer); 
+                if(e.target.closest('.custom-controls')) return;
+                
+                if(window.innerWidth <= 768) {
+                    const rect = pw.getBoundingClientRect();
+                    if(e.clientX > rect.left + rect.width/2) { media.currentTime += 10; showActionIcon('⏩ 10s'); }
+                    else { media.currentTime -= 10; showActionIcon('⏪ 10s'); }
+                } else {
+                    document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen();
+                }
+            };
         }
+
+        document.addEventListener('click', (e) => {
+            const setMenu = document.getElementById('pSettings');
+            const setBtn = document.getElementById('pSetBtn');
+            if(setMenu && setMenu.classList.contains('show') && !setMenu.contains(e.target) && e.target !== setBtn) {
+                setMenu.classList.remove('show');
+            }
+        });
 
         window.setSpeed = function(val) {
             const media = document.getElementById('mainMedia');
@@ -2105,7 +2142,7 @@ MEDIA_TUBE_HTML = """
             if(nextItem) nextItem.click();
         }
 
-        // --- ADVANCED KEYBOARD SHORTCUTS ---
+        // --- KEYBOARD SHORTCUTS ---
         document.addEventListener('keydown', (e) => {
             if(document.activeElement.tagName === 'INPUT') return;
             const media = document.getElementById('mainMedia');
@@ -2114,24 +2151,23 @@ MEDIA_TUBE_HTML = """
             switch(e.code) {
                 case 'Space': 
                     e.preventDefault();
-                    if(!e.repeat && !isSpaceHolding) {
+                    if(!e.repeat && spacePressTime === 0) spacePressTime = Date.now();
+                    if(spacePressTime > 0 && (Date.now() - spacePressTime > 250) && !isSpaceHolding) {
                         isSpaceHolding = true;
-                        // Start 2x Playback
                         media.playbackRate = 2.0;
                         document.getElementById('ffOverlay').style.display = 'flex';
                     }
                     break;
                 case 'ArrowRight':
-                    e.preventDefault(); media.currentTime += 5;
-                    break;
+                    e.preventDefault(); media.currentTime += 5; showActionIcon('⏩ 5s'); break;
                 case 'ArrowLeft':
-                    e.preventDefault(); media.currentTime -= 5;
-                    break;
+                    e.preventDefault(); media.currentTime -= 5; showActionIcon('⏪ 5s'); break;
                 case 'ArrowUp':
                     e.preventDefault(); 
                     media.volume = Math.min(1, media.volume + 0.05);
                     document.getElementById('pVol').value = media.volume;
                     document.getElementById('pVol').classList.add('active');
+                    showActionIcon(`🔊 ${Math.round(media.volume * 100)}%`);
                     setTimeout(() => document.getElementById('pVol').classList.remove('active'), 1000);
                     break;
                 case 'ArrowDown':
@@ -2139,29 +2175,25 @@ MEDIA_TUBE_HTML = """
                     media.volume = Math.max(0, media.volume - 0.05);
                     document.getElementById('pVol').value = media.volume;
                     document.getElementById('pVol').classList.add('active');
+                    if(media.volume === 0) showActionIcon('🔇 Muted');
+                    else showActionIcon(`🔉 ${Math.round(media.volume * 100)}%`);
                     setTimeout(() => document.getElementById('pVol').classList.remove('active'), 1000);
                     break;
                 case 'KeyF': 
                     e.preventDefault(); 
                     const pw = document.getElementById('playerWrapper');
-                    if(document.fullscreenElement) document.exitFullscreen();
-                    else pw.requestFullscreen(); 
+                    document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen(); 
                     break;
-                case 'KeyT':
-                    e.preventDefault(); toggleTheater();
-                    break;
-                case 'KeyI':
-                    e.preventDefault(); togglePiP();
-                    break;
+                case 'KeyT': e.preventDefault(); toggleTheater(); break;
+                case 'KeyI': e.preventDefault(); togglePiP(); break;
                 case 'KeyM': 
-                    e.preventDefault(); 
-                    media.muted = !media.muted; 
+                    e.preventDefault(); media.muted = !media.muted; 
                     document.getElementById('pMute').innerText = media.muted ? '🔇' : '🔊';
+                    showActionIcon(media.muted ? '🔇 Muted' : '🔊 Unmuted');
                     break;
             }
         });
 
-        // Spacebar Release (Stop 2x speed)
         document.addEventListener('keyup', (e) => {
             if(document.activeElement.tagName === 'INPUT') return;
             const media = document.getElementById('mainMedia');
@@ -2169,33 +2201,30 @@ MEDIA_TUBE_HTML = """
 
             if(e.code === 'Space') {
                 e.preventDefault();
-                isSpaceHolding = false;
-                media.playbackRate = normalSpeed;
-                document.getElementById('ffOverlay').style.display = 'none';
-                
-                // If it was just a quick click (no hold detected time-wise), toggle play/pause
-                media.paused ? media.play() : media.pause();
+                if(isSpaceHolding) {
+                    isSpaceHolding = false;
+                    media.playbackRate = normalSpeed;
+                    document.getElementById('ffOverlay').style.display = 'none';
+                } else {
+                    media.paused ? media.play() : media.pause();
+                    showActionIcon(media.paused ? '⏸ Pause' : '▶ Play');
+                }
+                spacePressTime = 0; 
             }
         });
 
-        // --- CONTEXT MENU (Disable native Right Click) ---
         document.addEventListener('contextmenu', (e) => {
             const pw = document.getElementById('playerWrapper');
             if(pw && pw.contains(e.target)) {
                 e.preventDefault();
                 const cm = document.getElementById('customContext');
                 cm.style.display = 'block';
-                cm.style.left = `${e.pageX}px`;
-                cm.style.top = `${e.pageY}px`;
+                cm.style.left = `${e.pageX}px`; cm.style.top = `${e.pageY}px`;
             }
         });
         document.addEventListener('click', () => document.getElementById('customContext').style.display = 'none');
-        window.copyVidUrl = function() {
-            navigator.clipboard.writeText(window.location.href);
-            alert("Video Link Copied!");
-        }
+        window.copyVidUrl = function() { navigator.clipboard.writeText(window.location.href); alert("Video Link Copied!"); }
 
-        // --- VISUALIZER ENGINE ---
         function initVisualizer(mediaId, canvasId, mode, dominantColor) {
             const media = document.getElementById(mediaId);
             const canvas = document.getElementById(canvasId);
@@ -2210,11 +2239,9 @@ MEDIA_TUBE_HTML = """
                     currentAudioCtx = audioCtx;
                     media.crossOrigin = "anonymous";
                     const analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 64; // 32 bars
-                    
+                    analyser.fftSize = 64; 
                     const source = audioCtx.createMediaElementSource(media);
                     source.connect(analyser); analyser.connect(audioCtx.destination);
-                    
                     const bufferLength = analyser.frequencyBinCount;
                     const dataArray = new Uint8Array(bufferLength);
                     
@@ -2222,25 +2249,20 @@ MEDIA_TUBE_HTML = """
                         currentAnimationId = requestAnimationFrame(draw);
                         canvas.width = canvas.parentElement.clientWidth;
                         canvas.height = canvas.clientHeight || canvas.parentElement.clientHeight;
-                        
                         analyser.getByteFrequencyData(dataArray);
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
                         
-                        const barWidth = (canvas.width / bufferLength) * 0.8; // Thin width
+                        const barWidth = (canvas.width / bufferLength) * 0.8;
                         const centerY = canvas.height / 2;
-                        let x = (canvas.width - (barWidth + 2) * bufferLength) / 2; // Center horizontally
+                        let x = (canvas.width - (barWidth + 2) * bufferLength) / 2;
                         
                         for(let i = 0; i < bufferLength; i++) {
-                            // Scale height (make it pop)
                             const barHeight = (dataArray[i] / 255) * (canvas.height / 2.2);
                             ctx.fillStyle = visualColor;
-                            
                             if(mode === 'wave') {
-                                // Draw from Center Y (Up and Down meeting at base)
-                                ctx.fillRect(x, centerY - barHeight, barWidth, barHeight); // Top
-                                ctx.fillRect(x, centerY, barWidth, barHeight); // Bottom
+                                ctx.fillRect(x, centerY - barHeight, barWidth, barHeight); 
+                                ctx.fillRect(x, centerY, barWidth, barHeight); 
                             } else {
-                                // Video mode (bottom up only)
                                 ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight); 
                             }
                             x += barWidth + 2;
@@ -2251,7 +2273,6 @@ MEDIA_TUBE_HTML = """
             }, {once: true});
         }
 
-        // --- SUBTITLE SYSTEM (Auto-Detect Lang) ---
         const dropZone = document.getElementById('dropZone');
         dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.style.borderColor = '#bc8cff'; });
         dropZone.addEventListener('dragleave', () => dropZone.style.borderColor = 'var(--yt-border)');
@@ -2264,8 +2285,6 @@ MEDIA_TUBE_HTML = """
             if(input.files.length > 0) {
                 pendingSubFile = input.files[0];
                 document.getElementById('selectedFileName').innerText = `Selected: ${pendingSubFile.name}`;
-                
-                // Auto Detect Language based on filename
                 let n = pendingSubFile.name.toLowerCase();
                 let guessed = "English";
                 if(n.includes('hin') || n.includes('hi.')) guessed = "Hindi";
@@ -2292,7 +2311,6 @@ MEDIA_TUBE_HTML = """
             } catch(e) { alert("Network Error"); }
         }
 
-        // --- RELATED LIST ---
         function renderRelated(currentFile) {
             const container = document.getElementById('relatedVideos');
             container.innerHTML = '';
