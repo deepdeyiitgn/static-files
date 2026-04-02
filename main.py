@@ -1515,7 +1515,7 @@ import uuid
 import json
 import os
 from datetime import datetime
-from huggingface_hub import hf_hub_download 
+from huggingface_hub import hf_hub_download
 
 # --- 🧠 In-Memory Token Store & Subtitle DB Managers ---
 share_tokens_store = {} 
@@ -1557,6 +1557,7 @@ async def generate_share_token(token: str = Depends(verify_auth)):
 @app.get("/api/media_library")
 async def fetch_media_library(access: dict = Depends(verify_view_access)):
     db = get_db()
+    # Filter for videos and audios only
     filtered_files = [
         f for f in db.get("files", []) 
         if not f.get("is_external") and str(f.get("mime_type", "")).startswith(("video/", "audio/"))
@@ -1572,6 +1573,8 @@ async def upload_subtitle(
     token: str = Depends(verify_auth)
 ):
     content = (await file.read()).decode('utf-8', errors='ignore')
+    
+    # Auto Convert SRT to WebVTT
     if file.filename.endswith('.srt') or not content.startswith('WEBVTT'):
         content = "WEBVTT\n\n" + content.replace(',', '.')
         
@@ -1600,6 +1603,7 @@ async def upload_subtitle(
     
     return {"status": "success", "message": f"Subtitle ({language}) linked to media."}
 
+# Fixed parameter path capturing for slugs with slashes
 @app.get("/api/subtitles/list/{media_slug:path}")
 async def list_subtitles(media_slug: str, access: dict = Depends(verify_view_access)):
     db = get_sub_db()
@@ -1658,14 +1662,11 @@ MEDIA_TUBE_HTML = """
         /* PLAYER ARCHITECTURE */
         .player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; overflow: hidden; position: relative; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; justify-content: center; align-items: center;}
         .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
+        .yt-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 4;}
         
-        /* URGENT FIX: YT Container perfectly sizing and removing pointer events so custom controls work */
-        .yt-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1;}
-        .yt-container iframe { width: 100% !important; height: 100% !important; border: none; pointer-events: none;}
-        
-        /* Audio Visuals Fixes */
-        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); position: relative; display: block;}
-        .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 30%; z-index: 4; pointer-events: none;}
+        /* Audio Visuals */
+        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
+        .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
         @keyframes spin { 100% { transform: rotate(360deg); } }
         
         /* Action UI Overlay */
@@ -1786,7 +1787,7 @@ MEDIA_TUBE_HTML = """
                 <div class="description-box">
                     <span id="wDate" style="display:block; margin-bottom:8px; color:var(--yt-muted);">Uploaded on: Unknown</span>
                     <div id="subsList" style="margin-bottom: 10px; color: var(--accent-green); font-size:12px;"></div>
-                    <p id="wDesc">Protected by Qlynk Universal Engine. Native & Hybrid YouTube parsing active. Advanced UI, Repeat, Shuffle, and Spacebar Logic supported.</p>
+                    <p>Protected by Qlynk Universal Engine. Native & Hybrid YouTube parsing active. Advanced UI, Repeat, Shuffle, and Spacebar Logic supported.</p>
                 </div>
             </div>
 
@@ -1852,6 +1853,7 @@ MEDIA_TUBE_HTML = """
         let isRepeat = false;
         let isShuffle = false;
         let ytPollInterval = null;
+        let pendingSubFile = null;
 
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
@@ -1869,11 +1871,20 @@ MEDIA_TUBE_HTML = """
             return 'file';
         }
         
+        // Robust YT Regex - Extract YouTube ID from URLs and plain IDs
         function extractYtId(url) {
-            const p = /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))((\w|-){11})(?:\S+)?$/;
-            return (url.match(p)) ? RegExp.$1 : null;
+            const patterns = [
+                /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))((\w|-){11})(?:\S+)?$/,
+                /^((\w|-){11})$/ // Plain YouTube ID
+            ];
+            for(let p of patterns) {
+                const match = url.trim().match(p);
+                if(match) return match[1];
+            }
+            return null;
         }
 
+        // Dominant Color Engine with CORS fallback
         function applyDominantColor(imgSrc, fallback = '#bc8cff') {
             const img = new Image();
             img.crossOrigin = "Anonymous";
@@ -1921,6 +1932,7 @@ MEDIA_TUBE_HTML = """
             const path = window.location.pathname;
             const params = new URLSearchParams(window.location.search);
             
+            // Clean up player state
             if(currentAudioCtx) { currentAudioCtx.close(); currentAudioCtx = null; }
             if(currentAnimationId) cancelAnimationFrame(currentAnimationId);
             if(ytPollInterval) clearInterval(ytPollInterval);
@@ -1959,7 +1971,6 @@ MEDIA_TUBE_HTML = """
             if(searchQuery) {
                 const q = searchQuery.toLowerCase();
                 data = masterLibrary.filter(f => f.title.toLowerCase().includes(q) || f.slug.toLowerCase().includes(q));
-                renderHybridRelated(searchQuery, grid); // Inject Hybrid Queries visually
             }
             data.forEach(f => {
                 const type = getMediaType(f.mime_type);
@@ -1971,12 +1982,14 @@ MEDIA_TUBE_HTML = """
             });
         }
 
+        // --- MEDIA SESSION API (Bluetooth & Keyboard keys) ---
         function setupMediaSession(title, artist, artworkSrc) {
             if ('mediaSession' in navigator) {
                 navigator.mediaSession.metadata = new MediaMetadata({
                     title: title, artist: artist, album: 'Qlynk Universal',
                     artwork: [ { src: artworkSrc || FALLBACK_THUMB, sizes: '512x512', type: 'image/png' } ]
                 });
+
                 navigator.mediaSession.setActionHandler('play', () => { if(activePlayer) activePlayer.play(); });
                 navigator.mediaSession.setActionHandler('pause', () => { if(activePlayer) activePlayer.pause(); });
                 navigator.mediaSession.setActionHandler('seekbackward', (d) => { if(activePlayer) activePlayer.seek(Math.max(activePlayer.currentTime() - (d.seekOffset || 5), 0)); });
@@ -2038,6 +2051,7 @@ MEDIA_TUBE_HTML = """
             `;
         }
 
+        // --- RENDER LOCAL WATCH PAGE ---
         async function renderWatchPage(slug) {
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('watchView').classList.remove('hidden');
@@ -2049,9 +2063,9 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wSize').innerText = formatBytes(file.size_bytes);
             document.getElementById('wType').innerText = getMediaType(file.mime_type).toUpperCase();
             document.getElementById('wDate').innerText = `Uploaded on: ${new Date(file.uploaded_at).toLocaleDateString()}`;
-            document.getElementById('wDesc').innerText = file.description || "Protected by Qlynk Universal Engine. Native & Hybrid YouTube parsing active.";
             document.getElementById('wDownload').style.display = isAdmin ? 'flex' : 'none';
             document.getElementById('wDownload').href = file.is_external ? file.external_url : `/f/${file.slug}`;
+            document.getElementById('addSubBtn').style.display = isAdmin ? 'flex' : 'none';
 
             const pw = document.getElementById('playerWrapper');
             const type = getMediaType(file.mime_type);
@@ -2089,15 +2103,16 @@ MEDIA_TUBE_HTML = """
             
             const mediaEl = document.getElementById('mainMedia');
             if(mediaEl) {
+                // Map HTML5 Media to Universal Interface
                 activePlayer = {
                     play: () => mediaEl.play(),
                     pause: () => mediaEl.pause(),
-                    seek: (t) => mediaEl.currentTime = t,
+                    seek: (t) => { mediaEl.currentTime = t; },
                     setVolume: (v) => { mediaEl.volume = v; mediaEl.muted = false; },
-                    toggleMute: () => mediaEl.muted = !mediaEl.muted,
+                    toggleMute: () => { mediaEl.muted = !mediaEl.muted; },
                     currentTime: () => mediaEl.currentTime,
                     duration: () => mediaEl.duration || 0,
-                    setSpeed: (s) => mediaEl.playbackRate = s,
+                    setSpeed: (s) => { mediaEl.playbackRate = s; },
                     isPaused: () => mediaEl.paused,
                     isMuted: () => mediaEl.muted,
                     getVolume: () => mediaEl.volume
@@ -2129,32 +2144,28 @@ MEDIA_TUBE_HTML = """
             applyDominantColor(thumb, '#ff0000');
 
             const pw = document.getElementById('playerWrapper');
-            pw.innerHTML = `<div id="ytContainer" class="yt-container"><div id="ytPlayerDiv"></div></div>` + getControlsHtml();
+            pw.innerHTML = `<div id="ytContainer" class="yt-container"><div id="ytPlayerDiv" style="width:100%; height:100%;"></div></div>` + getControlsHtml();
             document.getElementById('videoVisualizer').style.display = 'block';
 
-            // URGENT FIX: width and height must be 100% inside YT config to fill container
+            // Init YT Player
             ytPlayer = new YT.Player('ytPlayerDiv', {
-                height: '100%',
-                width: '100%',
                 videoId: ytId,
-                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'rel': 0, 'modestbranding': 1, 'playsinline': 1 },
+                width: '100%',
+                height: '100%',
+                playerVars: { 'autoplay': 1, 'controls': 0, 'disablekb': 1, 'fs': 0, 'rel': 0, 'modestbranding': 1 },
                 events: {
                     'onReady': onYtReady,
                     'onStateChange': onYtStateChange
                 }
             });
-            renderHybridRelated("YouTube");
+            renderHybridRelated("YouTube Video");
         }
 
         function onYtReady(event) {
-            const vData = ytPlayer.getVideoData();
-            if(vData && vData.title) {
-                document.getElementById('wTitle').innerText = vData.title;
-                document.getElementById('wDesc').innerText = `YouTube Channel: ${vData.author || "Unknown"}\nProtected by Qlynk Universal Engine Hybrid Proxy.`;
-                setupMediaSession(vData.title, vData.author || 'YouTube Stream', `https://img.youtube.com/vi/${ytIdActive}/maxresdefault.jpg`);
-                renderHybridRelated(vData.title);
-            }
+            document.getElementById('wTitle').innerText = ytPlayer.getVideoData().title;
+            setupMediaSession(ytPlayer.getVideoData().title, 'YouTube Stream', `https://img.youtube.com/vi/${ytIdActive}/maxresdefault.jpg`);
             
+            // Map YT to Universal Interface
             activePlayer = {
                 play: () => ytPlayer.playVideo(),
                 pause: () => ytPlayer.pauseVideo(),
@@ -2171,12 +2182,14 @@ MEDIA_TUBE_HTML = """
 
             initCustomControls();
             
+            // Sync Quality Levels
             const qList = ytPlayer.getAvailableQualityLevels();
             if(qList && qList.length > 0) {
                 document.getElementById('ytQualitySection').style.display = 'block';
                 document.getElementById('pYtQualityList').innerHTML = qList.map(q => `<button class="btn" style="padding:4px 8px; font-size:11px;" onclick="ytPlayer.setPlaybackQuality('${q}')">${q}</button>`).join('');
             }
 
+            // Sync YT Captions to menu
             const ccList = document.getElementById('pCcList');
             if(ccList) {
                 ccList.innerHTML = `<div class="setting-item" onclick="ytPlayer.unloadModule('captions')">Off</div>
@@ -2192,12 +2205,6 @@ MEDIA_TUBE_HTML = """
             if (event.data == YT.PlayerState.PLAYING) pPlay.innerText = '⏸';
             else if (event.data == YT.PlayerState.PAUSED) pPlay.innerText = '▶';
             else if (event.data == YT.PlayerState.ENDED) handleMediaEnded();
-            
-            // Re-sync metadata just in case
-            if (event.data == YT.PlayerState.PLAYING) {
-                const vData = ytPlayer.getVideoData();
-                if(vData && vData.title) document.getElementById('wTitle').innerText = vData.title;
-            }
         }
 
         function simulateYtVisualizer() {
@@ -2209,13 +2216,12 @@ MEDIA_TUBE_HTML = """
             function drawYt() {
                 if(!ytIdActive) return;
                 currentAnimationId = requestAnimationFrame(drawYt);
-                
+                if(ytPlayer && ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) return;
+
                 canvas.width = canvas.parentElement.clientWidth;
                 canvas.height = canvas.clientHeight || 40;
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-                if(!ytPlayer || typeof ytPlayer.getPlayerState !== 'function' || ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING) return;
-
+                
                 const barWidth = (canvas.width / numBars) * 0.8;
                 const centerY = canvas.height / 2;
                 let x = (canvas.width - (barWidth + 2) * numBars) / 2;
@@ -2278,6 +2284,7 @@ MEDIA_TUBE_HTML = """
                 controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
             };
 
+            // Smart Center Click
             pw.onclick = (e) => {
                 if(e.target.closest('.custom-controls') || e.target.closest('.settings-menu')) return;
                 if(e.detail === 1) { 
@@ -2342,8 +2349,10 @@ MEDIA_TUBE_HTML = """
             switch(e.code) {
                 case 'Space': 
                     e.preventDefault();
-                    if(!e.repeat && spacePressTime === 0) spacePressTime = Date.now();
-                    if(spacePressTime > 0 && (Date.now() - spacePressTime > 250) && !isSpaceHolding) {
+                    if(!e.repeat && spacePressTime === 0) {
+                        spacePressTime = Date.now();
+                    }
+                    if(!isSpaceHolding && spacePressTime > 0 && (Date.now() - spacePressTime > 250)) {
                         isSpaceHolding = true;
                         activePlayer.setSpeed(2.0);
                         document.getElementById('ffOverlay').style.display = 'flex';
@@ -2383,7 +2392,7 @@ MEDIA_TUBE_HTML = """
         });
 
         document.addEventListener('keyup', (e) => {
-            if(document.activeElement.tagName === 'INPUT' || !activePlayer) return;
+            if(document.activeElement.tagName === 'INPUT') return;
 
             if(e.code === 'Space') {
                 e.preventDefault();
@@ -2391,13 +2400,13 @@ MEDIA_TUBE_HTML = """
                     isSpaceHolding = false;
                     activePlayer.setSpeed(normalSpeed);
                     document.getElementById('ffOverlay').style.display = 'none';
-                } else {
-                    if (Date.now() - spacePressTime < 250) {
+                } else if(spacePressTime > 0 && (Date.now() - spacePressTime < 250)) {
+                    if(activePlayer) {
                         activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
                         showActionIcon(activePlayer.isPaused() ? '⏸ Pause' : '▶ Play');
                     }
                 }
-                spacePressTime = 0; 
+                spacePressTime = 0;
             }
         });
 
@@ -2432,7 +2441,7 @@ MEDIA_TUBE_HTML = """
                     currentAudioCtx = audioCtx;
                     media.crossOrigin = "anonymous";
                     const analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 64; 
+                    analyser.fftSize = 64;
                     const source = audioCtx.createMediaElementSource(media);
                     source.connect(analyser); analyser.connect(audioCtx.destination);
                     const bufferLength = analyser.frequencyBinCount;
@@ -2440,11 +2449,8 @@ MEDIA_TUBE_HTML = """
                     
                     function draw() {
                         currentAnimationId = requestAnimationFrame(draw);
-                        
-                        // URGENT FIX: properly assign width and height for visualizer canvas
                         canvas.width = canvas.parentElement.clientWidth;
-                        canvas.height = canvas.clientHeight || (mode === 'wave' ? 150 : 40);
-                        
+                        canvas.height = canvas.clientHeight || canvas.parentElement.clientHeight;
                         analyser.getByteFrequencyData(dataArray);
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
                         
@@ -2465,15 +2471,58 @@ MEDIA_TUBE_HTML = """
             }, {once: true});
         }
 
-        function openSubModal() { document.getElementById('subModal').style.display = 'flex'; }
-        function closeSubModal() { document.getElementById('subModal').style.display = 'none'; pendingSubFile = null; document.getElementById('selectedFileName').innerText = ''; }
+        // Subtitle Modal Functions
+        let pendingSubFile = null;
+        
+        function openSubModal() { 
+            document.getElementById('subModal').style.display = 'flex'; 
+        }
+        
+        function closeSubModal() { 
+            document.getElementById('subModal').style.display = 'none'; 
+            pendingSubFile = null; 
+            document.getElementById('selectedFileName').innerText = ''; 
+            document.getElementById('subLang').value = '';
+        }
+        
         function fileSelected(input) {
             if(input.files.length > 0) {
                 pendingSubFile = input.files[0];
                 document.getElementById('selectedFileName').innerText = `Selected: ${pendingSubFile.name}`;
             }
         }
-        async function submitSubtitle() { /* Omitted fetch code for brevity, logic intact */ }
+        
+        async function submitSubtitle() {
+            if(!pendingSubFile || !activeSlug) {
+                alert("Please select a file and ensure media is loaded.");
+                return;
+            }
+            
+            const language = document.getElementById('subLang').value.trim() || 'English';
+            const formData = new FormData();
+            formData.append('file', pendingSubFile);
+            formData.append('media_slug', activeSlug);
+            formData.append('language', language);
+            
+            try {
+                const res = await fetch('/api/subtitle/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if(res.ok) {
+                    alert(`Subtitle (${language}) uploaded successfully!`);
+                    closeSubModal();
+                    renderWatchPage(activeSlug);
+                } else {
+                    alert('Failed to upload subtitle.');
+                }
+            } catch(e) {
+                console.error('Subtitle upload error:', e);
+                alert('Error uploading subtitle.');
+            }
+        }
+        
         window.setCC = function(index) {
             const media = document.getElementById('mainMedia');
             if(!media) return;
@@ -2483,66 +2532,127 @@ MEDIA_TUBE_HTML = """
             document.getElementById('pSettings').classList.remove('show');
         }
 
-        // Hybrid Recommendations Engine
-        function renderHybridRelated(queryText, customContainer = null) {
-            const container = customContainer || document.getElementById('relatedVideos');
-            if(!customContainer) container.innerHTML = '';
+        // Hybrid Recommendations Engine with Local + YouTube suggestions
+        function renderHybridRelated(queryText) {
+            const container = document.getElementById('relatedVideos');
+            container.innerHTML = '';
             
-            if(!customContainer) {
-                const currentWords = queryText.toLowerCase().split(/[\s_\-\.]+/).filter(w => w.length > 2);
-                let scoredList = masterLibrary.map(f => {
-                    if(f.slug === activeSlug) return {file: f, score: -1};
-                    let score = 0;
-                    f.title.toLowerCase().split(/[\s_\-\.]+/).forEach(w => { if(currentWords.includes(w)) score++; });
-                    return {file: f, score: score};
-                });
-                scoredList.sort((a,b) => b.score - a.score || new Date(b.file.uploaded_at) - new Date(a.file.uploaded_at));
-                
-                scoredList.slice(0, 8).forEach(item => {
-                    if(item.score === -1) return;
-                    const f = item.file;
-                    const card = document.createElement('a');
-                    card.href = `/video?q=${f.slug}`; card.className = 'related-card';
-                    card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
-                    card.innerHTML = `<div class="thumb-wrapper"><img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'"><div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div></div><div class="related-info"><div class="related-title">${f.title}</div><span style="font-size:11px; color:var(--yt-muted);">Vault</span></div>`;
-                    container.appendChild(card);
-                });
-            }
+            // 1. Local Database Matches - Smart scoring
+            const currentWords = queryText.toLowerCase().split(/[\s_\-\.]+/).filter(w => w.length > 2);
+            let scoredList = masterLibrary.map(f => {
+                if(f.slug === activeSlug || f.slug === (ytIdActive ? null : activeSlug)) return {file: f, score: -1};
+                let score = 0;
+                const titleWords = f.title.toLowerCase().split(/[\s_\-\.]+/);
+                titleWords.forEach(w => { if(currentWords.includes(w)) score++; });
+                return {file: f, score: score};
+            });
+            
+            scoredList.sort((a,b) => b.score - a.score || new Date(b.file.uploaded_at) - new Date(a.file.uploaded_at));
+            
+            scoredList.slice(0, 6).forEach(item => {
+                if(item.score === -1) return;
+                const f = item.file;
+                const card = document.createElement('a');
+                card.href = `/video?q=${f.slug}`; 
+                card.className = 'related-card';
+                card.onclick = (e) => { e.preventDefault(); window.history.pushState({}, '', `/video?q=${f.slug}`); routeHandler(); };
+                card.innerHTML = `
+                    <div class="thumb-wrapper">
+                        <img src="${f.thumbnail || FALLBACK_THUMB}" class="thumb-img" onerror="this.src='${FALLBACK_THUMB}'">
+                        <div class="type-badge" style="font-size:10px; padding:2px;">${getMediaType(f.mime_type)}</div>
+                    </div>
+                    <div class="related-info">
+                        <div class="related-title">${f.title}</div>
+                        <span style="font-size:11px; color:var(--yt-muted);">Vault</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
 
-            // URGENT FIX: Google Suggest API JSONP Implementation
-            if(queryText.length > 3) {
+            // 2. YouTube Public Suggest API (JSONP - No Auth Required)
+            if(queryText.length > 3 && !ytIdActive) {
                 const script = document.createElement('script');
                 window.ytSuggestCallback = function(data) {
                     if(data && data[1]) {
-                        data[1].slice(0, 5).forEach(suggestion => {
+                        data[1].slice(0, 4).forEach(suggestion => {
                             const sc = document.createElement('a');
-                            sc.className = customContainer ? 'vid-card' : 'related-card'; 
+                            sc.className = 'related-card'; 
                             sc.href = "#";
-                            sc.onclick = (e) => { e.preventDefault(); document.getElementById('searchInput').value = suggestion[0]; handleSearch(); };
-                            
-                            if (customContainer) {
-                                sc.innerHTML = `<div class="thumb-wrapper" style="background:#181818; display:flex; align-items:center; justify-content:center; font-size:40px;">🔍</div><div class="vid-title" style="text-transform:capitalize;">${suggestion[0]}</div><div class="vid-meta yt-pill">YouTube Web Query</div>`;
-                            } else {
-                                sc.innerHTML = `<div class="thumb-wrapper" style="background:#181818; display:flex; align-items:center; justify-content:center; font-size:24px;">🔍</div><div class="related-info"><div class="related-title" style="text-transform:capitalize;">${suggestion[0]}</div><div class="yt-pill">YouTube Query</div></div>`;
-                            }
+                            sc.style.cursor = 'pointer';
+                            sc.onclick = (e) => { 
+                                e.preventDefault(); 
+                                document.getElementById('searchInput').value = suggestion[0]; 
+                                handleSearch(); 
+                            };
+                            sc.innerHTML = `
+                                <div class="thumb-wrapper" style="background:linear-gradient(135deg, #1a1a1a, #333); display:flex; align-items:center; justify-content:center; font-size:24px; border: 1px solid #ff0000;">
+                                    🔍
+                                </div>
+                                <div class="related-info">
+                                    <div class="related-title" style="text-transform:capitalize;">${suggestion[0]}</div>
+                                    <div class="yt-pill">YouTube</div>
+                                </div>
+                            `;
                             container.appendChild(sc);
                         });
                     }
                 };
                 script.src = `https://suggestqueries.google.com/complete/search?client=youtube&ds=yt&q=${encodeURIComponent(queryText)}&callback=ytSuggestCallback`;
+                script.onerror = () => console.log("YT suggestions unavailable");
                 document.body.appendChild(script);
             }
         }
 
-        function toggleTheater() { document.getElementById('watchView').classList.toggle('theater-mode'); window.scrollTo({top: 0, behavior: 'smooth'}); }
+        // Theater Mode Toggle
+        function toggleTheater() { 
+            const watchView = document.getElementById('watchView');
+            watchView.classList.toggle('theater-mode'); 
+            window.scrollTo({top: 0, behavior: 'smooth'}); 
+        }
+        
+        // Picture-in-Picture Toggle
         async function togglePiP() {
             const video = document.getElementById('mainMedia');
-            if(!video || video.tagName !== 'VIDEO') return;
-            if (document.pictureInPictureElement) await document.exitPictureInPicture();
-            else await video.requestPictureInPicture();
+            if(!video || video.tagName !== 'VIDEO') {
+                showActionIcon('🔲 PiP not available');
+                return;
+            }
+            try {
+                if (document.pictureInPictureElement) {
+                    await document.exitPictureInPicture();
+                    showActionIcon('🔲 PiP Disabled');
+                } else {
+                    await video.requestPictureInPicture();
+                    showActionIcon('🔲 PiP Enabled');
+                }
+            } catch(e) {
+                console.error('PiP error:', e);
+                showActionIcon('🔲 PiP Error');
+            }
         }
 
+        // Generate Share Link for Guests
+        async function generateShareLink() {
+            try {
+                const res = await fetch('/api/share/generate', {method: 'POST'});
+                if(res.ok) {
+                    const data = await res.json();
+                    const shareUrl = window.location.origin + window.location.pathname + `?token=${data.share_token}`;
+                    navigator.clipboard.writeText(shareUrl);
+                    showActionIcon('🔗 Share link copied!');
+                } else {
+                    alert('Failed to generate share link.');
+                }
+            } catch(e) {
+                console.error('Share generation error:', e);
+                alert('Error generating share link.');
+            }
+        }
+
+        // Initialize app on page load
         init();
+        
+        // Handle back/forward buttons
         window.onpopstate = routeHandler;
     </script>
 </body>
@@ -2553,3 +2663,4 @@ MEDIA_TUBE_HTML = """
 @app.get("/video", response_class=HTMLResponse)
 async def serve_media_tube():
     return HTMLResponse(content=MEDIA_TUBE_HTML)
+        
