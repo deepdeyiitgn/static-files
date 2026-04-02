@@ -1738,7 +1738,15 @@ MEDIA_TUBE_HTML = """
         ::cue { background-color: rgba(0,0,0,0.8); color: white; font-family: sans-serif; font-size: 100%; }
 
         @media(max-width: 1000px) { .primary-col { min-width: 100%; } .secondary-col { width: 100%; } .search-box { width: 60%; } }
-        @media(max-width: 600px) { .search-box { display: none; } .custom-controls { padding: 40px 10px 10px 10px;} .ctrl-btn { font-size: 16px;} .volume-slider{ display:none; } }
+        @media(max-width: 600px) { 
+            .search-box { display: flex; flex: 1; margin: 0 10px; } 
+            .logo span { display: none; } 
+            .search-box input { font-size: 12px; padding: 8px 10px; } 
+            .search-box button { padding: 8px 12px; } 
+            .custom-controls { padding: 40px 10px 10px 10px;} 
+            .ctrl-btn { font-size: 16px;} 
+            .volume-slider{ display:none; } 
+        }
     </style>
 </head>
 <body>
@@ -2080,7 +2088,7 @@ MEDIA_TUBE_HTML = """
             if(type === 'video') {
                 pw.innerHTML = `<video id="mainMedia" class="player-element" src="${file.is_external ? file.external_url : `/f/${file.slug}`}" crossorigin="anonymous" playsinline>${trackHtml}</video>` + getControlsHtml();
                 document.getElementById('videoVisualizer').style.display = 'block';
-                setTimeout(() => initVisualizer('mainMedia', 'videoVisualizer', 'bar', window.currentThemeColor), 500);
+                initVisualizer('mainMedia', 'videoVisualizer', 'bar', window.currentThemeColor);
             } 
             else if(type === 'audio') {
                 const thumb = file.thumbnail || SVG_MUSIC;
@@ -2089,7 +2097,7 @@ MEDIA_TUBE_HTML = """
                     <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
                     <audio id="mainMedia" src="${file.is_external ? file.external_url : `/f/${file.slug}`}" crossorigin="anonymous" style="display:none;">${trackHtml}</audio>
                 ` + getControlsHtml();
-                setTimeout(() => initVisualizer('mainMedia', 'audioVisualizer', 'wave', window.currentThemeColor), 500);
+                initVisualizer('mainMedia', 'audioVisualizer', 'wave', window.currentThemeColor);
             } 
             
             setupMediaSession(file.title, 'Qlynk Vault', file.thumbnail);
@@ -2434,7 +2442,7 @@ MEDIA_TUBE_HTML = """
             if(!media || !canvas) return;
             const ctx = canvas.getContext('2d');
 
-            media.addEventListener('play', () => {
+            const startVisualizer = () => {
                 if(currentAudioCtx) return;
                 try {
                     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -2468,7 +2476,10 @@ MEDIA_TUBE_HTML = """
                     }
                     draw();
                 } catch(e) { console.warn("Visualizer CORS Blocked:", e); }
-            }, {once: true});
+            };
+
+            media.addEventListener('play', startVisualizer, {once: true});
+            if (!media.paused) startVisualizer();
         }
 
         // Subtitle Modal Functions
