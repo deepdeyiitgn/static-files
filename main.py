@@ -607,15 +607,32 @@ async def get_server_stats(token: str = Depends(verify_auth)):
     }
 
 # ==========================================
-# 6. PUBLIC CONTENT DELIVERY NETWORK (CDN)
+# 6. PUBLIC CONTENT DELIVERY NETWORK (CDN) [ANTI-BRUTEFORCE]
 # ==========================================
 @app.get("/f/{slug:path}")
 async def serve_file_publicly(slug: str):
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
     
+    # 🛡️ FAKE 200 OK RESPONSE (BOT CONFUSION ENGINE)
+    # Basic brute-force scripts will see status 200 and think they found a real file
+    fake_200_html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head><title>Secure Vault</title></head>
+    <body style="background:#0f0f0f; color:#bc8cff; font-family:monospace; display:flex; justify-content:center; align-items:center; height:100vh; text-align:center; margin:0;">
+        <div>
+            <h2 style="font-size: 24px; margin-bottom:10px;">🔒 QLYNK VAULT</h2>
+            <p style="color: #f1f1f1;">Media stream not found, expired, or access restricted.</p>
+            <p style="color:#555; font-size:11px; margin-top:20px;">Status: 200 OK (Protected)</p>
+        </div>
+    </body>
+    </html>
+    """
+    
     if not file_record:
-        raise HTTPException(status_code=404, detail="404: The requested resource could not be found.")
+        # Instead of 404, we return the fake HTML with a 200 OK status
+        return HTMLResponse(content=fake_200_html, status_code=200)
         
     if file_record.get("is_external") and file_record.get("external_url"):
         return RedirectResponse(url=file_record["external_url"], status_code=308)
@@ -635,7 +652,8 @@ async def serve_file_publicly(slug: str):
         )
     except Exception as e:
         logger.error(f"Error serving file '{slug}': {e}")
-        raise HTTPException(status_code=500, detail="Internal Server Error while streaming file.")
+        # Hide internal 500 errors behind the same fake 200 OK page
+        return HTMLResponse(content=fake_200_html, status_code=200)
 
 # ==========================================
 # 7. THE MASSIVE HTML / JS DASHBOARD
