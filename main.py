@@ -76,6 +76,8 @@ async def lifespan(app: FastAPI):
             
     except Exception as e:
         logger.error(f"CRITICAL STARTUP ERROR: Please check your HF_TOKEN permissions. Details: {e}")
+            # --- ADD THIS SINGLE LINE HERE ---
+    asyncio.create_task(media_optimizer_loop())
     yield
     logger.info("Shutting down Qlynk Host...")
 
@@ -2766,8 +2768,3 @@ async def media_optimizer_loop():
             
         logger.info("Media scan complete. Sleeping for 24 hours.")
         await asyncio.sleep(86400)  # 24 Hours sleep cycle
-
-# Auto-Trigger for the background loop without modifying the top lifespan function
-@app.on_event("startup")
-async def init_background_optimizer():
-    asyncio.create_task(media_optimizer_loop())
