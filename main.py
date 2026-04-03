@@ -1850,7 +1850,7 @@ MEDIA_TUBE_HTML = """
 <body>
 
     <div class="navbar">
-        <div class="logo" onclick="goHome()">▶ <span id="brandLogo">Qlynk</span>Vault</div>
+        <div class="logo" onclick="goHome()">▶ <span id="brandLogo">Qlynk</span>Tube</div>
         <div class="search-box">
             <input type="text" id="searchInput" placeholder="Search secure vault or paste YouTube URL..." onkeyup="if(event.key === 'Enter') handleSearch()">
             <button onclick="handleSearch()">🔍</button>
