@@ -2872,6 +2872,14 @@ async def media_optimizer_loop():
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 import difflib
+import subprocess
+import mimetypes
+import os
+import uuid
+import time
+import json
+import asyncio
+from datetime import datetime
 
 # Fetch ENV Variables
 TG_API_ID = int(os.environ.get("TG_API_ID", "0"))
@@ -2879,7 +2887,10 @@ TG_API_HASH = os.environ.get("TG_API_HASH", "dummy")
 TG_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "dummy")
 TG_SESSION_STRING = os.environ.get("TG_SESSION_STRING", "") # For True 2GB UserBot Power
 
-# Initialize Pyrogram MTProto Client (Smart Switch between Bot and UserBot)
+# Fixed Domain
+STATIC_DOMAIN = "https://static.qlynk.me"
+
+# Initialize Pyrogram MTProto Client
 if TG_SESSION_STRING:
     tg_app = Client(
         "qlynk_userbot",
@@ -2913,7 +2924,6 @@ def is_auth(user_id: int):
     return user_id in db.get("authorized_users", [])
 
 def check_target_chat(message):
-    # UserBot mode mein sirf 'Saved Messages' ko monitor karega, taaki dosto ki chat scan na ho!
     if TG_SESSION_STRING:
         return message.chat.id == message.from_user.id
     return True
@@ -2981,7 +2991,7 @@ async def batch_cmd(client, message):
         batch_users[user_id] = True
         await message.reply_text("📦 **Batch Mode Active.**\n\nYou can now forward or send up to 5 files. The system will process and upload them sequentially to the HF Datacenter.")
 
-# --- TEXT HANDLER: Auth & Smart Search ---
+# --- TEXT HANDLER: Auth & Strict Vault Auto-Search ---
 @tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch"]))
 async def text_handler(client, message):
     if not check_target_chat(message): return
@@ -3004,25 +3014,27 @@ async def text_handler(client, message):
             await message.reply_text("❌ Incorrect Password. Intrusion attempt logged.")
         return
 
-    # 2. Smart Search Logic (Spelling Tolerance)
+    # 2. Strict Vault Auto-Search Logic (Only Videos/Audios, No External Links)
     db = get_db()
     files = db.get("files", [])
-    titles = [f.get("title", f.get("filename", "")) for f in files]
+    
+    searchable_files = [f for f in files if not f.get("is_external") and f.get("mime_type", "").startswith(("video/", "audio/"))]
+    titles = [f.get("title", f.get("filename", "")) for f in searchable_files]
     
     matches = difflib.get_close_matches(text, titles, n=5, cutoff=0.3)
     
     if not matches:
-        await message.reply_text("🔍 No close matches found in the vault for that name.")
+        await message.reply_text("🔍 No media assets found in the local vault for that name.")
         return
         
     keyboard = []
     for match in matches:
-        file_record = next(f for f in files if f.get("title", f.get("filename", "")) == match)
+        file_record = next(f for f in searchable_files if f.get("title", f.get("filename", "")) == match)
         slug = file_record["slug"]
         keyboard.append([InlineKeyboardButton(match, callback_data=f"opt_{slug}")])
         
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await message.reply_text("🔍 Found these close matches. Choose the correct file:", reply_markup=reply_markup)
+    await message.reply_text("🔍 Found these media assets in the Vault. Choose one:", reply_markup=reply_markup)
 
 # --- CALLBACK QUERIES: Buttons ---
 @tg_app.on_callback_query()
@@ -3031,35 +3043,57 @@ async def button_handler(client, query: CallbackQuery):
     
     if data.startswith("opt_"):
         slug = data.split("_", 1)[1]
+        
+        db = get_db()
+        file_record = next((f for f in db.get("files", []) if f["slug"] == slug), None)
+        
+        if not file_record:
+            await query.answer("File not found in database.", show_alert=True)
+            return
+
+        title = file_record.get("title", "Unknown Title")
+        size = format_size(file_record.get("size_bytes", 0))
+        thumb_url = file_record.get("thumbnail", "")
+        if thumb_url and thumb_url.startswith("/f/"):
+            thumb_url = f"{STATIC_DOMAIN}{thumb_url}"
+        
         keyboard = [
-            [InlineKeyboardButton("🔗 Get Link", callback_data=f"link_{slug}"),
+            [InlineKeyboardButton("🔗 Secure Stream Link", callback_data=f"link_{slug}"),
              InlineKeyboardButton("📥 Direct Download", callback_data=f"dl_{slug}")]
         ]
-        await query.message.edit_text(text="How do you want to receive this file?", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+        msg_text = f"🎬 **{title}**\n\n📦 Size: {size}\n⚙️ Engine: Local Vault Asset\n\nHow do you want to receive this?"
+        
+        if thumb_url and thumb_url.startswith("http"):
+            try:
+                await query.message.delete()
+                await client.send_photo(chat_id=query.message.chat.id, photo=thumb_url, caption=msg_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=enums.ParseMode.MARKDOWN)
+                return
+            except: pass
+            
+        await query.message.edit_text(text=msg_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=enums.ParseMode.MARKDOWN)
         
     elif data.startswith("link_"):
         slug = data.split("_", 1)[1]
-        url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
+        url = f"{STATIC_DOMAIN}/f/{slug}"
         await query.message.edit_text(text=f"🔗 Here is your secure streaming link:\n\n{url}")
         
     elif data.startswith("dl_"):
         slug = data.split("_", 1)[1]
         db = get_db()
-        files = db.get("files", [])
-        file_record = next((f for f in files if f["slug"] == slug), None)
+        file_record = next((f for f in db.get("files", []) if f["slug"] == slug), None)
         
         if file_record:
             await query.message.edit_text("📤 Downloading from HF Vault and sending to Telegram chat...")
             try:
                 file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
-                await client.send_document(chat_id=query.message.chat.id, document=file_path, file_name=file_record["filename"], caption="Vault Asset Retrieved.")
+                await client.send_document(chat_id=query.message.chat.id, document=file_path, file_name=file_record["filename"], caption=f"Vault Asset: {file_record.get('title')}")
                 await query.message.edit_text("✅ File sent successfully.")
             except Exception as e:
-                # Agar Telegram server reject kar de (File too large), toh gracefully link dega
-                url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
-                await query.message.edit_text(f"⚠️ **File Size Limit Hit by Telegram Servers!**\n\nThe bot token couldn't stream this heavy file directly.\n\n🔗 Please use this direct link instead:\n{url}")
+                url = f"{STATIC_DOMAIN}/f/{slug}"
+                await query.message.edit_text(f"⚠️ **File Size Limit Hit by Telegram Servers!**\n\nThe bot couldn't stream this heavy file directly.\n\n🔗 Please use this direct link instead:\n{url}")
 
-# --- MEDIA HANDLER: Uploads (Size restrictions REMOVED) ---
+# --- MEDIA HANDLER: Smart Uploads, MKV Fix & Native Telegram Thumbnails ---
 @tg_app.on_message(filters.media | filters.document)
 async def media_handler(client, message):
     if not check_target_chat(message): return
@@ -3079,8 +3113,9 @@ async def media_handler(client, message):
     filename = getattr(media, 'file_name', f"telegram_upload_{uuid.uuid4().hex[:5]}")
     title = message.caption if message.caption else filename
     slug = str(uuid.uuid4())[:8]
-    ext = os.path.splitext(filename)[1] if "." in filename else ".bin"
-    temp_path = f"/tmp/{slug}{ext}"
+    ext = os.path.splitext(filename)[1].lower() if "." in filename else ".bin"
+    temp_path = f"/tmp/raw_{slug}{ext}"
+    final_path = temp_path
     
     last_update_time = time.time()
     
@@ -3097,41 +3132,88 @@ async def media_handler(client, message):
             except: pass
 
     try:
-        # 1. Download Fast via MTProto
+        db = get_db()
+        files_list = db.setdefault("files", [])
+        upload_timestamp = datetime.utcnow().isoformat() + "Z"
+        final_thumbnail_url = ""
+
+        # 1. Native Telegram Thumbnail Extraction (CPU Friendly & Fast)
+        if getattr(media, 'thumbs', None) and len(media.thumbs) > 0:
+            await msg.edit_text("🖼️ Extracting Native Telegram Thumbnail...")
+            thumb_file_id = media.thumbs[0].file_id
+            thumb_temp = f"/tmp/thumb_{slug}.jpg"
+            
+            # Download the thumbnail from Telegram Servers
+            downloaded_thumb = await client.download_media(thumb_file_id, file_name=thumb_temp)
+            
+            if downloaded_thumb and os.path.exists(downloaded_thumb):
+                thumb_repo_path = f"files/thumb_{slug}.jpg"
+                await asyncio.to_thread(api.upload_file, path_or_fileobj=thumb_temp, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+                final_thumbnail_url = f"/f/thumb_{slug}.jpg"
+                os.remove(thumb_temp)
+                
+                # Add thumbnail record to DB
+                files_list.append({
+                    "slug": f"thumb_{slug}.jpg", "filename": f"thumbnail_{slug}.jpg", "path": thumb_repo_path,
+                    "title": "Native Telegram Thumbnail", "thumbnail": "", "mime_type": "image/jpeg",
+                    "size_bytes": 0, "uploaded_at": upload_timestamp, "is_external": False, "external_url": ""
+                })
+
+        # 2. Download Main File Fast via MTProto
         await message.download(file_name=temp_path, progress=dl_progress)
-        await msg.edit_text("✅ File Cached Locally.\n\n🔄 Now Syncing to HF Datacenter... (Please Wait)")
+        await msg.edit_text("✅ File Cached Locally.\n\n🔍 Analyzing File Structure...")
         
-        # 2. Sync to HF
-        repo_path = f"files/{slug}_{filename}"
-        file_size_disk = os.path.getsize(temp_path)
         mime_type, _ = mimetypes.guess_type(temp_path)
         if not mime_type: mime_type = "application/octet-stream"
 
-        await asyncio.to_thread(
-            api.upload_file, path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
-        )
-        os.remove(temp_path)
+        # 3. MKV / Unsupported Video Optimizer (MP4/AAC Force Convert)
+        is_video = mime_type.startswith("video/") or ext in ['.mkv', '.avi', '.mov', '.flv', '.wmv']
         
-        db = get_db()
+        if is_video and ext != '.mp4':
+            await msg.edit_text("🛠️ Optimizing Video Engine (MKV to MP4 & AAC Audio Fix)...\nThis may take a few minutes for heavy files.")
+            final_path = f"/tmp/fixed_{slug}.mp4"
+            filename = os.path.splitext(filename)[0] + ".mp4"
+            mime_type = "video/mp4"
+            
+            cmd = ["ffmpeg", "-y", "-i", temp_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", final_path]
+            process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            await process.communicate()
+            
+            if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+                os.remove(temp_path) # Delete raw file
+            else:
+                final_path = temp_path # Fallback to original if conversion fails
+        
+        # 4. Final Sync to Hugging Face
+        await msg.edit_text("🔄 Syncing Optimized Media to HF Datacenter... (Please Wait)")
+        
+        repo_path = f"files/{slug}_{filename}"
+        file_size_disk = os.path.getsize(final_path)
+
+        await asyncio.to_thread(
+            api.upload_file, path_or_fileobj=final_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
+        )
+        os.remove(final_path)
+        
+        # 5. Update Main DB Record
         file_record = {
             "slug": slug,
             "filename": filename,
             "path": repo_path,
             "title": title,
-            "thumbnail": f"/f/{slug}" if mime_type.startswith("image/") else "",
+            "thumbnail": final_thumbnail_url,
             "mime_type": mime_type,
             "size_bytes": file_size_disk,
-            "uploaded_at": datetime.utcnow().isoformat() + "Z",
+            "uploaded_at": upload_timestamp,
             "is_external": False,
             "external_url": ""
         }
-        db.setdefault("files", []).append(file_record)
+        files_list.append(file_record)
         save_db(db)
         
-        url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
+        url = f"{STATIC_DOMAIN}/f/{slug}"
         batch_status = "(Batch Active)" if batch_users.get(message.from_user.id) else ""
         await msg.edit_text(f"🎉 **Upload Complete!** {batch_status}\n\n**File:** {title}\n**Size:** {format_size(file_size_disk)}\n\n**Secure Link:**\n{url}")
         
     except Exception as e:
-        # Catch any Telegram Server restrictions dynamically here
-        await msg.edit_text(f"❌ Upload Failed (Telegram Server Limits or HF Issue): {e}")
+        await msg.edit_text(f"❌ Upload Failed (Telegram Server Limits or Engine Crash): {e}")
