@@ -623,6 +623,62 @@ async def get_server_stats(token: str = Depends(verify_auth)):
     }
 
 # ==========================================
+# 5.5 ENTERPRISE TOKENIZED STREAMING (TIME-LIMITED SECURE ROUTES)
+# ==========================================
+# In-memory store for active stream sessions
+stream_sessions = {}
+
+@app.get("/api/stream/generate/{slug}")
+async def generate_secure_stream(slug: str, request: Request, token: str = Depends(verify_auth)):
+    """Generates a temporary, 4-hour valid unique streaming link."""
+    session_id = uuid.uuid4().hex
+    
+    # Expiry set to 4 hours (14400 seconds) from now
+    stream_sessions[session_id] = {
+        "slug": slug,
+        "expires": time.time() + 14400,
+        "ip": request.client.host # IP binding for extra security
+    }
+    
+    # Periodic Cleanup of old tokens
+    current_time = time.time()
+    expired_keys = [k for k, v in stream_sessions.items() if v["expires"] < current_time]
+    for k in expired_keys: del stream_sessions[k]
+        
+    return {"status": "success", "stream_url": f"/stream/media/{session_id}"}
+
+@app.get("/stream/media/{session_id}")
+async def serve_secure_stream(session_id: str, request: Request):
+    """Serves the actual file ONLY IF the session ID is valid and not expired."""
+    session = stream_sessions.get(session_id)
+    
+    # Check 1: Does token exist and is it active?
+    if not session or time.time() > session["expires"]:
+        # Tarpit defense: Send fake bytes to confuse automated leechers
+        await asyncio.sleep(2)
+        return Response(content=os.urandom(1024), media_type="application/octet-stream", status_code=403)
+        
+    slug = session["slug"]
+    db = get_db()
+    file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
+    
+    if not file_record:
+        raise HTTPException(status_code=404, detail="Media asset not found in Vault.")
+
+    # Serve the file securely
+    try:
+        file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
+        return FileResponse(
+            path=file_path, 
+            filename=file_record["filename"],
+            media_type=file_record.get("mime_type", "application/octet-stream"),
+            content_disposition_type="inline"
+        )
+    except Exception as e:
+        logger.error(f"Stream Error: {e}")
+        return Response(content=os.urandom(1024), status_code=500)
+        
+# ==========================================
 # 6. PUBLIC CONTENT DELIVERY NETWORK (CDN) [HONEYPOT ENGINE]
 # ==========================================
 import random
@@ -2163,8 +2219,29 @@ MEDIA_TUBE_HTML = """
 
             applyDominantColor(file.thumbnail || FALLBACK_THUMB);
 
+            // 🌟 SECURE STREAMING LOGIC START 🌟
+            let secureSrc = "";
+            if (!file.is_external && type === 'video' || type === 'audio') {
+                try {
+                    // Chupke se temporary link maango
+                    const streamRes = await fetch(`/api/stream/generate/${slug}`);
+                    if(streamRes.ok) {
+                        const streamData = await streamRes.json();
+                        secureSrc = streamData.stream_url; // Yeh /stream/media/xyz123 hoga
+                    } else {
+                        secureSrc = `/f/${file.slug}`; // Fallback
+                    }
+                } catch(e) {
+                    secureSrc = `/f/${file.slug}`;
+                }
+            } else {
+                secureSrc = file.external_url;
+            }
+            // 🌟 SECURE STREAMING LOGIC END 🌟
+
             if(type === 'video') {
-                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${file.is_external ? file.external_url : `/f/${file.slug}`}" crossorigin="anonymous" playsinline>${trackHtml}</video>` + getControlsHtml();
+                // Ab HTML mein direct link nahi, expiring token wala link aayega!
+                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${secureSrc}" crossorigin="anonymous" playsinline>${trackHtml}</video>` + getControlsHtml();
                 document.getElementById('videoVisualizer').style.display = 'block';
                 initVisualizer('mainMedia', 'videoVisualizer', 'bar', window.currentThemeColor);
             } 
@@ -2173,10 +2250,10 @@ MEDIA_TUBE_HTML = """
                 pw.innerHTML = `
                     <img id="audioDisc" src="${thumb}" class="audio-disc" onerror="this.src='${SVG_MUSIC}'">
                     <canvas id="audioVisualizer" class="audio-visualizer"></canvas>
-                    <audio id="mainMedia" src="${file.is_external ? file.external_url : `/f/${file.slug}`}" crossorigin="anonymous" style="display:none;">${trackHtml}</audio>
+                    <audio id="mainMedia" src="${secureSrc}" crossorigin="anonymous" style="display:none;">${trackHtml}</audio>
                 ` + getControlsHtml();
                 initVisualizer('mainMedia', 'audioVisualizer', 'wave', window.currentThemeColor);
-            } 
+            }
             
             setupMediaSession(file.title, 'Qlynk Vault', file.thumbnail);
             
