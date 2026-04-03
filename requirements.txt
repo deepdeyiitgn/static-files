@@ -11,3 +11,5 @@ aiofiles
 yt-dlp
 psutil
 websockets
+pyrogram
+tgcrypto
