@@ -1510,12 +1510,13 @@ async def websocket_max_endpoint(websocket: WebSocket):
 # 11. QLYNK MEDIA TUBE (CINEMATIC VAULT, CUSTOM PLAYER & CC)
 # ==========================================
 from fastapi import Query, Header, Cookie, HTTPException, Depends, UploadFile, File, Form
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, Response
 from typing import Dict, Any
 import time
 import uuid
 import json
 import os
+import re
 from datetime import datetime
 from huggingface_hub import hf_hub_download
 
@@ -1566,7 +1567,7 @@ async def fetch_media_library(access: dict = Depends(verify_view_access)):
     ]
     return sorted(filtered_files, key=lambda x: x.get("uploaded_at", ""), reverse=True)
 
-# --- 📝 Subtitle Upload API ---
+# --- 📝 Subtitle Upload API (Raw Safe Save) ---
 @app.post("/api/subtitle/upload")
 async def upload_subtitle(
     file: UploadFile = File(...),
@@ -1574,18 +1575,15 @@ async def upload_subtitle(
     language: str = Form(...),
     token: str = Depends(verify_auth)
 ):
-    content = (await file.read()).decode('utf-8', errors='ignore')
-    
-    # Auto Convert SRT to WebVTT
-    if file.filename.endswith('.srt') or not content.startswith('WEBVTT'):
-        content = "WEBVTT\n\n" + content.replace(',', '.')
-        
+    ext = ".srt" if file.filename.lower().endswith(".srt") else ".vtt"
     sub_slug = str(uuid.uuid4())[:8]
-    filename = f"{language.lower()}_{sub_slug}.vtt"
+    filename = f"{language.lower()}_{sub_slug}{ext}"
     temp_path = f"/tmp/{filename}"
     repo_path = f"subtitles/{filename}"
     
-    with open(temp_path, "w", encoding='utf-8') as f:
+    # Save exactly as it is (Raw Bytes, No corruption)
+    with open(temp_path, "wb") as f:
+        content = await file.read()
         f.write(content)
         
     api.upload_file(path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset")
@@ -1603,7 +1601,7 @@ async def upload_subtitle(
     db["subtitles"] = subs
     save_sub_db(db)
     
-    return {"status": "success", "message": f"Subtitle ({language}) linked to media."}
+    return {"status": "success", "message": f"Subtitle ({language}) safely saved as {ext}!"}
 
 # Fixed parameter path capturing for slugs with slashes
 @app.get("/api/subtitles/list/{media_slug:path}")
@@ -1611,15 +1609,30 @@ async def list_subtitles(media_slug: str, access: dict = Depends(verify_view_acc
     db = get_sub_db()
     return [s for s in db.get("subtitles", []) if s["media_slug"] == media_slug]
 
+# --- 🎬 Subtitle Serve API (On-the-fly Browser Converter) ---
 @app.get("/sub/{sub_slug}")
 async def serve_subtitle_file(sub_slug: str):
     db = get_sub_db()
     sub_record = next((s for s in db.get("subtitles", []) if s["sub_slug"] == sub_slug), None)
     if not sub_record: raise HTTPException(status_code=404, detail="Subtitle not found.")
+    
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename=sub_record["path"], repo_type="dataset", token=HF_TOKEN)
-        return FileResponse(path=file_path, media_type="text/vtt")
-    except: raise HTTPException(status_code=500, detail="Error loading subtitle file.")
+        
+        # Directly serve if it's already VTT
+        if sub_record["path"].endswith(".vtt"):
+            return FileResponse(path=file_path, media_type="text/vtt")
+            
+        # Convert SRT to VTT purely on-the-fly for the browser
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            srt_content = f.read()
+            
+        vtt_content = "WEBVTT\n\n" + re.sub(r'(\d{2}:\d{2}:\d{2}),(\d{3})', r'\1.\2', srt_content)
+        return Response(content=vtt_content, media_type="text/vtt")
+        
+    except Exception as e: 
+        logger.error(f"Subtitle Error: {e}")
+        raise HTTPException(status_code=500, detail="Error loading subtitle file.")
 
 # --- Massive HTML/JS Payload (Universal Cinematic Media Tube) ---
 MEDIA_TUBE_HTML = """
@@ -1737,7 +1750,7 @@ MEDIA_TUBE_HTML = """
         .hidden { display: none !important; }
         .theater-mode .primary-col { min-width: 100%; max-width: 100%; }
         .theater-mode .secondary-col { width: 100%; margin-top: 20px;}
-        ::cue { background-color: rgba(0,0,0,0.8); color: white; font-family: sans-serif; font-size: 100%; }
+        ::cue { background-color: rgba(0,0,0,0.8); color: white; font-family: sans-serif; }
 
         @media(max-width: 1000px) { .primary-col { min-width: 100%; } .secondary-col { width: 100%; } .search-box { width: 60%; } }
         @media(max-width: 600px) { 
@@ -1796,8 +1809,8 @@ MEDIA_TUBE_HTML = """
 
                 <div class="description-box">
                     <span id="wDate" style="display:block; margin-bottom:8px; color:var(--yt-muted);">Uploaded on: Unknown</span>
-                    <div id="subsList" style="margin-bottom: 10px; color: var(--accent-green); font-size:12px;"></div>
-                    <p>Protected by Qlynk Universal Engine. Native & Hybrid YouTube parsing active. Advanced UI, Repeat, Shuffle, and Spacebar Logic supported.</p>
+                    <div id="subsList" style="margin-bottom: 10px; color: var(--yt-brand); font-size:12px;"></div>
+                    <p>Protected by Qlynk Universal Engine. Native & Hybrid YouTube parsing active. Advanced UI, Subtitle Scaling (+/- keys), Repeat, Shuffle, and Spacebar Logic supported.</p>
                 </div>
             </div>
 
@@ -1864,6 +1877,7 @@ MEDIA_TUBE_HTML = """
         let isShuffle = false;
         let ytPollInterval = null;
         let pendingSubFile = null;
+        let ccSize = 100; // Default Subtitle Size (%)
 
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
@@ -1917,6 +1931,23 @@ MEDIA_TUBE_HTML = """
         function setThemeColor(color) {
             document.documentElement.style.setProperty('--yt-brand', color);
             window.currentThemeColor = color;
+        }
+
+        // --- SUBTITLE SCALING LOGIC ---
+        function updateCCSize() {
+            let styleEl = document.getElementById('dynamic-cc-style');
+            if(!styleEl) {
+                styleEl = document.createElement('style');
+                styleEl.id = 'dynamic-cc-style';
+                document.head.appendChild(styleEl);
+            }
+            // Only scales subtitles on desktop screens. Phone will use native/default scale.
+            styleEl.innerHTML = `
+                @media(min-width: 768px) {
+                    ::cue { font-size: ${ccSize}% !important; }
+                    video::cue { font-size: ${ccSize}% !important; }
+                }
+            `;
         }
 
         async function init() {
@@ -2108,8 +2139,14 @@ MEDIA_TUBE_HTML = """
             if(ccList) {
                 ccList.innerHTML = `<div class="setting-item" onclick="setCC(-1)">Off</div>` + subs.map((s,i) => `<div class="setting-item" onclick="setCC(${i})">${s.language}</div>`).join('');
             }
-            if(subs.length > 0) document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
-            else document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
+            if(subs.length > 0) {
+                document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
+                // Force load default size
+                updateCCSize(); 
+            }
+            else {
+                document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
+            }
             
             const mediaEl = document.getElementById('mainMedia');
             if(mediaEl) {
@@ -2285,6 +2322,13 @@ MEDIA_TUBE_HTML = """
             };
             
             document.getElementById('pFull').onclick = () => { document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen(); };
+            
+            // FIX: CC Button triggers Setting Menu now
+            document.getElementById('pCC').onclick = (e) => { 
+                e.stopPropagation(); 
+                document.getElementById('pSettings').classList.toggle('show'); 
+            };
+            
             document.getElementById('pSetBtn').onclick = (e) => { e.stopPropagation(); document.getElementById('pSettings').classList.toggle('show'); };
             document.getElementById('pSpeedRange').oninput = (e) => { setSpeed(e.target.value); };
 
@@ -2355,6 +2399,22 @@ MEDIA_TUBE_HTML = """
         // --- SPACEBAR PRO & KEYBOARD HUB ---
         document.addEventListener('keydown', (e) => {
             if(document.activeElement.tagName === 'INPUT' || !activePlayer) return;
+
+            // FIX: YouTube Style Subtitle Resizing (+/-)
+            if (e.key === '+' || e.key === '=') {
+                e.preventDefault();
+                ccSize = Math.min(300, ccSize + 25);
+                updateCCSize();
+                showActionIcon(`💬 CC: ${ccSize}%`);
+                return;
+            }
+            if (e.key === '-' || e.key === '_') {
+                e.preventDefault();
+                ccSize = Math.max(50, ccSize - 25);
+                updateCCSize();
+                showActionIcon(`💬 CC: ${ccSize}%`);
+                return;
+            }
 
             switch(e.code) {
                 case 'Space': 
