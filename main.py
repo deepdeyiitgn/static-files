@@ -1756,6 +1756,7 @@ MEDIA_TUBE_HTML = """
         @keyframes yt-dash { 0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; } 50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; } 100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; } }
 
         /* Audio Visuals */
+        @keyframes spin { 100% { transform: rotate(360deg); } }
         .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; animation-play-state: paused; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
         .audio-disc.playing { animation-play-state: running; }
         .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
@@ -2445,7 +2446,13 @@ MEDIA_TUBE_HTML = """
             const pw = document.getElementById('playerWrapper');
             const pControls = document.getElementById('pControls');
             
-            pPlay.onclick = () => activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
+            pPlay.onclick = () => {
+                // 🛡️ FIX: Browser Autoplay Policy Block. Audio Context ko force-resume karna padega!
+                if(window.currentAudioCtx && window.currentAudioCtx.state === 'suspended') {
+                    window.currentAudioCtx.resume();
+                }
+                activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
+            };
             
             // MOBILE DRAG FIX FOR SEEK BAR
             let isSeeking = false;
@@ -2683,7 +2690,10 @@ MEDIA_TUBE_HTML = """
             const ctx = canvas.getContext('2d');
 
             const startVisualizer = () => {
-                if(currentAudioCtx) return;
+                if(currentAudioCtx) {
+                    if(currentAudioCtx.state === 'suspended') currentAudioCtx.resume();
+                    return;
+                }
                 try {
                     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     currentAudioCtx = audioCtx;
