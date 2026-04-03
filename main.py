@@ -707,45 +707,41 @@ async def serve_file_publicly(slug: str):
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
     
+    # 1. THE TARPIT (Anti-Hacker Fake Data)
     if not file_record:
-        # 🛡️ THE HONEYPOT ENGINE (Anti-Bot / Tarpit)
-        # 1. Delay the response artificially to slow down brute-force scripts
         await asyncio.sleep(random.uniform(2.0, 5.0))
-        
-        # 2. Generate fake corrupted binary data (10KB to 100KB of random garbage)
         fake_size = random.randint(10240, 102400)
         fake_bytes = os.urandom(fake_size)
-        
-        # 3. Randomize the Content-Type to completely confuse headers filters
         fake_types = ["image/jpeg", "video/mp4", "application/zip", "application/pdf", "audio/mpeg"]
-        
         return Response(
             content=fake_bytes, 
             media_type=random.choice(fake_types), 
-            status_code=200
+            status_code=200,
+            # 🛡️ FIX: Tells Vercel/Cloudflare NEVER to cache this fake data!
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"} 
         )
         
     if file_record.get("is_external") and file_record.get("external_url"):
         return RedirectResponse(url=file_record["external_url"], status_code=308)
         
+    # 2. REAL FILE DELIVERY
     try:
-        file_path = hf_hub_download(
-            repo_id=DATASET_REPO, 
-            filename=file_record["path"], 
-            repo_type="dataset", 
-            token=HF_TOKEN
-        )
+        file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
         return FileResponse(
-            path=file_path, 
-            filename=file_record["filename"],
-            media_type=file_record.get("mime_type", "application/octet-stream"),
-            content_disposition_type="inline" 
+            path=file_path, filename=file_record["filename"],
+            media_type=file_record.get("mime_type", "application/octet-stream"), content_disposition_type="inline",
+            # ✅ FIX: Tells proxy to safely cache the REAL images for 24 hours
+            headers={"Cache-Control": "public, max-age=86400"} 
         )
     except Exception as e:
         logger.error(f"Error serving file '{slug}': {e}")
-        # Send fake generic binary on 500 error to hide backend failure
         await asyncio.sleep(random.uniform(1.0, 3.0))
-        return Response(content=os.urandom(10240), media_type="application/octet-stream", status_code=200)
+        return Response(
+            content=os.urandom(10240), 
+            media_type="application/octet-stream", 
+            status_code=200,
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+        )
 
 # ==========================================
 # 7. THE MASSIVE HTML / JS DASHBOARD
