@@ -1965,6 +1965,7 @@ MEDIA_TUBE_HTML = """
         
         let masterLibrary = [];
         let currentAudioCtx = null;
+        let showRemainingTime = false; // ⏳ YouTube-style Time Toggle State
         let currentAnimationId = null;
         let activeSlug = null;
         let ytIdActive = null;
@@ -1988,10 +1989,17 @@ MEDIA_TUBE_HTML = """
             const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
         }
-        function formatTime(sec) {
-            if(isNaN(sec)) return '0:00';
-            let m = Math.floor(sec / 60); let s = Math.floor(sec % 60);
-            return m + ':' + (s < 10 ? '0' : '') + s;
+        // ⏱️ FIX: HH:MM:SS Format Support
+        function formatTime(s){
+            if(!s || isNaN(s)) return "0:00";
+            s = Math.floor(s);
+            let h = Math.floor(s / 3600);
+            let m = Math.floor((s % 3600) / 60);
+            let sec = s % 60;
+            if (h > 0) {
+                return h + ":" + (m < 10 ? "0" : "") + m + ":" + (sec < 10 ? "0" : "") + sec;
+            }
+            return m + ":" + (sec < 10 ? "0" : "") + sec;
         }
         function getMediaType(m) {
             if(!m) return 'file'; if(m.startsWith('video/')) return 'video';
@@ -2451,9 +2459,18 @@ MEDIA_TUBE_HTML = """
             const dur = activePlayer.duration();
             const percent = dur > 0 ? (cur / dur) * 100 : 0;
             document.getElementById('pSeekProg').style.width = `${percent}%`;
-            document.getElementById('pTime').innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
 
-            // 🚀 FIX: Gray Buffer Bar UI Update
+            // ⏳ FIX: Remaining Time Toggle Logic
+            let displayTime = "";
+            if (showRemainingTime && dur > 0) {
+                const remaining = dur - cur;
+                displayTime = `-${formatTime(remaining)}`; // Minus lagao
+            } else {
+                displayTime = formatTime(cur); // Normal current time
+            }
+            document.getElementById('pTime').innerText = `${displayTime} / ${formatTime(dur)}`;
+
+            // 🚀 Buffer Gray Bar UI Update
             if (activePlayer.getBuffered && dur > 0) {
                 const buf = activePlayer.getBuffered();
                 const bufPercent = Math.min((buf / dur) * 100, 100);
@@ -2468,6 +2485,14 @@ MEDIA_TUBE_HTML = """
             const pMute = document.getElementById('pMute');
             const pw = document.getElementById('playerWrapper');
             const pControls = document.getElementById('pControls');
+            const pTime = document.getElementById('pTime');
+            // 🖱️ Make time display clickable like YouTube
+            pTime.style.cursor = 'pointer';
+            pTime.title = 'Click to toggle remaining time';
+            pTime.onclick = () => {
+                showRemainingTime = !showRemainingTime;
+                updateProgressUI(); // Turant update karo
+            };
             
             pPlay.onclick = () => {
                 // 🛡️ FIX: Browser Autoplay Policy Block. Audio Context ko force-resume karna padega!
