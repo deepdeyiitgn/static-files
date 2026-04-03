@@ -78,7 +78,21 @@ async def lifespan(app: FastAPI):
         logger.error(f"CRITICAL STARTUP ERROR: Please check your HF_TOKEN permissions. Details: {e}")
             # --- ADD THIS SINGLE LINE HERE ---
     asyncio.create_task(media_optimizer_loop())
+# ... (Aapka purana lifespan code) ...
+    
+    # --- ENTERPRISE BACKGROUND TASKS ---
+    asyncio.create_task(media_optimizer_loop())
+    
+    # YEH NAYI 3 LINES ADD KARNI HAI:
+    if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
+        await tg_app.start()
+        logger.info("🤖 Pyrogram Max Power MTProto Bot Started!")
+    
     yield
+    
+    # Aur shutdown hone par bot ko gracefully band karne ke liye (yield ke baad):
+    if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
+        await tg_app.stop()
     logger.info("Shutting down Qlynk Host...")
 
 app = FastAPI(
@@ -2851,3 +2865,261 @@ async def media_optimizer_loop():
             
         logger.info("Media scan complete. Sleeping for 24 hours.")
         await asyncio.sleep(86400)  # 24 Hours sleep cycle
+
+# ==========================================
+# 13. OMNISCIENT TELEGRAM BOT (MAX POWER MTPROTO - PYROGRAM)
+# ==========================================
+from pyrogram import Client, filters, enums
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+import difflib
+
+# Fetch ENV Variables
+TG_API_ID = int(os.environ.get("TG_API_ID", "0"))
+TG_API_HASH = os.environ.get("TG_API_HASH", "dummy")
+TG_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "dummy")
+
+# Initialize Pyrogram MTProto Client
+tg_app = Client(
+    "qlynk_max_power",
+    api_id=TG_API_ID,
+    api_hash=TG_API_HASH,
+    bot_token=TG_BOT_TOKEN,
+    in_memory=True
+)
+
+# --- Telegram Auth DB Helpers ---
+def get_tg_auth_db():
+    try:
+        path = hf_hub_download(repo_id=DATASET_REPO, filename="tg_users.json", repo_type="dataset", token=HF_TOKEN)
+        with open(path, "r") as f: return json.load(f)
+    except Exception: return {"authorized_users": []}
+
+def save_tg_auth_db(db):
+    with open("tg_users.json", "w") as f: json.dump(db, f, indent=4)
+    api.upload_file(path_or_fileobj="tg_users.json", path_in_repo="tg_users.json", repo_id=DATASET_REPO, repo_type="dataset")
+
+def is_auth(user_id: int):
+    db = get_tg_auth_db()
+    return user_id in db.get("authorized_users", [])
+
+# --- COMMAND: /start ---
+@tg_app.on_message(filters.command("start"))
+async def start_cmd(client, message):
+    keyboard = [
+        [InlineKeyboardButton("💻 Source Code", url="https://huggingface.co/spaces/deydeep/static-files/")],
+        [InlineKeyboardButton("🐙 GitHub Profile", url="https://github.com/deepdeyiitgn"),
+         InlineKeyboardButton("👨‍💻 About Deep", url="https://clock.qlynk.me/about-deep")],
+        [InlineKeyboardButton("📸 Instagram", url="https://www.instagram.com/deepdey.official/")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = (
+        "👋 **Welcome to Qlynk Node Master!**\n\n"
+        "I am the advanced remote control for your secure file hosting datacenter engineered by **Deep Dey**.\n\n"
+        "To unlock my full potential (Uploads, Auto-Search, Batch Uploads), please verify your identity using:\n"
+        "👉 `/verify`"
+    )
+    await message.reply_text(welcome_text, reply_markup=reply_markup)
+
+# --- COMMAND: /verify ---
+@tg_app.on_message(filters.command("verify"))
+async def verify_cmd(client, message):
+    if is_auth(message.from_user.id):
+        await message.reply_text("✅ You are the Owner and already verified!\n\nYou can now upload files, search the database, or use /batch.")
+    else:
+        await message.reply_text("🔐 **System Locked.**\n\nPlease enter your `SPACE_PASSWORD` below to mount the storage node and verify your identity.")
+
+# --- COMMAND: /logout ---
+@tg_app.on_message(filters.command("logout"))
+async def logout_cmd(client, message):
+    if not is_auth(message.from_user.id):
+        await message.reply_text("You are not logged in.")
+        return
+        
+    db = get_tg_auth_db()
+    auth_list = db.get("authorized_users", [])
+    if message.from_user.id in auth_list:
+        auth_list.remove(message.from_user.id)
+        db["authorized_users"] = auth_list
+        save_tg_auth_db(db)
+        await message.reply_text("🚪 Logged out successfully. Datacenter unmounted.")
+
+# --- COMMAND: /batch ---
+batch_users = {} # In-memory tracker for batch uploads
+@tg_app.on_message(filters.command("batch"))
+async def batch_cmd(client, message):
+    if not is_auth(message.from_user.id): 
+        await message.reply_text("🚫 Please /verify first.")
+        return
+    
+    user_id = message.from_user.id
+    if batch_users.get(user_id):
+        batch_users[user_id] = False
+        await message.reply_text("📦 **Batch Mode Deactivated.**\nOperating in standard single-file mode.")
+    else:
+        batch_users[user_id] = True
+        await message.reply_text("📦 **Batch Mode Active.**\n\nYou can now forward or send up to 5 files. The system will process and upload them sequentially to the HF Datacenter.")
+
+# --- TEXT HANDLER: Auth & Smart Search ---
+@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch"]))
+async def text_handler(client, message):
+    text = message.text
+    user_id = message.from_user.id
+    
+    # 1. Check Password if not authenticated
+    if not is_auth(user_id):
+        if text == SPACE_PASSWORD:
+            db = get_tg_auth_db()
+            auth_list = db.get("authorized_users", [])
+            if user_id not in auth_list:
+                auth_list.append(user_id)
+                db["authorized_users"] = auth_list
+                save_tg_auth_db(db)
+            await message.reply_text("🔓 **Access Granted!**\n\nYou are now securely connected to the Qlynk Datacenter.\n- Send a file to upload.\n- Type a video name to search.", parse_mode=enums.ParseMode.MARKDOWN)
+            # Delete password for security
+            try: await message.delete()
+            except: pass
+        else:
+            await message.reply_text("❌ Incorrect Password. Intrusion attempt logged.")
+        return
+
+    # 2. Smart Search Logic (Spelling Tolerance)
+    db = get_db()
+    files = db.get("files", [])
+    titles = [f.get("title", f.get("filename", "")) for f in files]
+    
+    matches = difflib.get_close_matches(text, titles, n=5, cutoff=0.3)
+    
+    if not matches:
+        await message.reply_text("🔍 No close matches found in the vault for that name.")
+        return
+        
+    keyboard = []
+    for match in matches:
+        file_record = next(f for f in files if f.get("title", f.get("filename", "")) == match)
+        slug = file_record["slug"]
+        keyboard.append([InlineKeyboardButton(match, callback_data=f"opt_{slug}")])
+        
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await message.reply_text("🔍 Found these close matches. Choose the correct file:", reply_markup=reply_markup)
+
+# --- CALLBACK QUERIES: Buttons ---
+@tg_app.on_callback_query()
+async def button_handler(client, query: CallbackQuery):
+    data = query.data
+    
+    if data.startswith("opt_"):
+        slug = data.split("_", 1)[1]
+        keyboard = [
+            [InlineKeyboardButton("🔗 Get Link", callback_data=f"link_{slug}"),
+             InlineKeyboardButton("📥 Direct Download", callback_data=f"dl_{slug}")]
+        ]
+        await query.message.edit_text(text="How do you want to receive this file?", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    elif data.startswith("link_"):
+        slug = data.split("_", 1)[1]
+        url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
+        await query.message.edit_text(text=f"🔗 Here is your secure streaming link:\n\n{url}")
+        
+    elif data.startswith("dl_"):
+        slug = data.split("_", 1)[1]
+        db = get_db()
+        files = db.get("files", [])
+        file_record = next((f for f in files if f["slug"] == slug), None)
+        
+        if file_record:
+            size_mb = file_record["size_bytes"] / 1024 / 1024
+            
+            # Max Send limit for BOT token is 50MB (2GB requires User Session string)
+            if size_mb > 49.5:
+                url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
+                await query.message.edit_text(text=f"⚠️ **File Size Limit Exceeded!**\n\nThe file is {size_mb:.2f} MB.\nBots can only directly send files up to 50MB.\n\n🔗 Please use this direct link instead:\n{url}")
+            else:
+                await query.message.edit_text("📤 Downloading from HF Vault and sending to Telegram chat...")
+                try:
+                    file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
+                    await client.send_document(chat_id=query.message.chat.id, document=file_path, file_name=file_record["filename"], caption="Vault Asset Retrieved.")
+                    await query.message.edit_text("✅ File sent successfully.")
+                except Exception as e:
+                    await query.message.edit_text(f"❌ Error fetching file: {e}")
+
+# --- MEDIA HANDLER: Uploads ---
+@tg_app.on_message(filters.media | filters.document)
+async def media_handler(client, message):
+    if not is_auth(message.from_user.id): 
+        await message.reply_text("🚫 Please /verify first.")
+        return
+    
+    msg = await message.reply_text("⏳ Initializing Datacenter Upload Sequence...")
+    
+    # Detect File Properties
+    media = message.document or message.video or message.audio
+    if not media and message.photo: media = message.photo
+        
+    file_size = getattr(media, 'file_size', 0)
+    
+    # Telegram Bot limits downloads to 20MB natively unless using local API
+    if file_size > 19.8 * 1024 * 1024:
+        await msg.edit_text(f"⚠️ **File Too Large!**\n\nTelegram Bots can only download up to 20MB. To upload heavier files (2GB+), please use the Web Dashboard.")
+        return
+
+    filename = getattr(media, 'file_name', f"telegram_upload_{uuid.uuid4().hex[:5]}")
+    title = message.caption if message.caption else filename
+    slug = str(uuid.uuid4())[:8]
+    ext = os.path.splitext(filename)[1] if "." in filename else ".bin"
+    temp_path = f"/tmp/{slug}{ext}"
+    
+    # Fast MTProto Progress Bar
+    last_update_time = time.time()
+    
+    async def dl_progress(current, total):
+        nonlocal last_update_time
+        now = time.time()
+        if now - last_update_time > 1.5: 
+            percent = (current / total) * 100
+            speed = current / (now - last_update_time) if (now - last_update_time) > 0 else 0
+            eta = (total - current) / speed if speed > 0 else 0
+            try:
+                await msg.edit_text(f"📥 **Downloading from Telegram...**\n\nProgress: {percent:.1f}%\nSpeed: {(speed/1024/1024):.2f} MB/s\nETA: {int(eta)}s\n[{format_size(current)} / {format_size(total)}]")
+                last_update_time = now
+            except: pass
+
+    # 1. Download Fast via MTProto
+    await message.download(file_name=temp_path, progress=dl_progress)
+    await msg.edit_text("✅ File Cached Locally.\n\n🔄 Now Syncing to HF Datacenter... (Please Wait)")
+    
+    # 2. Sync to HF
+    repo_path = f"files/{slug}_{filename}"
+    file_size_disk = os.path.getsize(temp_path)
+    mime_type, _ = mimetypes.guess_type(temp_path)
+    if not mime_type: mime_type = "application/octet-stream"
+
+    try:
+        await asyncio.to_thread(
+            api.upload_file, path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
+        )
+        os.remove(temp_path)
+        
+        db = get_db()
+        file_record = {
+            "slug": slug,
+            "filename": filename,
+            "path": repo_path,
+            "title": title,
+            "thumbnail": f"/f/{slug}" if mime_type.startswith("image/") else "",
+            "mime_type": mime_type,
+            "size_bytes": file_size_disk,
+            "uploaded_at": datetime.utcnow().isoformat() + "Z",
+            "is_external": False,
+            "external_url": ""
+        }
+        db.setdefault("files", []).append(file_record)
+        save_db(db)
+        
+        url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
+        
+        batch_status = "(Batch Active)" if batch_users.get(message.from_user.id) else ""
+        await msg.edit_text(f"🎉 **Upload Complete!** {batch_status}\n\n**File:** {title}\n**Size:** {format_size(file_size_disk)}\n\n**Secure Link:**\n{url}")
+        
+    except Exception as e:
+        await msg.edit_text(f"❌ Failed to sync with Hugging Face: {e}")
