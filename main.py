@@ -1683,13 +1683,16 @@ MEDIA_TUBE_HTML = """
         .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
         .yt-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 4;}
         
-        /* Video Loading Spinner */
-        .loader-spinner { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 60px; height: 60px; border: 5px solid rgba(255,255,255,0.1); border-top-color: var(--yt-brand); border-radius: 50%; animation: spin 1s linear infinite; z-index: 10; pointer-events: none; display: none; }
+        /* Video Loading Spinner (SVG YouTube Style) */
+        .loader-spinner { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 65px; height: 65px; z-index: 10; pointer-events: none; display: none; }
+        .loader-spinner svg { animation: yt-spin 2s linear infinite; width: 100%; height: 100%; }
+        .loader-spinner .path { stroke: var(--yt-brand); stroke-linecap: round; animation: yt-dash 1.5s ease-in-out infinite; }
+        @keyframes yt-spin { 100% { transform: rotate(360deg); } }
+        @keyframes yt-dash { 0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; } 50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; } 100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; } }
 
         /* Audio Visuals */
         .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
         .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
-        @keyframes spin { 100% { transform: rotate(360deg); } }
         
         /* Action UI Overlay */
         .action-icon-overlay { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.7); color: #fff; padding: 20px 30px; border-radius: 50px; font-size: 32px; font-weight: bold; z-index: 80; opacity: 0; pointer-events: none; display: flex; align-items: center; gap: 15px; transition: opacity 0.2s, transform 0.2s; backdrop-filter: blur(5px);}
@@ -2074,7 +2077,11 @@ MEDIA_TUBE_HTML = """
 
         function getControlsHtml() {
             return `
-                <div id="loaderSpinner" class="loader-spinner"></div>
+                <div id="loaderSpinner" class="loader-spinner">
+                    <svg viewBox="0 0 50 50">
+                        <circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="4"></circle>
+                    </svg>
+                </div>
                 <div class="action-icon-overlay" id="actionIcon"></div>
                 <div class="fast-forward-overlay" id="ffOverlay">Fast Forwarding 2x ▶▶</div>
                 <div class="custom-controls" id="pControls">
@@ -2169,10 +2176,14 @@ MEDIA_TUBE_HTML = """
             if(subs.length > 0) {
                 document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
                 updateCCSize(); 
-                setTimeout(() => setCC(0), 200); // Force load first subtitle as default
+                // Fix: Video load hone ke baad hi CC on hoga
+                const mediaCheck = document.getElementById('mainMedia');
+                if(mediaCheck) {
+                    mediaCheck.addEventListener('loadedmetadata', () => setCC(0), {once: true});
+                }
             } else {
                 document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
-                setTimeout(() => setCC(-1), 100);
+                setCC(-1);
             }
             
             const mediaEl = document.getElementById('mainMedia');
@@ -2451,10 +2462,15 @@ MEDIA_TUBE_HTML = """
         // SUBTITLE TICK MARK LOGIC & FORCE SHOW
         window.setCC = function(index) {
             const media = document.getElementById('mainMedia');
-            if(media && media.textTracks) {
-                for(let i=0; i<media.textTracks.length; i++) {
-                    media.textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
-                }
+            if(media) {
+                // Thoda delay diya taaki browser tracks ko DOM mein read kar sake
+                setTimeout(() => {
+                    if(media.textTracks) {
+                        for(let i=0; i<media.textTracks.length; i++) {
+                            media.textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
+                        }
+                    }
+                }, 150);
             }
             // Add Checkmark to UI
             document.querySelectorAll('.cc-item').forEach(el => el.classList.remove('active-cc'));
