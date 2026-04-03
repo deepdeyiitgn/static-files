@@ -3117,15 +3117,21 @@ async def media_handler(client, message):
     temp_path = f"/tmp/raw_{slug}{ext}"
     final_path = temp_path
     
-    last_update_time = time.time()
+    # FIX: Sahi Speed aur ETA logic ke liye 'start_time' add kiya hai
+    start_time = time.time()
+    last_update_time = start_time
     
     async def dl_progress(current, total):
         nonlocal last_update_time
         now = time.time()
+        # Sirf har 1.5 sec mein message update karega taaki Telegram block na kare
         if now - last_update_time > 1.5: 
             percent = (current / total) * 100
-            speed = current / (now - last_update_time) if (now - last_update_time) > 0 else 0
+            time_elapsed = now - start_time
+            # Speed = Total Downloaded / Total Time (Actual average speed)
+            speed = current / time_elapsed if time_elapsed > 0 else 0
             eta = (total - current) / speed if speed > 0 else 0
+            
             try:
                 await msg.edit_text(f"📥 **Downloading from Telegram...**\n\nProgress: {percent:.1f}%\nSpeed: {(speed/1024/1024):.2f} MB/s\nETA: {int(eta)}s\n[{format_size(current)} / {format_size(total)}]")
                 last_update_time = now
