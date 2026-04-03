@@ -2283,7 +2283,13 @@ MEDIA_TUBE_HTML = """
                 mediaEl.addEventListener('canplay', () => { if(loader) loader.style.display = 'none'; });
 
                 activePlayer = {
-                    play: () => mediaEl.play(),
+                    play: () => {
+                        // 🌊 THE ULTIMATE FIX: Har jagah se Audio Context Resume hoga!
+                        if (typeof currentAudioCtx !== 'undefined' && currentAudioCtx && currentAudioCtx.state === 'suspended') {
+                            currentAudioCtx.resume();
+                        }
+                        mediaEl.play();
+                    },
                     pause: () => mediaEl.pause(),
                     seek: (t) => { mediaEl.currentTime = t; },
                     setVolume: (v) => { mediaEl.volume = v; mediaEl.muted = false; },
@@ -2699,20 +2705,23 @@ MEDIA_TUBE_HTML = """
                     currentAudioCtx = audioCtx;
                     media.crossOrigin = "anonymous";
                     const analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 64;
+                    analyser.fftSize = 128; // 🌊 Waves thodi aur smooth aur badi dikhengi
                     const source = audioCtx.createMediaElementSource(media);
-                    source.connect(analyser); analyser.connect(audioCtx.destination);
+                    source.connect(analyser); 
+                    analyser.connect(audioCtx.destination);
                     const bufferLength = analyser.frequencyBinCount;
                     const dataArray = new Uint8Array(bufferLength);
                     
                     function draw() {
                         currentAnimationId = requestAnimationFrame(draw);
                         canvas.width = canvas.parentElement.clientWidth;
-                        canvas.height = canvas.clientHeight || canvas.parentElement.clientHeight;
+                        // 🛠️ FIX: Height agar 0 ho jaye toh 250px ka default fallback le lega
+                        canvas.height = canvas.parentElement.clientHeight || 250; 
+                        
                         analyser.getByteFrequencyData(dataArray);
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
                         
-                        const barWidth = (canvas.width / bufferLength) * 0.8;
+                        const barWidth = (canvas.width / bufferLength) * 1.5;
                         const centerY = canvas.height / 2;
                         let x = (canvas.width - (barWidth + 2) * bufferLength) / 2;
                         
@@ -2725,10 +2734,10 @@ MEDIA_TUBE_HTML = """
                         }
                     }
                     draw();
-                } catch(e) { console.warn("Visualizer CORS Blocked:", e); }
+                } catch(e) { console.warn("Visualizer Error:", e); }
             };
 
-            media.addEventListener('play', startVisualizer, {once: true});
+            media.addEventListener('play', startVisualizer);
             if (!media.paused) startVisualizer();
         }
 
