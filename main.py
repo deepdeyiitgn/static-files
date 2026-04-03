@@ -3237,6 +3237,10 @@ async def media_handler(client, message):
                 downloaded_thumb = await client.download_media(thumb_file_id, file_name=thumb_temp)
                 
                 if downloaded_thumb and os.path.exists(downloaded_thumb):
+
+                    # 🛠️ NAYA FIX: File delete hone se pehle uska asli size bytes mein nikal liya
+                    thumb_size = os.path.getsize(thumb_temp)
+                    
                     thumb_repo_path = f"files/thumb_{slug}.jpg"
                     await asyncio.to_thread(api.upload_file, path_or_fileobj=thumb_temp, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset")
                    # 🛡️ FIX: Slug aur URL mein se '.jpg' extension permanently hata diya
@@ -3251,7 +3255,10 @@ async def media_handler(client, message):
                     "title": "Native Telegram Thumbnail", 
                     "thumbnail": f"/f/thumb_{slug}", # 🛡️ FIX: Yahan blank ki jagah khud ka slug link daal diya!
                     "mime_type": "image/jpeg",
-                    "size_bytes": 0, "uploaded_at": upload_timestamp, "is_external": False, "external_url": ""
+                    "size_bytes": thumb_size,  # 🛡️ FIX: Ab 0 ki jagah actual image size aayega!
+                    "uploaded_at": upload_timestamp,
+                    "is_external": False,
+                    "external_url": ""
                 })
                     
             # 2. Download Main File Fast via MTProto
