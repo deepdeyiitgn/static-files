@@ -1778,7 +1778,8 @@ MEDIA_TUBE_HTML = """
         @keyframes yt-dash { 0% { stroke-dasharray: 1, 150; stroke-dashoffset: 0; } 50% { stroke-dasharray: 90, 150; stroke-dashoffset: -35; } 100% { stroke-dasharray: 90, 150; stroke-dashoffset: -124; } }
 
         /* Audio Visuals */
-        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
+        .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; animation-play-state: paused; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
+        .audio-disc.playing { animation-play-state: running; }
         .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
         
         /* Action UI Overlay */
@@ -1975,7 +1976,7 @@ MEDIA_TUBE_HTML = """
         const isAdmin = document.cookie.includes('auth_token=');
 
         const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
-        const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%23bc8cff"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`;
+        const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="%23111"/><circle cx="50" cy="50" r="40" fill="none" stroke="%23222" stroke-width="2"/><circle cx="50" cy="50" r="30" fill="none" stroke="%23222" stroke-width="2"/><circle cx="50" cy="50" r="18" fill="%23bc8cff"/><circle cx="50" cy="50" r="4" fill="%230f0f0f"/></svg>`;
         
         let masterLibrary = [];
         let currentAudioCtx = null;
@@ -2319,8 +2320,16 @@ MEDIA_TUBE_HTML = """
                 mediaEl.play().catch(e => console.log("Autoplay blocked."));
                 mediaEl.addEventListener('ended', handleMediaEnded);
                 mediaEl.ontimeupdate = updateProgressUI;
-                mediaEl.onplay = () => document.getElementById('pPlay').innerText = '⏸';
-                mediaEl.onpause = () => document.getElementById('pPlay').innerText = '▶';
+                mediaEl.onplay = () => {
+                    document.getElementById('pPlay').innerText = '⏸';
+                    const disc = document.getElementById('audioDisc');
+                    if(disc) disc.classList.add('playing');
+                };
+                mediaEl.onpause = () => {
+                    document.getElementById('pPlay').innerText = '▶';
+                    const disc = document.getElementById('audioDisc');
+                    if(disc) disc.classList.remove('playing');
+                };
             }
             initCustomControls();
             renderHybridRelated(file.title);
