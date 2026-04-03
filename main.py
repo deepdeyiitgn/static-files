@@ -3239,15 +3239,21 @@ async def media_handler(client, message):
                 if downloaded_thumb and os.path.exists(downloaded_thumb):
                     thumb_repo_path = f"files/thumb_{slug}.jpg"
                     await asyncio.to_thread(api.upload_file, path_or_fileobj=thumb_temp, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset")
-                    final_thumbnail_url = f"/f/thumb_{slug}.jpg"
+                   # 🛡️ FIX: Slug aur URL mein se '.jpg' extension permanently hata diya
+                    final_thumbnail_url = f"/f/thumb_{slug}"
                     os.remove(thumb_temp)
-                    
-                    files_list.append({
-                        "slug": f"thumb_{slug}.jpg", "filename": f"thumbnail_{slug}.jpg", "path": thumb_repo_path,
-                        "title": "Native Telegram Thumbnail", "thumbnail": "", "mime_type": "image/jpeg",
-                        "size_bytes": 0, "uploaded_at": upload_timestamp, "is_external": False, "external_url": ""
-                    })
 
+                    # Add thumbnail record to DB
+                    files_list.append({
+                    "slug": f"thumb_{slug}",  # 🛡️ FIX: Sirf plain text, NO EXTENSION!
+                    "filename": f"thumbnail_{slug}.jpg",  # Asli file name intact rahega
+                    "path": thumb_repo_path,
+                    "title": "Native Telegram Thumbnail", 
+                    "thumbnail": f"/f/thumb_{slug}", # 🛡️ FIX: Yahan blank ki jagah khud ka slug link daal diya!
+                    "mime_type": "image/jpeg",
+                    "size_bytes": 0, "uploaded_at": upload_timestamp, "is_external": False, "external_url": ""
+                })
+                    
             # 2. Download Main File Fast via MTProto
             await message.download(file_name=temp_path, progress=dl_progress)
             await msg.edit_text("✅ File Cached Locally.\n\n🔍 Analyzing File Structure...")
