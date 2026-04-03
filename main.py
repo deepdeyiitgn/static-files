@@ -649,15 +649,32 @@ async def generate_secure_stream(slug: str, request: Request, token: str = Depen
 
 @app.get("/stream/media/{session_id}")
 async def serve_secure_stream(session_id: str, request: Request):
-    """Serves the actual file ONLY IF the session ID is valid and not expired."""
+    """Serves the actual file securely with Anti-Download and Rolling Expiry."""
     session = stream_sessions.get(session_id)
     
-    # Check 1: Does token exist and is it active?
+    # 1. STRICT EXPIRY CHECK & TARPIT DEFENSE
     if not session or time.time() > session["expires"]:
-        # Tarpit defense: Send fake bytes to confuse automated leechers
+        # Token expired ya galat hai -> Tarpit defense (Fake garbage data)
         await asyncio.sleep(2)
         return Response(content=os.urandom(1024), media_type="application/octet-stream", status_code=403)
         
+    # 2. ANTI-DIRECT DOWNLOAD FIREWALL (Header Inspection)
+    # Check if request is coming from a <video> tag or direct browser hit
+    fetch_dest = request.headers.get("sec-fetch-dest", "")
+    
+    # Agar koi direct link kholta hai toh usko redirect karke Player UI par bhej do
+    if fetch_dest == "document" or fetch_dest == "":
+        return RedirectResponse(url=f"/video?q={session['slug']}", status_code=302)
+
+    # Agar request audio/video tag se NAHI aa rahi hai (e.g. IDM download)
+    if fetch_dest not in ["video", "audio", "empty"]:
+        return Response(content=b"Direct downloading strictly prohibited.", status_code=403)
+
+    # 3. ROLLING EXPIRY (Auto-renew session while watching)
+    # Har active chunk request par expiry ko agle 2 ghante ke liye extend kar do!
+    # Toh 4-hour wali video beech mein kabhi crash nahi hogi.
+    session["expires"] = time.time() + 7200 # 2 Hours from last chunk loaded
+
     slug = session["slug"]
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
@@ -665,14 +682,14 @@ async def serve_secure_stream(session_id: str, request: Request):
     if not file_record:
         raise HTTPException(status_code=404, detail="Media asset not found in Vault.")
 
-    # Serve the file securely
+    # 4. SERVE THE FILE SECURELY (Hugging Face Hub)
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
         return FileResponse(
             path=file_path, 
             filename=file_record["filename"],
             media_type=file_record.get("mime_type", "application/octet-stream"),
-            content_disposition_type="inline"
+            content_disposition_type="inline" # Forces inline play, strict no-attachment
         )
     except Exception as e:
         logger.error(f"Stream Error: {e}")
