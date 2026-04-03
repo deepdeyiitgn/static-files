@@ -2908,6 +2908,9 @@ else:
         in_memory=True
     )
 
+# --- GLOBAL QUEUE LOCK (Ek ek karke upload karne ke liye) ---
+upload_lock = asyncio.Lock()
+
 # --- Telegram Auth DB Helpers ---
 def get_tg_auth_db():
     try:
@@ -2989,7 +2992,7 @@ async def batch_cmd(client, message):
         await message.reply_text("📦 **Batch Mode Deactivated.**\nOperating in standard single-file mode.")
     else:
         batch_users[user_id] = True
-        await message.reply_text("📦 **Batch Mode Active.**\n\nYou can now forward or send up to 5 files. The system will process and upload them sequentially to the HF Datacenter.")
+        await message.reply_text("📦 **Batch Mode Active.**\n\nYou can now forward or send multiple files. The system will strictly queue and process them one-by-one to protect server disk space.")
 
 # --- TEXT HANDLER: Auth & Strict Vault Auto-Search ---
 @tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch"]))
@@ -3093,7 +3096,7 @@ async def button_handler(client, query: CallbackQuery):
                 url = f"{STATIC_DOMAIN}/f/{slug}"
                 await query.message.edit_text(f"⚠️ **File Size Limit Hit by Telegram Servers!**\n\nThe bot couldn't stream this heavy file directly.\n\n🔗 Please use this direct link instead:\n{url}")
 
-# --- MEDIA HANDLER: Smart Uploads, MKV Fix & Native Telegram Thumbnails ---
+# --- MEDIA HANDLER: Smart Uploads, Queue System, MKV Fix & Native Thumbnails ---
 @tg_app.on_message(filters.media | filters.document)
 async def media_handler(client, message):
     if not check_target_chat(message): return
@@ -3101,125 +3104,127 @@ async def media_handler(client, message):
         await message.reply_text("🚫 Please /verify first.")
         return
     
-    msg = await message.reply_text("⏳ Initializing Datacenter Upload Sequence...")
+    # Send waiting message immediately
+    msg = await message.reply_text("⏳ **File Received!**\nAdded to the processing queue. Please wait for your turn...", parse_mode=enums.ParseMode.MARKDOWN)
     
-    media = message.document or message.video or message.audio
-    if not media and message.photo: media = message.photo
+    # 🔒 QUEUE SYSTEM: Yeh ensure karega ki ek time par ek hi file process ho
+    async with upload_lock:
+        await msg.edit_text("🔄 **Your turn!** Initializing Datacenter Upload Sequence...", parse_mode=enums.ParseMode.MARKDOWN)
         
-    if not media:
-        await msg.edit_text("❌ Unknown media format.")
-        return
-
-    filename = getattr(media, 'file_name', f"telegram_upload_{uuid.uuid4().hex[:5]}")
-    title = message.caption if message.caption else filename
-    slug = str(uuid.uuid4())[:8]
-    ext = os.path.splitext(filename)[1].lower() if "." in filename else ".bin"
-    temp_path = f"/tmp/raw_{slug}{ext}"
-    final_path = temp_path
-    
-    # FIX: Sahi Speed aur ETA logic ke liye 'start_time' add kiya hai
-    start_time = time.time()
-    last_update_time = start_time
-    
-    async def dl_progress(current, total):
-        nonlocal last_update_time
-        now = time.time()
-        # Sirf har 1.5 sec mein message update karega taaki Telegram block na kare
-        if now - last_update_time > 1.5: 
-            percent = (current / total) * 100
-            time_elapsed = now - start_time
-            # Speed = Total Downloaded / Total Time (Actual average speed)
-            speed = current / time_elapsed if time_elapsed > 0 else 0
-            eta = (total - current) / speed if speed > 0 else 0
+        media = message.document or message.video or message.audio
+        if not media and message.photo: media = message.photo
             
-            try:
-                await msg.edit_text(f"📥 **Downloading from Telegram...**\n\nProgress: {percent:.1f}%\nSpeed: {(speed/1024/1024):.2f} MB/s\nETA: {int(eta)}s\n[{format_size(current)} / {format_size(total)}]")
-                last_update_time = now
-            except: pass
+        if not media:
+            await msg.edit_text("❌ Unknown media format.")
+            return
 
-    try:
-        db = get_db()
-        files_list = db.setdefault("files", [])
-        upload_timestamp = datetime.utcnow().isoformat() + "Z"
-        final_thumbnail_url = ""
+        filename = getattr(media, 'file_name', f"telegram_upload_{uuid.uuid4().hex[:5]}")
+        title = message.caption if message.caption else filename
+        slug = str(uuid.uuid4())[:8]
+        ext = os.path.splitext(filename)[1].lower() if "." in filename else ".bin"
+        temp_path = f"/tmp/raw_{slug}{ext}"
+        final_path = temp_path
+        
+        start_time = time.time()
+        last_update_time = start_time
+        
+        async def dl_progress(current, total):
+            nonlocal last_update_time
+            now = time.time()
+            if now - last_update_time > 1.5: 
+                percent = (current / total) * 100
+                time_elapsed = now - start_time
+                speed = current / time_elapsed if time_elapsed > 0 else 0
+                eta = (total - current) / speed if speed > 0 else 0
+                try:
+                    await msg.edit_text(f"📥 **Downloading from Telegram...**\n\nProgress: {percent:.1f}%\nSpeed: {(speed/1024/1024):.2f} MB/s\nETA: {int(eta)}s\n[{format_size(current)} / {format_size(total)}]", parse_mode=enums.ParseMode.MARKDOWN)
+                    last_update_time = now
+                except: pass
 
-        # 1. Native Telegram Thumbnail Extraction (CPU Friendly & Fast)
-        if getattr(media, 'thumbs', None) and len(media.thumbs) > 0:
-            await msg.edit_text("🖼️ Extracting Native Telegram Thumbnail...")
-            thumb_file_id = media.thumbs[0].file_id
-            thumb_temp = f"/tmp/thumb_{slug}.jpg"
-            
-            # Download the thumbnail from Telegram Servers
-            downloaded_thumb = await client.download_media(thumb_file_id, file_name=thumb_temp)
-            
-            if downloaded_thumb and os.path.exists(downloaded_thumb):
-                thumb_repo_path = f"files/thumb_{slug}.jpg"
-                await asyncio.to_thread(api.upload_file, path_or_fileobj=thumb_temp, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset")
-                final_thumbnail_url = f"/f/thumb_{slug}.jpg"
-                os.remove(thumb_temp)
+        try:
+            db = get_db()
+            files_list = db.setdefault("files", [])
+            upload_timestamp = datetime.utcnow().isoformat() + "Z"
+            final_thumbnail_url = ""
+
+            # 1. Native Telegram Thumbnail Extraction (CPU Friendly & Fast)
+            if getattr(media, 'thumbs', None) and len(media.thumbs) > 0:
+                await msg.edit_text("🖼️ Extracting Native Telegram Thumbnail...")
+                thumb_file_id = media.thumbs[0].file_id
+                thumb_temp = f"/tmp/thumb_{slug}.jpg"
                 
-                # Add thumbnail record to DB
-                files_list.append({
-                    "slug": f"thumb_{slug}.jpg", "filename": f"thumbnail_{slug}.jpg", "path": thumb_repo_path,
-                    "title": "Native Telegram Thumbnail", "thumbnail": "", "mime_type": "image/jpeg",
-                    "size_bytes": 0, "uploaded_at": upload_timestamp, "is_external": False, "external_url": ""
-                })
+                downloaded_thumb = await client.download_media(thumb_file_id, file_name=thumb_temp)
+                
+                if downloaded_thumb and os.path.exists(downloaded_thumb):
+                    thumb_repo_path = f"files/thumb_{slug}.jpg"
+                    await asyncio.to_thread(api.upload_file, path_or_fileobj=thumb_temp, path_in_repo=thumb_repo_path, repo_id=DATASET_REPO, repo_type="dataset")
+                    final_thumbnail_url = f"/f/thumb_{slug}.jpg"
+                    os.remove(thumb_temp)
+                    
+                    files_list.append({
+                        "slug": f"thumb_{slug}.jpg", "filename": f"thumbnail_{slug}.jpg", "path": thumb_repo_path,
+                        "title": "Native Telegram Thumbnail", "thumbnail": "", "mime_type": "image/jpeg",
+                        "size_bytes": 0, "uploaded_at": upload_timestamp, "is_external": False, "external_url": ""
+                    })
 
-        # 2. Download Main File Fast via MTProto
-        await message.download(file_name=temp_path, progress=dl_progress)
-        await msg.edit_text("✅ File Cached Locally.\n\n🔍 Analyzing File Structure...")
-        
-        mime_type, _ = mimetypes.guess_type(temp_path)
-        if not mime_type: mime_type = "application/octet-stream"
-
-        # 3. MKV / Unsupported Video Optimizer (MP4/AAC Force Convert)
-        is_video = mime_type.startswith("video/") or ext in ['.mkv', '.avi', '.mov', '.flv', '.wmv']
-        
-        if is_video and ext != '.mp4':
-            await msg.edit_text("🛠️ Optimizing Video Engine (MKV to MP4 & AAC Audio Fix)...\nThis may take a few minutes for heavy files.")
-            final_path = f"/tmp/fixed_{slug}.mp4"
-            filename = os.path.splitext(filename)[0] + ".mp4"
-            mime_type = "video/mp4"
+            # 2. Download Main File Fast via MTProto
+            await message.download(file_name=temp_path, progress=dl_progress)
+            await msg.edit_text("✅ File Cached Locally.\n\n🔍 Analyzing File Structure...")
             
-            cmd = ["ffmpeg", "-y", "-i", temp_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", final_path]
-            process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            await process.communicate()
-            
-            if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
-                os.remove(temp_path) # Delete raw file
-            else:
-                final_path = temp_path # Fallback to original if conversion fails
-        
-        # 4. Final Sync to Hugging Face
-        await msg.edit_text("🔄 Syncing Optimized Media to HF Datacenter... (Please Wait)")
-        
-        repo_path = f"files/{slug}_{filename}"
-        file_size_disk = os.path.getsize(final_path)
+            mime_type, _ = mimetypes.guess_type(temp_path)
+            if not mime_type: mime_type = "application/octet-stream"
 
-        await asyncio.to_thread(
-            api.upload_file, path_or_fileobj=final_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
-        )
-        os.remove(final_path)
-        
-        # 5. Update Main DB Record
-        file_record = {
-            "slug": slug,
-            "filename": filename,
-            "path": repo_path,
-            "title": title,
-            "thumbnail": final_thumbnail_url,
-            "mime_type": mime_type,
-            "size_bytes": file_size_disk,
-            "uploaded_at": upload_timestamp,
-            "is_external": False,
-            "external_url": ""
-        }
-        files_list.append(file_record)
-        save_db(db)
-        
-        url = f"{STATIC_DOMAIN}/f/{slug}"
-        batch_status = "(Batch Active)" if batch_users.get(message.from_user.id) else ""
-        await msg.edit_text(f"🎉 **Upload Complete!** {batch_status}\n\n**File:** {title}\n**Size:** {format_size(file_size_disk)}\n\n**Secure Link:**\n{url}")
-        
-    except Exception as e:
-        await msg.edit_text(f"❌ Upload Failed (Telegram Server Limits or Engine Crash): {e}")
+            # 3. MKV / Unsupported Video Optimizer (MP4/AAC Force Convert)
+            is_video = mime_type.startswith("video/") or ext in ['.mkv', '.avi', '.mov', '.flv', '.wmv']
+            
+            if is_video and ext != '.mp4':
+                await msg.edit_text("🛠️ Optimizing Video Engine (MKV to MP4 & AAC Audio Fix)...\nThis may take a few minutes for heavy files.")
+                final_path = f"/tmp/fixed_{slug}.mp4"
+                filename = os.path.splitext(filename)[0] + ".mp4"
+                mime_type = "video/mp4"
+                
+                cmd = ["ffmpeg", "-y", "-i", temp_path, "-c:v", "copy", "-c:a", "aac", "-b:a", "256k", final_path]
+                process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                await process.communicate()
+                
+                if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+                    os.remove(temp_path) 
+                else:
+                    final_path = temp_path 
+            
+            # 4. Final Sync to Hugging Face
+            await msg.edit_text("🔄 Syncing Optimized Media to HF Datacenter... (Please Wait)")
+            
+            repo_path = f"files/{slug}_{filename}"
+            file_size_disk = os.path.getsize(final_path)
+
+            await asyncio.to_thread(
+                api.upload_file, path_or_fileobj=final_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
+            )
+            os.remove(final_path)
+            
+            # 5. Update Main DB Record
+            file_record = {
+                "slug": slug,
+                "filename": filename,
+                "path": repo_path,
+                "title": title,
+                "thumbnail": final_thumbnail_url,
+                "mime_type": mime_type,
+                "size_bytes": file_size_disk,
+                "uploaded_at": upload_timestamp,
+                "is_external": False,
+                "external_url": ""
+            }
+            files_list.append(file_record)
+            save_db(db)
+            
+            url = f"{STATIC_DOMAIN}/f/{slug}"
+            batch_status = "(Batch Queue Active)" if batch_users.get(message.from_user.id) else ""
+            await msg.edit_text(f"🎉 **Upload Complete!** {batch_status}\n\n**File:** {title}\n**Size:** {format_size(file_size_disk)}\n\n**Secure Link:**\n{url}", parse_mode=enums.ParseMode.MARKDOWN)
+            
+        except Exception as e:
+            await msg.edit_text(f"❌ Upload Failed (Telegram Server Limits or Engine Crash): {e}")
+            # Ensure cleanup if crashed
+            if os.path.exists(temp_path): os.remove(temp_path)
+            if final_path != temp_path and os.path.exists(final_path): os.remove(final_path)
