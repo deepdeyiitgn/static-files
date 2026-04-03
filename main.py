@@ -1767,12 +1767,17 @@ MEDIA_TUBE_HTML = """
         .fast-forward-overlay { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: bold; z-index: 100; display: none; pointer-events: none; align-items: center; gap: 8px;}
         
         .custom-controls { position: absolute; bottom: 0; left: 0; width: 100%; padding: 60px 20px 10px 20px; background: linear-gradient(transparent, rgba(0,0,0,0.95)); z-index: 50; display: flex; flex-direction: column; gap: 8px; opacity: 0; transition: opacity 0.3s;}
-        .player-wrapper:hover .custom-controls, .custom-controls.active { opacity: 1; }
+        /* 🛡️ FIX: Removed hover force-show for proper JS auto-hide control */
+        .custom-controls.active { opacity: 1; }
         
-        /* SEEK BAR MOBILE FIX */
-        .seek-container { width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; cursor: pointer; position: relative; transition: height 0.1s; touch-action: none;}
+        /* 🚀 FIX: YOUTUBE STYLE SEEK BAR (Gray Buffer + Progress Circle) */
+        .seek-container { width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; cursor: pointer; position: relative; transition: height 0.1s; touch-action: none; display: flex; align-items: center;}
         .seek-container:hover { height: 8px; }
-        .seek-progress { height: 100%; background: var(--yt-brand); border-radius: 3px; width: 0%; pointer-events: none; transition: background 0.3s;}
+        .seek-buffer { position: absolute; top: 0; left: 0; height: 100%; background: rgba(255,255,255,0.4); border-radius: 3px; width: 0%; pointer-events: none; transition: width 0.3s;}
+        .seek-progress { position: absolute; top: 0; left: 0; height: 100%; background: var(--yt-brand); border-radius: 3px; width: 0%; pointer-events: none; display: flex; justify-content: flex-end; align-items: center;}
+        /* YouTube jaisa Circle (Thumb) jo hover karne par pop hoga */
+        .seek-progress::after { content: ''; width: 14px; height: 14px; background: var(--yt-brand); border-radius: 50%; margin-right: -7px; transform: scale(0); transition: transform 0.2s; box-shadow: 0 0 5px rgba(0,0,0,0.5); }
+        .seek-container:hover .seek-progress::after { transform: scale(1); }
         
         .control-row { display: flex; justify-content: space-between; align-items: center; color: #fff;}
         .ctrl-left, .ctrl-right { display: flex; align-items: center; gap: 15px; }
@@ -2153,7 +2158,10 @@ MEDIA_TUBE_HTML = """
                 <div class="action-icon-overlay" id="actionIcon"></div>
                 <div class="fast-forward-overlay" id="ffOverlay">Fast Forwarding 2x ▶▶</div>
                 <div class="custom-controls" id="pControls">
-                    <div class="seek-container" id="pSeek"><div class="seek-progress" id="pSeekProg"></div></div>
+                    <div class="seek-container" id="pSeek">
+                        <div class="seek-buffer" id="pSeekBuf"></div>
+                        <div class="seek-progress" id="pSeekProg"></div>
+                    </div>
                     <div class="control-row">
                         <div class="ctrl-left">
                             <button class="ctrl-btn" id="pPlay">▶</button>
@@ -2238,8 +2246,8 @@ MEDIA_TUBE_HTML = """
             // 🌟 SECURE STREAMING LOGIC END 🌟
 
             if(type === 'video') {
-                // Ab HTML mein direct link nahi, expiring token wala link aayega!
-                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${secureSrc}" crossorigin="anonymous" playsinline>${trackHtml}</video>` + getControlsHtml();
+                // 🚀 FIX: preload="auto" lagaya for Fast Background Buffering (Safe for Intel UHD graphics)
+                pw.innerHTML = `<video id="mainMedia" class="player-element" src="${secureSrc}" crossorigin="anonymous" playsinline preload="auto">${trackHtml}</video>` + getControlsHtml();
                 document.getElementById('videoVisualizer').style.display = 'block';
                 initVisualizer('mainMedia', 'videoVisualizer', 'bar', window.currentThemeColor);
             } 
@@ -2300,7 +2308,8 @@ MEDIA_TUBE_HTML = """
                     setSpeed: (s) => { mediaEl.playbackRate = s; },
                     isPaused: () => mediaEl.paused,
                     isMuted: () => mediaEl.muted,
-                    getVolume: () => mediaEl.volume
+                    getVolume: () => mediaEl.volume,
+                    getBuffered: () => mediaEl.buffered.length > 0 ? mediaEl.buffered.end(mediaEl.buffered.length - 1) : 0
                 };
 
                 mediaEl.play().catch(e => console.log("Autoplay blocked."));
@@ -2368,9 +2377,9 @@ MEDIA_TUBE_HTML = """
                 setSpeed: (s) => ytPlayer.setPlaybackRate(s),
                 isPaused: () => ytPlayer.getPlayerState() !== YT.PlayerState.PLAYING,
                 isMuted: () => ytPlayer.isMuted(),
-                getVolume: () => ytPlayer.getVolume() / 100
+                getVolume: () => ytPlayer.getVolume() / 100,
+                getBuffered: () => ytPlayer.getVideoLoadedFraction() * (ytPlayer.getDuration() || 0)
             };
-
             initCustomControls();
             
             const qList = ytPlayer.getAvailableQualityLevels();
@@ -2443,8 +2452,15 @@ MEDIA_TUBE_HTML = """
             const percent = dur > 0 ? (cur / dur) * 100 : 0;
             document.getElementById('pSeekProg').style.width = `${percent}%`;
             document.getElementById('pTime').innerText = `${formatTime(cur)} / ${formatTime(dur)}`;
-        }
 
+            // 🚀 FIX: Gray Buffer Bar UI Update
+            if (activePlayer.getBuffered && dur > 0) {
+                const buf = activePlayer.getBuffered();
+                const bufPercent = Math.min((buf / dur) * 100, 100);
+                const bufEl = document.getElementById('pSeekBuf');
+                if(bufEl) bufEl.style.width = `${bufPercent}%`;
+            }
+        }
         function initCustomControls() {
             const pPlay = document.getElementById('pPlay');
             const pSeek = document.getElementById('pSeek');
@@ -2505,10 +2521,26 @@ MEDIA_TUBE_HTML = """
             document.getElementById('pSetBtn').onclick = (e) => { e.stopPropagation(); document.getElementById('pSettings').classList.toggle('show'); };
             document.getElementById('pSpeedRange').oninput = (e) => { setSpeed(e.target.value); };
 
+            // 🖱️ FIX: YouTube-style Auto Hide (Controls + Mouse Pointer)
             pw.onmousemove = () => {
                 pControls.classList.add('active');
+                pw.style.cursor = 'default'; // Mouse wapas dikhao
                 clearTimeout(controlTimeout);
-                controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
+                
+                controlTimeout = setTimeout(() => {
+                    // Agar video chal rahi hai (paused nahi hai), tabhi hide kar do
+                    if (activePlayer && !activePlayer.isPaused()) {
+                        pControls.classList.remove('active');
+                        pw.style.cursor = 'none'; // Mouse gayab kar do
+                    }
+                }, 2500); // 2.5 second idle time
+            };
+
+            // Agar mouse player ke bahar chala jaye toh turant hide kar do
+            pw.onmouseleave = () => {
+                if (activePlayer && !activePlayer.isPaused()) {
+                    pControls.classList.remove('active');
+                }
             };
 
             pw.onclick = (e) => {
