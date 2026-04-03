@@ -84,4 +84,4 @@ You are free to fork, deploy, and use this architecture exactly as it is for you
 If you found this architecture helpful or learned something new about API security and Python web servers, please give this repository a **⭐ Star**! 
 
 *Dreaming of IIT Kharagpur CSE. Keep coding, keep building!*
-```
+
