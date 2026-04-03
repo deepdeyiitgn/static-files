@@ -804,6 +804,7 @@ async def serve_frontend_ui():
 # ==========================================
 import time
 from fastapi.responses import Response
+from datetime import datetime
 
 # Virtual Cache in-memory store
 sitemap_cache = {
@@ -814,9 +815,6 @@ sitemap_cache = {
 async def generate_sitemap(request: Request):
     try:
         logger.info("Generating Sitemap for cache...")
-        
-        # Base URL automatically host se nikal lega (e.g., qlynk.me ya HF space link)
-        base_url = f"{request.url.scheme}://{request.url.netloc}"
         
         # Main routes ke liye current time set kar rahe hain
         current_time = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S+00:00")
@@ -845,22 +843,7 @@ async def generate_sitemap(request: Request):
             </url>
             """)
             
-        # 3. Files from history.json (Priority 0.1)
-        db = get_db()
-        files_list = db.get("files", [])
-        for file_record in files_list:
-            slug = file_record.get("slug")
-            # File ka original upload time use kar raha hai auto-update ke liye
-            file_time = file_record.get("uploaded_at", current_time) 
-            
-            urls.append(f"""
-            <url>
-                <loc>https://static.qlynk.me/f/{slug}</loc>
-                <lastmod>{file_time}</lastmod>
-                <changefreq>monthly</changefreq>
-                <priority>0.1</priority>
-            </url>
-            """)
+        # NOTE: File indexing (history.json) removed for Vault Privacy & Security.
             
         sitemap_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -885,11 +868,10 @@ async def serve_sitemap(request: Request):
     # Agar cache khali hai (jaise server just start hua ho)
     if not sitemap_cache["content"]:
         await generate_sitemap(request)
-        # Background task sirf tabhi start hogi jab sitemap pehli baar hit ho,
-        # isse hum request object ko background loop mein pass kar sakte hain
+        # Background task sirf tabhi start hogi jab sitemap pehli baar hit ho
         asyncio.create_task(sitemap_updater_loop(request))
         
-    return Response(content=sitemap_cache["content"], media_type="application/xml")    
+    return Response(content=sitemap_cache["content"], media_type="application/xml")  
 
 
 # ==========================================
