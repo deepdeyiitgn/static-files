@@ -2877,15 +2877,25 @@ import difflib
 TG_API_ID = int(os.environ.get("TG_API_ID", "0"))
 TG_API_HASH = os.environ.get("TG_API_HASH", "dummy")
 TG_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "dummy")
+TG_SESSION_STRING = os.environ.get("TG_SESSION_STRING", "") # For True 2GB UserBot Power
 
-# Initialize Pyrogram MTProto Client
-tg_app = Client(
-    "qlynk_max_power",
-    api_id=TG_API_ID,
-    api_hash=TG_API_HASH,
-    bot_token=TG_BOT_TOKEN,
-    in_memory=True
-)
+# Initialize Pyrogram MTProto Client (Smart Switch between Bot and UserBot)
+if TG_SESSION_STRING:
+    tg_app = Client(
+        "qlynk_userbot",
+        session_string=TG_SESSION_STRING,
+        api_id=TG_API_ID,
+        api_hash=TG_API_HASH,
+        in_memory=True
+    )
+else:
+    tg_app = Client(
+        "qlynk_bot",
+        api_id=TG_API_ID,
+        api_hash=TG_API_HASH,
+        bot_token=TG_BOT_TOKEN,
+        in_memory=True
+    )
 
 # --- Telegram Auth DB Helpers ---
 def get_tg_auth_db():
@@ -2902,9 +2912,17 @@ def is_auth(user_id: int):
     db = get_tg_auth_db()
     return user_id in db.get("authorized_users", [])
 
+def check_target_chat(message):
+    # UserBot mode mein sirf 'Saved Messages' ko monitor karega, taaki dosto ki chat scan na ho!
+    if TG_SESSION_STRING:
+        return message.chat.id == message.from_user.id
+    return True
+
 # --- COMMAND: /start ---
 @tg_app.on_message(filters.command("start"))
 async def start_cmd(client, message):
+    if not check_target_chat(message): return
+    
     keyboard = [
         [InlineKeyboardButton("💻 Source Code", url="https://huggingface.co/spaces/deydeep/static-files/")],
         [InlineKeyboardButton("🐙 GitHub Profile", url="https://github.com/deepdeyiitgn"),
@@ -2924,6 +2942,7 @@ async def start_cmd(client, message):
 # --- COMMAND: /verify ---
 @tg_app.on_message(filters.command("verify"))
 async def verify_cmd(client, message):
+    if not check_target_chat(message): return
     if is_auth(message.from_user.id):
         await message.reply_text("✅ You are the Owner and already verified!\n\nYou can now upload files, search the database, or use /batch.")
     else:
@@ -2932,6 +2951,7 @@ async def verify_cmd(client, message):
 # --- COMMAND: /logout ---
 @tg_app.on_message(filters.command("logout"))
 async def logout_cmd(client, message):
+    if not check_target_chat(message): return
     if not is_auth(message.from_user.id):
         await message.reply_text("You are not logged in.")
         return
@@ -2945,9 +2965,10 @@ async def logout_cmd(client, message):
         await message.reply_text("🚪 Logged out successfully. Datacenter unmounted.")
 
 # --- COMMAND: /batch ---
-batch_users = {} # In-memory tracker for batch uploads
+batch_users = {} 
 @tg_app.on_message(filters.command("batch"))
 async def batch_cmd(client, message):
+    if not check_target_chat(message): return
     if not is_auth(message.from_user.id): 
         await message.reply_text("🚫 Please /verify first.")
         return
@@ -2963,10 +2984,11 @@ async def batch_cmd(client, message):
 # --- TEXT HANDLER: Auth & Smart Search ---
 @tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch"]))
 async def text_handler(client, message):
+    if not check_target_chat(message): return
     text = message.text
     user_id = message.from_user.id
     
-    # 1. Check Password if not authenticated
+    # 1. Check Password
     if not is_auth(user_id):
         if text == SPACE_PASSWORD:
             db = get_tg_auth_db()
@@ -2976,7 +2998,6 @@ async def text_handler(client, message):
                 db["authorized_users"] = auth_list
                 save_tg_auth_db(db)
             await message.reply_text("🔓 **Access Granted!**\n\nYou are now securely connected to the Qlynk Datacenter.\n- Send a file to upload.\n- Type a video name to search.", parse_mode=enums.ParseMode.MARKDOWN)
-            # Delete password for security
             try: await message.delete()
             except: pass
         else:
@@ -3028,39 +3049,31 @@ async def button_handler(client, query: CallbackQuery):
         file_record = next((f for f in files if f["slug"] == slug), None)
         
         if file_record:
-            size_mb = file_record["size_bytes"] / 1024 / 1024
-            
-            # Max Send limit for BOT token is 50MB (2GB requires User Session string)
-            if size_mb > 49.5:
+            await query.message.edit_text("📤 Downloading from HF Vault and sending to Telegram chat...")
+            try:
+                file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
+                await client.send_document(chat_id=query.message.chat.id, document=file_path, file_name=file_record["filename"], caption="Vault Asset Retrieved.")
+                await query.message.edit_text("✅ File sent successfully.")
+            except Exception as e:
+                # Agar Telegram server reject kar de (File too large), toh gracefully link dega
                 url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
-                await query.message.edit_text(text=f"⚠️ **File Size Limit Exceeded!**\n\nThe file is {size_mb:.2f} MB.\nBots can only directly send files up to 50MB.\n\n🔗 Please use this direct link instead:\n{url}")
-            else:
-                await query.message.edit_text("📤 Downloading from HF Vault and sending to Telegram chat...")
-                try:
-                    file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
-                    await client.send_document(chat_id=query.message.chat.id, document=file_path, file_name=file_record["filename"], caption="Vault Asset Retrieved.")
-                    await query.message.edit_text("✅ File sent successfully.")
-                except Exception as e:
-                    await query.message.edit_text(f"❌ Error fetching file: {e}")
+                await query.message.edit_text(f"⚠️ **File Size Limit Hit by Telegram Servers!**\n\nThe bot token couldn't stream this heavy file directly.\n\n🔗 Please use this direct link instead:\n{url}")
 
-# --- MEDIA HANDLER: Uploads ---
+# --- MEDIA HANDLER: Uploads (Size restrictions REMOVED) ---
 @tg_app.on_message(filters.media | filters.document)
 async def media_handler(client, message):
+    if not check_target_chat(message): return
     if not is_auth(message.from_user.id): 
         await message.reply_text("🚫 Please /verify first.")
         return
     
     msg = await message.reply_text("⏳ Initializing Datacenter Upload Sequence...")
     
-    # Detect File Properties
     media = message.document or message.video or message.audio
     if not media and message.photo: media = message.photo
         
-    file_size = getattr(media, 'file_size', 0)
-    
-    # Telegram Bot limits downloads to 20MB natively unless using local API
-    if file_size > 19.8 * 1024 * 1024:
-        await msg.edit_text(f"⚠️ **File Too Large!**\n\nTelegram Bots can only download up to 20MB. To upload heavier files (2GB+), please use the Web Dashboard.")
+    if not media:
+        await msg.edit_text("❌ Unknown media format.")
         return
 
     filename = getattr(media, 'file_name', f"telegram_upload_{uuid.uuid4().hex[:5]}")
@@ -3069,7 +3082,6 @@ async def media_handler(client, message):
     ext = os.path.splitext(filename)[1] if "." in filename else ".bin"
     temp_path = f"/tmp/{slug}{ext}"
     
-    # Fast MTProto Progress Bar
     last_update_time = time.time()
     
     async def dl_progress(current, total):
@@ -3084,17 +3096,17 @@ async def media_handler(client, message):
                 last_update_time = now
             except: pass
 
-    # 1. Download Fast via MTProto
-    await message.download(file_name=temp_path, progress=dl_progress)
-    await msg.edit_text("✅ File Cached Locally.\n\n🔄 Now Syncing to HF Datacenter... (Please Wait)")
-    
-    # 2. Sync to HF
-    repo_path = f"files/{slug}_{filename}"
-    file_size_disk = os.path.getsize(temp_path)
-    mime_type, _ = mimetypes.guess_type(temp_path)
-    if not mime_type: mime_type = "application/octet-stream"
-
     try:
+        # 1. Download Fast via MTProto
+        await message.download(file_name=temp_path, progress=dl_progress)
+        await msg.edit_text("✅ File Cached Locally.\n\n🔄 Now Syncing to HF Datacenter... (Please Wait)")
+        
+        # 2. Sync to HF
+        repo_path = f"files/{slug}_{filename}"
+        file_size_disk = os.path.getsize(temp_path)
+        mime_type, _ = mimetypes.guess_type(temp_path)
+        if not mime_type: mime_type = "application/octet-stream"
+
         await asyncio.to_thread(
             api.upload_file, path_or_fileobj=temp_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
         )
@@ -3117,9 +3129,9 @@ async def media_handler(client, message):
         save_db(db)
         
         url = f"https://{os.environ.get('SPACE_HOST', 'static.qlynk.me')}/f/{slug}"
-        
         batch_status = "(Batch Active)" if batch_users.get(message.from_user.id) else ""
         await msg.edit_text(f"🎉 **Upload Complete!** {batch_status}\n\n**File:** {title}\n**Size:** {format_size(file_size_disk)}\n\n**Secure Link:**\n{url}")
         
     except Exception as e:
-        await msg.edit_text(f"❌ Failed to sync with Hugging Face: {e}")
+        # Catch any Telegram Server restrictions dynamically here
+        await msg.edit_text(f"❌ Upload Failed (Telegram Server Limits or HF Issue): {e}")
