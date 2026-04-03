@@ -1955,7 +1955,8 @@ MEDIA_TUBE_HTML = """
         const isAdmin = document.cookie.includes('auth_token=');
 
         const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
-        const SVG_MUSIC = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="48" fill="%23111"/><circle cx="50" cy="50" r="40" fill="none" stroke="%23222" stroke-width="2"/><circle cx="50" cy="50" r="30" fill="none" stroke="%23222" stroke-width="2"/><circle cx="50" cy="50" r="18" fill="%23bc8cff"/><circle cx="50" cy="50" r="4" fill="%230f0f0f"/></svg>`;
+       // 💿 Animated Default Artwork (Pulsating & Rotating) - Fully URL Encoded for 100% Browser Support
+        const SVG_MUSIC = "data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22g%22%20x1%3D%220%25%22%20y1%3D%220%25%22%20x2%3D%22100%25%22%20y2%3D%22100%25%22%3E%3Cstop%20offset%3D%220%25%22%20stop-color%3D%22%23bc8cff%22%2F%3E%3Cstop%20offset%3D%22100%25%22%20stop-color%3D%22%2358a6ff%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20fill%3D%22%230f0f0f%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%2240%22%20fill%3D%22none%22%20stroke%3D%22%23222%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%2230%22%20fill%3D%22none%22%20stroke%3D%22%23333%22%20stroke-width%3D%222%22%20stroke-dasharray%3D%225%205%22%3E%3CanimateTransform%20attributeName%3D%22transform%22%20type%3D%22rotate%22%20from%3D%220%2050%2050%22%20to%3D%22360%2050%2050%22%20dur%3D%228s%22%20repeatCount%3D%22indefinite%22%2F%3E%3C%2Fcircle%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%2218%22%20fill%3D%22url(%23g)%22%3E%3Canimate%20attributeName%3D%22r%22%20values%3D%2216%3B20%3B16%22%20dur%3D%221.5s%22%20repeatCount%3D%22indefinite%22%2F%3E%3C%2Fcircle%3E%3Ccircle%20cx%3D%2250%22%20cy%3D%2250%22%20r%3D%225%22%20fill%3D%22%23000%22%2F%3E%3C%2Fsvg%3E";
         
         let masterLibrary = [];
         let currentAudioCtx = null;
@@ -2705,7 +2706,7 @@ MEDIA_TUBE_HTML = """
                     currentAudioCtx = audioCtx;
                     media.crossOrigin = "anonymous";
                     const analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 128; // 🌊 Waves thodi aur smooth aur badi dikhengi
+                    analyser.fftSize = 128; // Waves ko bada aur smooth karne ke liye
                     const source = audioCtx.createMediaElementSource(media);
                     source.connect(analyser); 
                     analyser.connect(audioCtx.destination);
@@ -2714,19 +2715,39 @@ MEDIA_TUBE_HTML = """
                     
                     function draw() {
                         currentAnimationId = requestAnimationFrame(draw);
-                        canvas.width = canvas.parentElement.clientWidth;
-                        // 🛠️ FIX: Height agar 0 ho jaye toh 250px ka default fallback le lega
-                        canvas.height = canvas.parentElement.clientHeight || 250; 
+                        
+                        // Height safety check (Taaki kabhi 0px na ho)
+                        canvas.width = canvas.parentElement.clientWidth || 800;
+                        canvas.height = canvas.parentElement.clientHeight || 400; 
                         
                         analyser.getByteFrequencyData(dataArray);
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
                         
+                        // 🛡️ THE HYBRID CORS-BYPASS LOGIC
+                        let sum = 0;
+                        for(let i=0; i<bufferLength; i++) sum += dataArray[i];
+                        
+                        // Agar browser ne CORS ki wajah se audio data block kar diya hai, toh simulate karo (Like YT)
+                        let isSimulated = false;
+                        if (sum === 0 && !media.paused) {
+                            isSimulated = true;
+                        }
+
                         const barWidth = (canvas.width / bufferLength) * 1.5;
                         const centerY = canvas.height / 2;
                         let x = (canvas.width - (barWidth + 2) * bufferLength) / 2;
                         
                         for(let i = 0; i < bufferLength; i++) {
-                            const barHeight = (dataArray[i] / 255) * (canvas.height / 2.2);
+                            let barHeight = 0;
+                            if (isSimulated) {
+                                // 🌊 Simulated smooth bounce (CORS Bypass)
+                                const randomVal = Math.random();
+                                barHeight = randomVal * (canvas.height / 2.5);
+                            } else {
+                                // 🎵 Real Audio Frequencies
+                                barHeight = (dataArray[i] / 255) * (canvas.height / 2.2);
+                            }
+
                             ctx.fillStyle = window.currentThemeColor || dominantColor || '#bc8cff';
                             ctx.fillRect(x, centerY - barHeight, barWidth, barHeight); 
                             ctx.fillRect(x, centerY, barWidth, barHeight); 
@@ -2734,7 +2755,7 @@ MEDIA_TUBE_HTML = """
                         }
                     }
                     draw();
-                } catch(e) { console.warn("Visualizer Error:", e); }
+                } catch(e) { console.warn("Visualizer Fallback Active:", e); }
             };
 
             media.addEventListener('play', startVisualizer);
