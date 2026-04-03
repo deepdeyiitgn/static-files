@@ -1670,6 +1670,10 @@ MEDIA_TUBE_HTML = """
         .vid-title { font-size: 16px; font-weight: 500; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         .vid-meta { font-size: 13px; color: var(--yt-muted); }
 
+        /* Skeleton Loading UI */
+        .skeleton-anim { background: linear-gradient(90deg, #222 25%, #333 50%, #222 75%); background-size: 200% 100%; animation: loadingShimmer 1.5s infinite linear; }
+        @keyframes loadingShimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
         .watch-layout { display: flex; gap: 24px; flex-wrap: wrap; }
         .primary-col { flex: 1; min-width: 65%; max-width: 1200px; }
         .secondary-col { width: 350px; flex-shrink: 0; display: flex; flex-direction: column; gap: 15px;}
@@ -1679,6 +1683,9 @@ MEDIA_TUBE_HTML = """
         .player-element { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 5; display: block;}
         .yt-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 4;}
         
+        /* Video Loading Spinner */
+        .loader-spinner { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 60px; height: 60px; border: 5px solid rgba(255,255,255,0.1); border-top-color: var(--yt-brand); border-radius: 50%; animation: spin 1s linear infinite; z-index: 10; pointer-events: none; display: none; }
+
         /* Audio Visuals */
         .audio-disc { width: 250px; height: 250px; border-radius: 50%; object-fit: cover; border: 4px solid var(--yt-brand); animation: spin 8s linear infinite; z-index: 6; box-shadow: 0 0 40px rgba(0,0,0,0.8); display: block; transition: border-color 0.3s;}
         .audio-visualizer { position: absolute; bottom: 0; left: 0; width: 100%; height: 100%; z-index: 4; pointer-events: none;}
@@ -1692,7 +1699,8 @@ MEDIA_TUBE_HTML = """
         .custom-controls { position: absolute; bottom: 0; left: 0; width: 100%; padding: 60px 20px 10px 20px; background: linear-gradient(transparent, rgba(0,0,0,0.95)); z-index: 50; display: flex; flex-direction: column; gap: 8px; opacity: 0; transition: opacity 0.3s;}
         .player-wrapper:hover .custom-controls, .custom-controls.active { opacity: 1; }
         
-        .seek-container { width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; cursor: pointer; position: relative; transition: height 0.1s;}
+        /* SEEK BAR MOBILE FIX */
+        .seek-container { width: 100%; height: 5px; background: rgba(255,255,255,0.2); border-radius: 3px; cursor: pointer; position: relative; transition: height 0.1s; touch-action: none;}
         .seek-container:hover { height: 8px; }
         .seek-progress { height: 100%; background: var(--yt-brand); border-radius: 3px; width: 0%; pointer-events: none; transition: background 0.3s;}
         
@@ -1712,6 +1720,11 @@ MEDIA_TUBE_HTML = """
         .settings-menu.show { display: flex; }
         .setting-item { display: flex; justify-content: space-between; padding: 10px; font-size: 13px; cursor: pointer; border-radius: 4px;}
         .setting-item:hover { background: rgba(255,255,255,0.1); }
+        
+        /* ACTIVE SUBTITLE TICK MARK */
+        .active-cc { color: var(--yt-brand); font-weight: bold; }
+        .active-cc::after { content: ' ✔'; }
+
         .speed-slider { -webkit-appearance: none; width: 100%; background: transparent; margin-top: 10px;}
         .speed-slider::-webkit-slider-thumb { -webkit-appearance: none; height: 14px; width: 14px; border-radius: 50%; background: var(--yt-brand); margin-top: -5px;}
         .speed-slider::-webkit-slider-runnable-track { width: 100%; height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px;}
@@ -1779,14 +1792,12 @@ MEDIA_TUBE_HTML = """
     </div>
 
     <div class="container">
-        <h2 id="loadingText" style="text-align:center; color: var(--yt-muted); margin-top:50px;">Verifying Secure Token...</h2>
-
-        <div id="homeView" class="video-grid hidden"></div>
+        <div id="homeView" class="video-grid"></div>
 
         <div id="watchView" class="watch-layout hidden">
             <div class="primary-col">
                 <div class="player-wrapper" id="playerWrapper" oncontextmenu="return false;">
-                </div>
+                    </div>
                 
                 <h1 class="watch-title" id="wTitle">Loading...</h1>
                 <canvas id="videoVisualizer" class="video-visualizer"></canvas>
@@ -1847,6 +1858,23 @@ MEDIA_TUBE_HTML = """
     </div>
 
     <script>
+        // --- SKELETON LOADING (ON BOOT) ---
+        function renderSkeleton() {
+            document.getElementById('watchView').classList.add('hidden');
+            const grid = document.getElementById('homeView');
+            grid.classList.remove('hidden');
+            grid.innerHTML = '';
+            for(let i=0; i<12; i++) {
+                grid.innerHTML += `
+                    <div class="vid-card">
+                        <div class="thumb-wrapper skeleton-anim"></div>
+                        <div class="vid-title skeleton-anim" style="height:16px; margin-bottom:8px; border-radius:4px; width:90%;"></div>
+                        <div class="vid-meta skeleton-anim" style="height:12px; width:60%; border-radius:4px;"></div>
+                    </div>`;
+            }
+        }
+        renderSkeleton(); // Show immediately while script starts up
+
         // --- AUTH & INITIALIZATION ---
         const urlParams = new URLSearchParams(window.location.search);
         const tokenFromUrl = urlParams.get('token');
@@ -1895,11 +1923,11 @@ MEDIA_TUBE_HTML = """
             return 'file';
         }
         
-        // Robust YT Regex - Extract YouTube ID from URLs and plain IDs
+        // Robust YT Regex
         function extractYtId(url) {
             const patterns = [
                 /^(?:https?:\/\/)?(?:m\.|www\.)?(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))((\w|-){11})(?:\S+)?$/,
-                /^((\w|-){11})$/ // Plain YouTube ID
+                /^((\w|-){11})$/
             ];
             for(let p of patterns) {
                 const match = url.trim().match(p);
@@ -1908,7 +1936,7 @@ MEDIA_TUBE_HTML = """
             return null;
         }
 
-        // Dominant Color Engine with CORS fallback
+        // Dominant Color Engine
         function applyDominantColor(imgSrc, fallback = '#bc8cff') {
             const img = new Image();
             img.crossOrigin = "Anonymous";
@@ -1941,7 +1969,6 @@ MEDIA_TUBE_HTML = """
                 styleEl.id = 'dynamic-cc-style';
                 document.head.appendChild(styleEl);
             }
-            // Only scales subtitles on desktop screens. Phone will use native/default scale.
             styleEl.innerHTML = `
                 @media(min-width: 768px) {
                     ::cue { font-size: ${ccSize}% !important; }
@@ -1953,7 +1980,7 @@ MEDIA_TUBE_HTML = """
         async function init() {
             try {
                 const res = await fetch('/api/media_library');
-                if(res.status === 401) return document.getElementById('loadingText').innerHTML = "🔒 <b>ACCESS DENIED</b>";
+                if(res.status === 401) return document.getElementById('homeView').innerHTML = "<h2 style='color:var(--yt-muted); text-align:center; width:100%;'>🔒 ACCESS DENIED</h2>";
                 
                 if(isAdmin) {
                     document.getElementById('shareBtn').style.display = 'block';
@@ -1964,16 +1991,14 @@ MEDIA_TUBE_HTML = """
                 }
                 
                 masterLibrary = await res.json();
-                document.getElementById('loadingText').classList.add('hidden');
                 routeHandler();
-            } catch(e) { document.getElementById('loadingText').innerText = "Connection Error."; }
+            } catch(e) { document.getElementById('homeView').innerHTML = "<h2 style='color:var(--yt-muted); text-align:center; width:100%;'>Connection Error.</h2>"; }
         }
 
         function routeHandler() {
             const path = window.location.pathname;
             const params = new URLSearchParams(window.location.search);
             
-            // Clean up player state
             if(currentAudioCtx) { currentAudioCtx.close(); currentAudioCtx = null; }
             if(currentAnimationId) cancelAnimationFrame(currentAnimationId);
             if(ytPollInterval) clearInterval(ytPollInterval);
@@ -2023,14 +2048,12 @@ MEDIA_TUBE_HTML = """
             });
         }
 
-        // --- MEDIA SESSION API (Bluetooth & Keyboard keys) ---
         function setupMediaSession(title, artist, artworkSrc) {
             if ('mediaSession' in navigator) {
                 navigator.mediaSession.metadata = new MediaMetadata({
                     title: title, artist: artist, album: 'Qlynk Universal',
                     artwork: [ { src: artworkSrc || FALLBACK_THUMB, sizes: '512x512', type: 'image/png' } ]
                 });
-
                 navigator.mediaSession.setActionHandler('play', () => { if(activePlayer) activePlayer.play(); });
                 navigator.mediaSession.setActionHandler('pause', () => { if(activePlayer) activePlayer.pause(); });
                 navigator.mediaSession.setActionHandler('seekbackward', (d) => { if(activePlayer) activePlayer.seek(Math.max(activePlayer.currentTime() - (d.seekOffset || 5), 0)); });
@@ -2051,6 +2074,7 @@ MEDIA_TUBE_HTML = """
 
         function getControlsHtml() {
             return `
+                <div id="loaderSpinner" class="loader-spinner"></div>
                 <div class="action-icon-overlay" id="actionIcon"></div>
                 <div class="fast-forward-overlay" id="ffOverlay">Fast Forwarding 2x ▶▶</div>
                 <div class="custom-controls" id="pControls">
@@ -2135,22 +2159,30 @@ MEDIA_TUBE_HTML = """
             
             setupMediaSession(file.title, 'Qlynk Vault', file.thumbnail);
             
+            // Generate CC List UI
             const ccList = document.getElementById('pCcList');
             if(ccList) {
-                ccList.innerHTML = `<div class="setting-item" onclick="setCC(-1)">Off</div>` + subs.map((s,i) => `<div class="setting-item" onclick="setCC(${i})">${s.language}</div>`).join('');
+                ccList.innerHTML = `<div class="setting-item cc-item" id="cc-item--1" onclick="setCC(-1)">Off</div>` + 
+                                   subs.map((s,i) => `<div class="setting-item cc-item" id="cc-item-${i}" onclick="setCC(${i})">${s.language}</div>`).join('');
             }
+
             if(subs.length > 0) {
                 document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
-                // Force load default size
                 updateCCSize(); 
-            }
-            else {
+                setTimeout(() => setCC(0), 200); // Force load first subtitle as default
+            } else {
                 document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
+                setTimeout(() => setCC(-1), 100);
             }
             
             const mediaEl = document.getElementById('mainMedia');
             if(mediaEl) {
-                // Map HTML5 Media to Universal Interface
+                // Video Loading Spinner Logic
+                const loader = document.getElementById('loaderSpinner');
+                mediaEl.addEventListener('waiting', () => { if(loader) loader.style.display = 'block'; });
+                mediaEl.addEventListener('playing', () => { if(loader) loader.style.display = 'none'; });
+                mediaEl.addEventListener('canplay', () => { if(loader) loader.style.display = 'none'; });
+
                 activePlayer = {
                     play: () => mediaEl.play(),
                     pause: () => mediaEl.pause(),
@@ -2194,7 +2226,6 @@ MEDIA_TUBE_HTML = """
             pw.innerHTML = `<div id="ytContainer" class="yt-container"><div id="ytPlayerDiv" style="width:100%; height:100%;"></div></div>` + getControlsHtml();
             document.getElementById('videoVisualizer').style.display = 'block';
 
-            // Init YT Player
             ytPlayer = new YT.Player('ytPlayerDiv', {
                 videoId: ytId,
                 width: '100%',
@@ -2212,7 +2243,6 @@ MEDIA_TUBE_HTML = """
             document.getElementById('wTitle').innerText = ytPlayer.getVideoData().title;
             setupMediaSession(ytPlayer.getVideoData().title, 'YouTube Stream', `https://img.youtube.com/vi/${ytIdActive}/maxresdefault.jpg`);
             
-            // Map YT to Universal Interface
             activePlayer = {
                 play: () => ytPlayer.playVideo(),
                 pause: () => ytPlayer.pauseVideo(),
@@ -2229,18 +2259,17 @@ MEDIA_TUBE_HTML = """
 
             initCustomControls();
             
-            // Sync Quality Levels
             const qList = ytPlayer.getAvailableQualityLevels();
             if(qList && qList.length > 0) {
                 document.getElementById('ytQualitySection').style.display = 'block';
                 document.getElementById('pYtQualityList').innerHTML = qList.map(q => `<button class="btn" style="padding:4px 8px; font-size:11px;" onclick="ytPlayer.setPlaybackQuality('${q}')">${q}</button>`).join('');
             }
 
-            // Sync YT Captions to menu
             const ccList = document.getElementById('pCcList');
             if(ccList) {
-                ccList.innerHTML = `<div class="setting-item" onclick="ytPlayer.unloadModule('captions')">Off</div>
-                                    <div class="setting-item" onclick="ytPlayer.loadModule('captions')">Auto Enable YT CC</div>`;
+                ccList.innerHTML = `<div class="setting-item cc-item" id="cc-item--1" onclick="ytPlayer.unloadModule('captions'); setCC(-1);">Off</div>
+                                    <div class="setting-item cc-item" id="cc-item-0" onclick="ytPlayer.loadModule('captions'); setCC(0);">Auto Enable YT CC</div>`;
+                setCC(0);
             }
 
             ytPollInterval = setInterval(updateProgressUI, 500);
@@ -2249,6 +2278,13 @@ MEDIA_TUBE_HTML = """
 
         function onYtStateChange(event) {
             const pPlay = document.getElementById('pPlay');
+            const loader = document.getElementById('loaderSpinner');
+            
+            if(loader) {
+                if (event.data == YT.PlayerState.BUFFERING) loader.style.display = 'block';
+                else loader.style.display = 'none';
+            }
+            
             if (event.data == YT.PlayerState.PLAYING) pPlay.innerText = '⏸';
             else if (event.data == YT.PlayerState.PAUSED) pPlay.innerText = '▶';
             else if (event.data == YT.PlayerState.ENDED) handleMediaEnded();
@@ -2305,10 +2341,28 @@ MEDIA_TUBE_HTML = """
             
             pPlay.onclick = () => activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
             
-            pSeek.onclick = (e) => {
+            // MOBILE DRAG FIX FOR SEEK BAR
+            let isSeeking = false;
+            const executeSeek = (e) => {
                 const rect = pSeek.getBoundingClientRect();
-                activePlayer.seek(((e.clientX - rect.left) / rect.width) * activePlayer.duration());
+                let perc = (e.clientX - rect.left) / rect.width;
+                perc = Math.max(0, Math.min(1, perc));
+                activePlayer.seek(perc * activePlayer.duration());
+                document.getElementById('pSeekProg').style.width = `${perc * 100}%`;
             };
+
+            pSeek.addEventListener('pointerdown', (e) => {
+                isSeeking = true;
+                pSeek.setPointerCapture(e.pointerId);
+                executeSeek(e);
+            });
+            pSeek.addEventListener('pointermove', (e) => {
+                if(isSeeking) executeSeek(e);
+            });
+            pSeek.addEventListener('pointerup', (e) => {
+                isSeeking = false;
+                pSeek.releasePointerCapture(e.pointerId);
+            });
 
             pVol.oninput = (e) => { 
                 activePlayer.setVolume(e.target.value); 
@@ -2323,7 +2377,6 @@ MEDIA_TUBE_HTML = """
             
             document.getElementById('pFull').onclick = () => { document.fullscreenElement ? document.exitFullscreen() : pw.requestFullscreen(); };
             
-            // FIX: CC Button triggers Setting Menu now
             document.getElementById('pCC').onclick = (e) => { 
                 e.stopPropagation(); 
                 document.getElementById('pSettings').classList.toggle('show'); 
@@ -2338,7 +2391,6 @@ MEDIA_TUBE_HTML = """
                 controlTimeout = setTimeout(() => pControls.classList.remove('active'), 3000);
             };
 
-            // Smart Center Click
             pw.onclick = (e) => {
                 if(e.target.closest('.custom-controls') || e.target.closest('.settings-menu')) return;
                 if(e.detail === 1) { 
@@ -2396,11 +2448,26 @@ MEDIA_TUBE_HTML = """
             if(nextItem) nextItem.click();
         }
 
+        // SUBTITLE TICK MARK LOGIC & FORCE SHOW
+        window.setCC = function(index) {
+            const media = document.getElementById('mainMedia');
+            if(media && media.textTracks) {
+                for(let i=0; i<media.textTracks.length; i++) {
+                    media.textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
+                }
+            }
+            // Add Checkmark to UI
+            document.querySelectorAll('.cc-item').forEach(el => el.classList.remove('active-cc'));
+            const activeEl = document.getElementById('cc-item-' + index);
+            if(activeEl) activeEl.classList.add('active-cc');
+            
+            document.getElementById('pSettings').classList.remove('show');
+        }
+
         // --- SPACEBAR PRO & KEYBOARD HUB ---
         document.addEventListener('keydown', (e) => {
             if(document.activeElement.tagName === 'INPUT' || !activePlayer) return;
 
-            // FIX: YouTube Style Subtitle Resizing (+/-)
             if (e.key === '+' || e.key === '=') {
                 e.preventDefault();
                 ccSize = Math.min(300, ccSize + 25);
@@ -2545,18 +2612,13 @@ MEDIA_TUBE_HTML = """
         }
 
         // Subtitle Modal Functions
-        
-        function openSubModal() { 
-            document.getElementById('subModal').style.display = 'flex'; 
-        }
-        
+        function openSubModal() { document.getElementById('subModal').style.display = 'flex'; }
         function closeSubModal() { 
             document.getElementById('subModal').style.display = 'none'; 
             pendingSubFile = null; 
             document.getElementById('selectedFileName').innerText = ''; 
             document.getElementById('subLang').value = '';
         }
-        
         function fileSelected(input) {
             if(input.files.length > 0) {
                 pendingSubFile = input.files[0];
@@ -2569,47 +2631,26 @@ MEDIA_TUBE_HTML = """
                 alert("Please select a file and ensure media is loaded.");
                 return;
             }
-            
             const language = document.getElementById('subLang').value.trim() || 'English';
             const formData = new FormData();
             formData.append('file', pendingSubFile);
             formData.append('media_slug', activeSlug);
             formData.append('language', language);
-            
             try {
-                const res = await fetch('/api/subtitle/upload', {
-                    method: 'POST',
-                    body: formData
-                });
-                
+                const res = await fetch('/api/subtitle/upload', { method: 'POST', body: formData });
                 if(res.ok) {
                     alert(`Subtitle (${language}) uploaded successfully!`);
                     closeSubModal();
                     renderWatchPage(activeSlug);
-                } else {
-                    alert('Failed to upload subtitle.');
-                }
-            } catch(e) {
-                console.error('Subtitle upload error:', e);
-                alert('Error uploading subtitle.');
-            }
-        }
-        
-        window.setCC = function(index) {
-            const media = document.getElementById('mainMedia');
-            if(!media) return;
-            for(let i=0; i<media.textTracks.length; i++) {
-                media.textTracks[i].mode = (i === index) ? 'showing' : 'hidden';
-            }
-            document.getElementById('pSettings').classList.remove('show');
+                } else alert('Failed to upload subtitle.');
+            } catch(e) { console.error('Subtitle upload error:', e); alert('Error uploading subtitle.'); }
         }
 
-        // Hybrid Recommendations Engine with Local + YouTube suggestions
+        // Hybrid Recommendations Engine
         function renderHybridRelated(queryText) {
             const container = document.getElementById('relatedVideos');
             container.innerHTML = '';
             
-            // 1. Local Database Matches - Smart scoring
             const currentWords = queryText.toLowerCase().split(/[\s_\-\.]+/).filter(w => w.length > 2);
             let scoredList = masterLibrary.map(f => {
                 if(f.slug === activeSlug || f.slug === (ytIdActive ? null : activeSlug)) return {file: f, score: -1};
@@ -2641,7 +2682,6 @@ MEDIA_TUBE_HTML = """
                 container.appendChild(card);
             });
 
-            // 2. YouTube Public Suggest API (JSONP - No Auth Required)
             if(queryText.length > 3 && !ytIdActive) {
                 const script = document.createElement('script');
                 window.ytSuggestCallback = function(data) {
@@ -2649,21 +2689,11 @@ MEDIA_TUBE_HTML = """
                         data[1].slice(0, 4).forEach(suggestion => {
                             const sc = document.createElement('a');
                             sc.className = 'related-card'; 
-                            sc.href = "#";
-                            sc.style.cursor = 'pointer';
-                            sc.onclick = (e) => { 
-                                e.preventDefault(); 
-                                document.getElementById('searchInput').value = suggestion[0]; 
-                                handleSearch(); 
-                            };
+                            sc.href = "#"; sc.style.cursor = 'pointer';
+                            sc.onclick = (e) => { e.preventDefault(); document.getElementById('searchInput').value = suggestion[0]; handleSearch(); };
                             sc.innerHTML = `
-                                <div class="thumb-wrapper" style="background:linear-gradient(135deg, #1a1a1a, #333); display:flex; align-items:center; justify-content:center; font-size:24px; border: 1px solid #ff0000;">
-                                    🔍
-                                </div>
-                                <div class="related-info">
-                                    <div class="related-title" style="text-transform:capitalize;">${suggestion[0]}</div>
-                                    <div class="yt-pill">YouTube</div>
-                                </div>
+                                <div class="thumb-wrapper" style="background:linear-gradient(135deg, #1a1a1a, #333); display:flex; align-items:center; justify-content:center; font-size:24px; border: 1px solid #ff0000;">🔍</div>
+                                <div class="related-info"><div class="related-title" style="text-transform:capitalize;">${suggestion[0]}</div><div class="yt-pill">YouTube</div></div>
                             `;
                             container.appendChild(sc);
                         });
@@ -2675,35 +2705,20 @@ MEDIA_TUBE_HTML = """
             }
         }
 
-        // Theater Mode Toggle
         function toggleTheater() { 
-            const watchView = document.getElementById('watchView');
-            watchView.classList.toggle('theater-mode'); 
+            document.getElementById('watchView').classList.toggle('theater-mode'); 
             window.scrollTo({top: 0, behavior: 'smooth'}); 
         }
         
-        // Picture-in-Picture Toggle
         async function togglePiP() {
             const video = document.getElementById('mainMedia');
-            if(!video || video.tagName !== 'VIDEO') {
-                showActionIcon('🔲 PiP not available');
-                return;
-            }
+            if(!video || video.tagName !== 'VIDEO') return showActionIcon('🔲 PiP not available');
             try {
-                if (document.pictureInPictureElement) {
-                    await document.exitPictureInPicture();
-                    showActionIcon('🔲 PiP Disabled');
-                } else {
-                    await video.requestPictureInPicture();
-                    showActionIcon('🔲 PiP Enabled');
-                }
-            } catch(e) {
-                console.error('PiP error:', e);
-                showActionIcon('🔲 PiP Error');
-            }
+                if (document.pictureInPictureElement) { await document.exitPictureInPicture(); showActionIcon('🔲 PiP Disabled'); } 
+                else { await video.requestPictureInPicture(); showActionIcon('🔲 PiP Enabled'); }
+            } catch(e) { console.error('PiP error:', e); showActionIcon('🔲 PiP Error'); }
         }
 
-        // Generate Share Link for Guests
         async function generateShareLink() {
             try {
                 const res = await fetch('/api/share/generate', {method: 'POST'});
@@ -2712,19 +2727,11 @@ MEDIA_TUBE_HTML = """
                     const shareUrl = window.location.origin + window.location.pathname + `?token=${data.share_token}`;
                     navigator.clipboard.writeText(shareUrl);
                     showActionIcon('🔗 Share link copied!');
-                } else {
-                    alert('Failed to generate share link.');
-                }
-            } catch(e) {
-                console.error('Share generation error:', e);
-                alert('Error generating share link.');
-            }
+                } else alert('Failed to generate share link.');
+            } catch(e) { console.error('Share error:', e); alert('Error generating share link.'); }
         }
 
-        // Initialize app on page load
         init();
-        
-        // Handle back/forward buttons
         window.onpopstate = routeHandler;
     </script>
 </body>
