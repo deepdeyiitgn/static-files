@@ -3384,9 +3384,13 @@ async def send_search_page(client, message, query, page=0, is_callback=False):
         await message.reply_text(msg_text, reply_markup=reply_markup)
         
 # --- TEXT HANDLER: Auth & Strict Vault Auto-Search ---
-@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch", "connect"]))
+@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch", "connect", "index"]))
 async def text_handler(client, message):
     if not check_target_chat(message): return
+    
+    # 🛡️ FIX: Agar message channel ki taraf se aaya hai (No user ID), toh ignore karo (Crash Bypass)
+    if not message.from_user: return 
+    
     text = message.text
     user_id = message.from_user.id
     
@@ -3406,7 +3410,7 @@ async def text_handler(client, message):
             await message.reply_text("❌ Incorrect Password. Intrusion attempt logged.")
         return
 
-    # 2. Trigger Smart Paginated Search
+    # 2. Trigger Smart Paginated Search (Jo Beast.Games aur Beast Games dono ko match karega)
     await send_search_page(client, message, query=text, page=0, is_callback=False)
 
 # --- CALLBACK QUERIES: Buttons ---
@@ -3481,16 +3485,16 @@ async def button_handler(client, query: CallbackQuery):
                                 thumb_path = hf_hub_download(repo_id=DATASET_REPO, filename=t_record["path"], repo_type="dataset", token=HF_TOKEN)
                                 watermarked_thumb = f"/tmp/wm_{t_slug}.jpg"
                                 
-                                # FFmpeg command to print Watermark at Bottom-Center of image
+                                # FFmpeg command to print Watermark (Requires fonts-freefont-ttf in Docker)
                                 cmd = [
                                     "ffmpeg", "-y", "-i", thumb_path, 
-                                    "-vf", "drawtext=text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
+                                    "-vf", "drawtext=fontfile=/usr/share/fonts/truetype/freefont/FreeSansBold.ttf:text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
                                     watermarked_thumb
                                 ]
                                 process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                                 await process.communicate()
                                 
-                                if not os.path.exists(watermarked_thumb):
+                                if not os.path.exists(watermarked_thumb) or os.path.getsize(watermarked_thumb) == 0:
                                     watermarked_thumb = thumb_path # Fallback if ffmpeg fails
                             except Exception as e:
                                 logger.warning(f"Thumbnail Watermark failed: {e}")
@@ -3500,10 +3504,10 @@ async def button_handler(client, query: CallbackQuery):
                     await client.send_video(
                         chat_id=query.message.chat.id, 
                         video=file_path, 
-                        thumb=watermarked_thumb if watermarked_thumb and os.path.exists(watermarked_thumb) else None,
+                        thumb=watermarked_thumb if watermarked_thumb else thumb_path,
                         caption=caption,
                         file_name=file_record["filename"],
-                        supports_streaming=True # 👈 YEH line video player open karegi TG me!
+                        supports_streaming=True # 👈 YEH line Telegram Player on karti hai
                     )
                     
                     # 6. Cleanup Temp Watermarked Thumb
@@ -3519,12 +3523,11 @@ async def button_handler(client, query: CallbackQuery):
                         caption=caption
                     )
                 
-                # Success hone par "Downloading..." wala message delete kar do
                 await query.message.delete()
                 
             except Exception as e:
                 url = f"{STATIC_DOMAIN}/f/{slug}"
-                await query.message.edit_text(f"⚠️ **Telegram Server Size Limit!**\n\nThe bot couldn't upload this heavy file directly.\n\n🔗 Please use your secure Vault link instead:\n{url}")
+                await query.message.edit_text(f"⚠️ **Telegram Server Size Limit!**\n\n🔗 Please use your secure Vault link:\n{url}")
 
     elif data.startswith("chan_"):
         msg_id = int(data.split("_", 1)[1])
@@ -3537,16 +3540,29 @@ async def button_handler(client, query: CallbackQuery):
             
         await query.message.edit_text("📤 Extracting directly from Channel...")
         try:
-            # copy_message forwards the message but DROPS the author/forwarded tag automatically!
+            # 1. Pehle Original message ki details nikal lo
+            orig_msg = await client.get_messages(connected_chat, msg_id)
+            media = getattr(orig_msg, 'video', None) or getattr(orig_msg, 'document', None) or getattr(orig_msg, 'audio', None)
+            
+            title = getattr(orig_msg, 'caption', None)
+            if not title and media:
+                title = getattr(media, 'file_name', "Channel Media")
+            
+            title = str(title).split('\n')[0].strip() if title else "Media Asset"
+            
+            # 2. Naya Watermarked Caption banao
+            new_caption = f"🎬 **{title}**\n\n✨ By: Static.qlynk.me"
+
+            # 3. Message copy karo (bina forward tag ke) aur Naya caption lagao!
             await client.copy_message(
                 chat_id=query.message.chat.id,
                 from_chat_id=connected_chat,
-                message_id=msg_id
+                message_id=msg_id,
+                caption=new_caption # 👈 Caption Watermark lag gaya!
             )
-            # Purana "Extracting" wala message delete kar do taaki clean lage
             await query.message.delete()
         except Exception as e:
-            await query.message.edit_text(f"❌ Failed to fetch from channel. Ensure bot is still admin.\nError: {e}")
+            await query.message.edit_text(f"❌ Failed to fetch from channel.\nError: {e}")
 
     elif data.startswith("pg_"):
         parts = data.split("_", 2)
