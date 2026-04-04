@@ -3101,6 +3101,16 @@ def save_tg_auth_db(db):
     with open("tg_users.json", "w") as f: json.dump(db, f, indent=4)
     api.upload_file(path_or_fileobj="tg_users.json", path_in_repo="tg_users.json", repo_id=DATASET_REPO, repo_type="dataset")
 
+def get_channel_db():
+    try:
+        path = hf_hub_download(repo_id=DATASET_REPO, filename="channel_db.json", repo_type="dataset", token=HF_TOKEN)
+        with open(path, "r") as f: return json.load(f)
+    except Exception: return {"messages": []}
+
+def save_channel_db(db):
+    with open("channel_db.json", "w") as f: json.dump(db, f, indent=4)
+    api.upload_file(path_or_fileobj="channel_db.json", path_in_repo="channel_db.json", repo_id=DATASET_REPO, repo_type="dataset")    
+
 def is_auth(user_id: int):
     db = get_tg_auth_db()
     return user_id in db.get("authorized_users", [])
@@ -3208,40 +3218,94 @@ async def connect_cmd(client, message):
     except Exception as e:
         await message.reply_text(f"❌ Could not connect. Make sure the bot is added to the channel/group first.\nError: `{e}`")
 
-# --- HELPER: Auto-Search Pagination Builder ---
-async def send_search_page(client, message, query, page=0, is_callback=False):
-    db = get_db()
-    files = db.get("files", [])
-    
-    searchable_files = [f for f in files if not f.get("is_external") and f.get("mime_type", "").startswith(("video/", "audio/"))]
-    titles = [f.get("title", f.get("filename", "")) for f in searchable_files]
-    
-    # 1. Fetch from Vault (Up to 30 matches)
-    matches = difflib.get_close_matches(query, titles, n=30, cutoff=0.3)
-    all_results = []
-    
-    for match in matches:
-        file_record = next(f for f in searchable_files if f.get("title", f.get("filename", "")) == match)
-        slug = file_record["slug"]
-        all_results.append(("vault", slug, f"📁 [Vault] {match}"))
+# --- COMMAND: /index ---
+@tg_app.on_message(filters.command("index"))
+async def index_cmd(client, message):
+    if not check_target_chat(message): return
+    if not is_auth(message.from_user.id):
+        await message.reply_text("🚫 Please /verify first.")
+        return
 
-    # 2. Fetch from Connected Channel (Up to 30 matches)
+    tg_db = get_tg_auth_db()
+    connected_chat = tg_db.get("connected_chat")
+
+    if not connected_chat:
+        await message.reply_text("❌ No channel connected. Use `/connect [id]` first.")
+        return
+
+    status_msg = await message.reply_text("🔄 **Starting Channel Indexing...**\nFetching all messages (this might take a minute or two for large channels)...")
+
+    db = {"messages": []}
+    count = 0
+
+    try:
+        # get_chat_history fetches everything from newest to oldest
+        async for msg in client.get_chat_history(chat_id=connected_chat):
+            media = msg.video or msg.document or msg.audio
+            if media:
+                # Priority: Caption > File Name > Fallback
+                title = msg.caption if msg.caption else getattr(media, 'file_name', f"Media_{msg.id}")
+                if title:
+                    # Sirf first line lo aur clean karo
+                    title = str(title).split('\n')[0].strip()
+                    db["messages"].append({
+                        "id": msg.id,
+                        "title": title
+                    })
+                    count += 1
+                    
+                    if count % 500 == 0:
+                        await status_msg.edit_text(f"🔄 **Indexing in progress...**\nScanned {count} media files so far...")
+
+        save_channel_db(db)
+        await status_msg.edit_text(f"✅ **Indexing Complete!**\n\nSuccessfully mapped and saved **{count}** media files to the Datacenter JSON Database.\nSmart Search is now fully powered up!")
+
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Indexing Failed.\nError: `{e}`")        
+
+# --- HELPER: Auto-Search Pagination Builder (SMART ENGINE) ---
+async def send_search_page(client, message, query, page=0, is_callback=False):
+    # 🌟 TEXT NORMALIZER: Replace dots, hyphens, underscores with spaces & lowercase
+    def clean_text(t):
+        return re.sub(r'[\.\_\-]', ' ', str(t)).lower().strip()
+
+    clean_query = clean_text(query)
+    all_results = []
+
+    # 1. Fetch from HF Vault
+    db = get_db()
+    files = [f for f in db.get("files", []) if not f.get("is_external") and f.get("mime_type", "").startswith(("video/", "audio/"))]
+    
+    vault_map = {}
+    for f in files:
+        orig_title = f.get("title", f.get("filename", ""))
+        vault_map[clean_text(orig_title)] = (f["slug"], orig_title)
+        
+    vault_matches = difflib.get_close_matches(clean_query, list(vault_map.keys()), n=30, cutoff=0.3)
+    for match in vault_matches:
+        slug, orig_title = vault_map[match]
+        all_results.append(("vault", slug, f"📁 [Vault] {orig_title}"))
+
+    # 2. Fetch from Connected Channel Index (JSON Database)
     tg_db = get_tg_auth_db()
     connected_chat = tg_db.get("connected_chat")
     
     if connected_chat:
-        try:
-            async for msg in client.search_messages(chat_id=connected_chat, query=query, limit=30):
-                if msg.video or msg.document or msg.audio:
-                    media = msg.video or msg.document or msg.audio
-                    file_name = getattr(media, 'file_name', 'Telegram Media')
-                    all_results.append(("chan", msg.id, f"📡 [Channel] {file_name}"))
-        except Exception as e:
-            logger.warning(f"Channel search failed: {e}")
+        chan_db = get_channel_db()
+        chan_messages = chan_db.get("messages", [])
+        
+        chan_map = {}
+        for m in chan_messages:
+            orig_title = m["title"]
+            chan_map[clean_text(orig_title)] = (m["id"], orig_title)
+            
+        chan_matches = difflib.get_close_matches(clean_query, list(chan_map.keys()), n=30, cutoff=0.3)
+        for match in chan_matches:
+            msg_id, orig_title = chan_map[match]
+            all_results.append(("chan", msg_id, f"📡 [Channel] {orig_title}"))
 
-    # Agar kuch nahi mila
     if not all_results:
-        text_msg = "🔍 No media assets found in the Vault or Connected Channel for that name."
+        text_msg = "🔍 No media assets found in the Vault or Channel Index for that name."
         if is_callback: await message.edit_text(text_msg)
         else: await message.reply_text(text_msg)
         return
@@ -3259,16 +3323,14 @@ async def send_search_page(client, message, query, page=0, is_callback=False):
     page_results = all_results[start_idx:end_idx]
     
     keyboard = []
-    # Add Item Buttons
     for item_type, item_id, item_title in page_results:
         if item_type == "vault":
             keyboard.append([InlineKeyboardButton(item_title, callback_data=f"opt_{item_id}")])
         else:
             keyboard.append([InlineKeyboardButton(item_title, callback_data=f"chan_{item_id}")])
             
-    # Add Navigation Buttons (Next / Prev)
     nav_row = []
-    safe_query = query[:30] # Limit size for Telegram button data
+    safe_query = query[:30] 
     
     if page > 0:
         nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"pg_{page-1}_{safe_query}"))
@@ -3558,11 +3620,3 @@ async def media_handler(client, message):
             # Ensure cleanup if crashed
             if os.path.exists(temp_path): os.remove(temp_path)
             if final_path != temp_path and os.path.exists(final_path): os.remove(final_path)
-TwinMind
-TwinMind
-
-Ask TwinMind
-Page icon
-Summarize
-Disable for this site
-Disable for all sites
