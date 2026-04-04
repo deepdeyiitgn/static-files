@@ -3195,11 +3195,15 @@ async def connect_cmd(client, message):
         await message.reply_text("⚠️ Syntax: `/connect [channel_or_group_id]`\nExample: `/connect -100123456789`")
         return
 
-    target_chat = message.command[1]
-
+    # 1. Pehle strictly ID ko number me convert karo
     try:
-        target_chat = int(target_chat)
-        # Check bot permissions in that chat
+        target_chat = int(message.command[1].strip())
+    except ValueError:
+        await message.reply_text("❌ Invalid ID format. Must be a number (usually starting with -100).")
+        return
+
+    # 2. Ab Telegram server se check karo
+    try:
         member = await client.get_chat_member(target_chat, client.me.id)
         if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
             await message.reply_text("❌ Bot is in the chat but does NOT have Admin permissions. Please make it an admin first.")
@@ -3211,12 +3215,11 @@ async def connect_cmd(client, message):
         save_tg_auth_db(db)
 
         chat_info = await client.get_chat(target_chat)
-        await message.reply_text(f"✅ **Successfully Connected!**\n\nBot is now linked to: **{chat_info.title}**\nAuto-search will now fetch media from both Vault and this chat.")
+        await message.reply_text(f"✅ **Successfully Connected!**\n\nBot is now linked to: **{chat_info.title}**")
 
-    except ValueError:
-        await message.reply_text("❌ Invalid ID format. Must be a number (usually starting with -100).")
     except Exception as e:
-        await message.reply_text(f"❌ Could not connect. Make sure the bot is added to the channel/group first.\nError: `{e}`")
+        # Agar bot ne channel nahi dekha hai to Pyrogram PeerIdInvalid error deta hai.
+        await message.reply_text(f"❌ **Could not connect.**\n\nMake sure the bot is added to the channel as **Admin**.\n\n*(💡 Pro Tip: If you just added the bot, Forward any one message from that channel to me here so my database can memorize its ID, then try /connect again!)*\n\nError Details: `{e}`")
 
 # --- COMMAND: /index ---
 @tg_app.on_message(filters.command("index"))
@@ -3425,14 +3428,74 @@ async def button_handler(client, query: CallbackQuery):
         file_record = next((f for f in db.get("files", []) if f["slug"] == slug), None)
         
         if file_record:
-            await query.message.edit_text("📤 Downloading from HF Vault and sending to Telegram chat...")
+            await query.message.edit_text("📤 Downloading from HF Vault and processing Media...")
             try:
+                # 1. Download Main File
                 file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
-                await client.send_document(chat_id=query.message.chat.id, document=file_path, file_name=file_record["filename"], caption=f"Vault Asset: {file_record.get('title')}")
-                await query.message.edit_text("✅ File sent successfully.")
+                
+                # 2. Setup Default Caption with Watermark
+                caption = f"🎬 **{file_record.get('title')}**\n\n✨ By: Static.qlynk.me"
+                
+                # 3. Check if it's a Video for native Telegram Streaming
+                if str(file_record.get("mime_type", "")).startswith("video/"):
+                    watermarked_thumb = None
+                    thumb_path = None
+                    
+                    # 4. Process Thumbnail & Add Watermark via FFmpeg
+                    thumb_slug_full = file_record.get("thumbnail", "")
+                    if thumb_slug_full and thumb_slug_full.startswith("/f/"):
+                        t_slug = thumb_slug_full.replace("/f/", "")
+                        t_record = next((f for f in db.get("files", []) if f["slug"] == t_slug), None)
+                        
+                        if t_record:
+                            try:
+                                thumb_path = hf_hub_download(repo_id=DATASET_REPO, filename=t_record["path"], repo_type="dataset", token=HF_TOKEN)
+                                watermarked_thumb = f"/tmp/wm_{t_slug}.jpg"
+                                
+                                # FFmpeg command to print Watermark at Bottom-Center of image
+                                cmd = [
+                                    "ffmpeg", "-y", "-i", thumb_path, 
+                                    "-vf", "drawtext=text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
+                                    watermarked_thumb
+                                ]
+                                process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                await process.communicate()
+                                
+                                if not os.path.exists(watermarked_thumb):
+                                    watermarked_thumb = thumb_path # Fallback if ffmpeg fails
+                            except Exception as e:
+                                logger.warning(f"Thumbnail Watermark failed: {e}")
+                                watermarked_thumb = thumb_path
+
+                    # 5. Send as Native Streamable Video
+                    await client.send_video(
+                        chat_id=query.message.chat.id, 
+                        video=file_path, 
+                        thumb=watermarked_thumb if watermarked_thumb and os.path.exists(watermarked_thumb) else None,
+                        caption=caption,
+                        file_name=file_record["filename"],
+                        supports_streaming=True # 👈 YEH line video player open karegi TG me!
+                    )
+                    
+                    # 6. Cleanup Temp Watermarked Thumb
+                    if watermarked_thumb and watermarked_thumb != thumb_path and os.path.exists(watermarked_thumb):
+                        os.remove(watermarked_thumb)
+                        
+                else:
+                    # 7. Fallback for PDF, Zip, Audio etc. (Send as Document)
+                    await client.send_document(
+                        chat_id=query.message.chat.id, 
+                        document=file_path, 
+                        file_name=file_record["filename"], 
+                        caption=caption
+                    )
+                
+                # Success hone par "Downloading..." wala message delete kar do
+                await query.message.delete()
+                
             except Exception as e:
                 url = f"{STATIC_DOMAIN}/f/{slug}"
-                await query.message.edit_text(f"⚠️ **File Size Limit Hit by Telegram Servers!**\n\nThe bot couldn't stream this heavy file directly.\n\n🔗 Please use this direct link instead:\n{url}")
+                await query.message.edit_text(f"⚠️ **Telegram Server Size Limit!**\n\nThe bot couldn't upload this heavy file directly.\n\n🔗 Please use your secure Vault link instead:\n{url}")
 
     elif data.startswith("chan_"):
         msg_id = int(data.split("_", 1)[1])
