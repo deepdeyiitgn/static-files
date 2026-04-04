@@ -3453,14 +3453,32 @@ async def button_handler(client, query: CallbackQuery):
         
         msg_text = f"🎬 **{title}**\n\n📦 Size: {size}\n⚙️ Engine: Local Vault Asset\n\nHow do you want to receive this?"
         
+        # 🛠️ THE FIX: Pehle photo bhejne ki koshish karo
         if thumb_url and thumb_url.startswith("http"):
             try:
+                await client.send_photo(
+                    chat_id=query.message.chat.id, 
+                    photo=thumb_url, 
+                    caption=msg_text, 
+                    reply_markup=InlineKeyboardMarkup(keyboard), 
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+                # Agar photo successfully chali gayi, tabhi purana message delete karo
                 await query.message.delete()
-                await client.send_photo(chat_id=query.message.chat.id, photo=thumb_url, caption=msg_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=enums.ParseMode.MARKDOWN)
                 return
-            except: pass
+            except Exception as e:
+                logger.warning(f"Photo send failed, falling back to text: {e}")
+                # Agar photo fail hui, toh error suppress karke aage badho (text edit karega)
             
-        await query.message.edit_text(text=msg_text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=enums.ParseMode.MARKDOWN)
+        try:
+            # Agar photo nahi hai ya bhejne mein error aaya, toh purane message ko hi edit kar do
+            await query.message.edit_text(
+                text=msg_text, 
+                reply_markup=InlineKeyboardMarkup(keyboard), 
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+        except Exception:
+            pass # Ignore MESSAGE_NOT_MODIFIED
         
     elif data.startswith("link_"):
         slug = data.split("_", 1)[1]
@@ -3497,7 +3515,16 @@ async def button_handler(client, query: CallbackQuery):
                                 thumb_path = hf_hub_download(repo_id=DATASET_REPO, filename=t_record["path"], repo_type="dataset", token=HF_TOKEN)
                                 watermarked_thumb = f"/tmp/wm_{t_slug}.jpg"
                                 
-                                # FFmpeg command to print Watermark (Requires fonts-freefont-ttf in Docker)
+                                # PURANA CODE (Keval lines preserve karne ke liye comments me dala hai)
+                                # cmd = [
+                                #     "ffmpeg", "-y", "-i", thumb_path, 
+                                #     "-vf", "drawtext=fontfile=/usr/share/fonts/truetype/freefont/FreeSansBold.ttf:text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
+                                #     watermarked_thumb
+                                # ]
+                                # process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                # await process.communicate()
+                                
+                                # NAYA ROBUST FFMPEG COMMAND & FALLBACK
                                 cmd = [
                                     "ffmpeg", "-y", "-i", thumb_path, 
                                     "-vf", "drawtext=fontfile=/usr/share/fonts/truetype/freefont/FreeSansBold.ttf:text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
@@ -3506,20 +3533,25 @@ async def button_handler(client, query: CallbackQuery):
                                 process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                                 await process.communicate()
                                 
-                                if not os.path.exists(watermarked_thumb) or os.path.getsize(watermarked_thumb) == 0:
-                                    watermarked_thumb = thumb_path # Fallback if ffmpeg fails
+                                # 🛡️ FIX: Agar watermark lagne ke baad file choti (0 bytes) ho ya bani hi na ho
+                                if not os.path.exists(watermarked_thumb) or os.path.getsize(watermarked_thumb) < 1024:
+                                    logger.warning("FFmpeg generated black/corrupt thumb. Reverting to Original.")
+                                    watermarked_thumb = thumb_path # Fallback to original thumb
                             except Exception as e:
                                 logger.warning(f"Thumbnail Watermark failed: {e}")
-                                watermarked_thumb = thumb_path
+                                watermarked_thumb = thumb_path # Hard fallback
 
                     # 5. Send as Native Streamable Video
+                    # 🛡️ FIX: 'thumb' argument ko force karte hain original ya watermarked photo se
+                    final_thumb_to_send = watermarked_thumb if (watermarked_thumb and os.path.exists(watermarked_thumb)) else thumb_path
+                    
                     await client.send_video(
                         chat_id=query.message.chat.id, 
                         video=file_path, 
-                        thumb=watermarked_thumb if watermarked_thumb else thumb_path,
+                        thumb=final_thumb_to_send, # Yahan black screen avoid ho jayega
                         caption=caption,
                         file_name=file_record["filename"],
-                        supports_streaming=True # 👈 YEH line Telegram Player on karti hai
+                        supports_streaming=True
                     )
                     
                     # 6. Cleanup Temp Watermarked Thumb
