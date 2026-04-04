@@ -799,6 +799,33 @@
             font-family: var(--font-code);
         }
 
+      /* ------------------------------------------- */
+        /* ANIMATED FOOTER, SOCIAL LINKS & SPLASH FX   */
+        /* ------------------------------------------- */
+        .social-links { display: flex; justify-content: center; gap: 15px; margin: 1.5rem 0; flex-wrap: wrap; }
+        .social-icon { display: inline-flex; align-items: center; justify-content: center; width: 45px; height: 45px; border-radius: 50%; background: rgba(255, 255, 255, 0.05); color: var(--text-muted); font-size: 1.2rem; text-decoration: none; transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275); border: 1px solid var(--border); position: relative; overflow: hidden; /* Overflow hidden is important for splash */ }
+        .social-icon:hover { transform: translateY(-6px) scale(1.15); color: #fff; }
+        
+        /* Custom Brand Colors on Hover */
+        .social-icon.github:hover { background: #333; border-color: #fff; box-shadow: 0 8px 20px rgba(255, 255, 255, 0.2); }
+        .social-icon.insta:hover { background: linear-gradient(45deg, #f09433 0%, #e6683c 25%, #dc2743 50%, #cc2366 75%, #bc1888 100%); border-color: #e6683c; box-shadow: 0 8px 20px rgba(220, 39, 67, 0.3); }
+        .social-icon.portfolio:hover { background: var(--accent); border-color: var(--accent); box-shadow: 0 8px 20px var(--accent-glow); }
+        .social-icon.mail:hover { background: var(--success); border-color: var(--success); box-shadow: 0 8px 20px rgba(23, 201, 100, 0.3); }
+        .social-icon.discord:hover { background: #5865F2; border-color: #5865F2; box-shadow: 0 8px 20px rgba(88, 101, 242, 0.4); }
+        .social-icon.youtube:hover { background: #FF0000; border-color: #FF0000; box-shadow: 0 8px 20px rgba(255, 0, 0, 0.4); }
+        .social-icon.wiki:hover { background: #0070f3; border-color: #0070f3; box-shadow: 0 8px 20px rgba(0, 112, 243, 0.4); }
+        .social-icon.clock:hover { background: #00bcd4; border-color: #00bcd4; box-shadow: 0 8px 20px rgba(0, 188, 212, 0.4); }
+
+        .repo-badge { display: inline-flex; align-items: center; gap: 10px; background: rgba(23, 201, 100, 0.1); border: 1px solid var(--success); color: var(--success); padding: 0.8rem 1.5rem; border-radius: 50px; font-weight: 700; font-size: 0.95rem; text-decoration: none; transition: all 0.3s ease; margin: 1.5rem auto 1rem; letter-spacing: 0.5px; position: relative; overflow: hidden; }
+        .repo-badge:hover { background: var(--success); color: #000; box-shadow: 0 0 25px rgba(23, 201, 100, 0.5); transform: translateY(-3px); }
+
+        /* 🔥 SPLASH / RIPPLE ANIMATION CSS */
+        .splash-btn { position: relative; overflow: hidden; }
+        .splash-ripple { position: absolute; border-radius: 50%; transform: scale(0); animation: ripple-anim 0.4s ease-out; background-color: rgba(255, 255, 255, 0.6); pointer-events: none; z-index: 10; }
+        @keyframes ripple-anim {
+            to { transform: scale(4); opacity: 0; }
+        }
+      
         /* ------------------------------------------- */
         /* MODALS & TOASTS                             */
         /* ------------------------------------------- */
@@ -1094,28 +1121,120 @@ response = requests.post(
                 </div>
                 
                 <footer style="text-align: center; margin-top: 5rem; padding-top: 2rem; border-top: 1px solid var(--border-light);">
-                    <div style="font-size: 2rem; margin-bottom: 1rem; color: var(--border-hover);">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem; color: var(--border-hover);">
                         <i class="fa-brands fa-python"></i>
                         <i class="fa-brands fa-docker" style="margin: 0 15px;"></i>
                         <i class="fa-solid fa-database"></i>
                     </div>
-                    <p style="color: var(--text-muted); font-weight: 500;">
-                        &copy; 2026 Engineered by Deep Dey. All Systems Operational.
+                    
+                    <p style="color: var(--text-muted); font-weight: 500; font-size: 1.1rem; margin-bottom: 0.5rem;">
+                        &copy; 2026 Engineered by <span style="color: #fff;">Deep Dey</span>
                     </p>
-                    <a href="https://qlynk.vercel.app/v1/portfolio" target="_blank" class="btn btn-outline btn-sm" style="border-radius: 50px; margin-top: 1rem;">
-                        Visit Developer Portfolio
-                    </a>
-                  <a href="/status" class="btn btn-outline btn-sm" style="border-radius: 50px; margin-top: 1rem;">
-                        Check Server Status
-                    </a>
-                  <a href="/view" class="btn btn-outline btn-sm" style="border-radius: 50px; margin-top: 1rem;">
-                        Goto QLYNK Tube [ADMIN/GUEST ONLY]
-                    </a>
+
+                    <div class="social-links">
+                        <a href="/github" target="_blank" class="social-icon github splash-btn" title="GitHub">
+                            <i class="fa-brands fa-github"></i>
+                        </a>
+                        <a href="/instagram" target="_blank" class="social-icon insta splash-btn" title="Instagram">
+                            <i class="fa-brands fa-instagram"></i>
+                        </a>
+                        <a href="/discord" target="_blank" class="social-icon discord splash-btn" title="Discord Community">
+                            <i class="fa-brands fa-discord"></i>
+                        </a>
+                        <a href="/youtube" target="_blank" class="social-icon youtube splash-btn" title="YouTube Channel">
+                            <i class="fa-brands fa-youtube"></i>
+                        </a>
+                        <a href="/wiki" target="_blank" class="social-icon wiki splash-btn" title="Qlynk Wiki">
+                            <i class="fa-solid fa-book-atlas"></i>
+                        </a>
+                        <a href="/clock" target="_blank" class="social-icon clock splash-btn" title="Transparent Clock">
+                            <i class="fa-regular fa-clock"></i>
+                        </a>
+                        <a href="https://qlynk.vercel.app/v1/portfolio" target="_blank" class="social-icon portfolio splash-btn" title="Developer Portfolio">
+                            <i class="fa-solid fa-globe"></i>
+                        </a>
+                        <a href="mailto:a@qlynk.me" class="social-icon mail splash-btn" title="Contact Me">
+                            <i class="fa-regular fa-envelope"></i>
+                        </a>
+                    </div>
+
+                    <div style="display: block;">
+                        <a href="https://github.com/deepdeyiitgn/static-files" target="_blank" class="repo-badge splash-btn">
+                            <i class="fa-solid fa-code-branch"></i> Fork & Host Your Own Node
+                        </a>
+                    </div>
+
+                    <div style="margin-top: 1.5rem; display: flex; justify-content: center; gap: 10px; flex-wrap: wrap;">
+                        <a href="/status" target="_self" class="btn btn-outline btn-sm splash-btn" style="border-radius: 50px; position: relative; overflow: hidden;">
+                            <i class="fa-solid fa-satellite-dish"></i> Server Status
+                        </a>
+                        <a href="/view" target="_self" class="btn btn-outline btn-sm splash-btn" style="border-radius: 50px; position: relative; overflow: hidden;">
+                            <i class="fa-solid fa-film"></i> Qlynk Tube
+                        </a>
+                    </div>
                 </footer>
-            </div>
         </section>
     </div>
 
+  //===============================================
+  // Footor Script
+  //===============================================
+  
+  <script>
+
+    // ==========================================
+        // 🚀 THE DELAYED SPLASH (RIPPLE) ENGINE
+        // ==========================================
+        document.querySelectorAll('.splash-btn').forEach(btn => {
+            btn.addEventListener('click', function (e) {
+                const url = this.getAttribute('href');
+                const target = this.getAttribute('target') || '_self';
+
+                // Email click pe animation chalao par turant mail app open hone do (Block mat karo)
+                if (url.startsWith('mailto:')) {
+                    createSplash(e, this);
+                    return; 
+                }
+
+                // Normal links ko delay karo animation ke liye
+                e.preventDefault(); 
+                createSplash(e, this);
+
+                // 300ms wait for animation, fir redirect
+                setTimeout(() => {
+                    if (target === '_blank') {
+                        window.open(url, '_blank');
+                    } else {
+                        window.location.href = url;
+                    }
+                }, 300);
+            });
+        });
+
+        function createSplash(e, element) {
+            const ripple = document.createElement('span');
+            ripple.classList.add('splash-ripple');
+            
+            const rect = element.getBoundingClientRect();
+            const size = Math.max(rect.width, rect.height);
+            ripple.style.width = ripple.style.height = `${size}px`;
+            
+            // Get mouse click coordinates relative to the element
+            const x = e.clientX - rect.left - size / 2;
+            const y = e.clientY - rect.top - size / 2;
+            
+            ripple.style.left = `${x}px`;
+            ripple.style.top = `${y}px`;
+            
+            element.appendChild(ripple);
+            
+            // Remove ripple from DOM after animation completes (400ms)
+            setTimeout(() => {
+                ripple.remove();
+            }, 400);
+        }
+  </script>
+  
     <div class="modal-overlay" id="authModal">
         <div class="modal-content">
             <div style="background: rgba(0, 112, 243, 0.1); width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 1.5rem; border: 1px solid rgba(0, 112, 243, 0.3);">
