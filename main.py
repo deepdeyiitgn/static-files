@@ -3057,6 +3057,7 @@ import uuid
 import time
 import json
 import asyncio
+import math
 from datetime import datetime
 
 # Fetch ENV Variables
@@ -3172,8 +3173,124 @@ async def batch_cmd(client, message):
         batch_users[user_id] = True
         await message.reply_text("📦 **Batch Mode Active.**\n\nYou can now forward or send multiple files. The system will strictly queue and process them one-by-one to protect server disk space.")
 
+# --- COMMAND: /connect ---
+@tg_app.on_message(filters.command("connect"))
+async def connect_cmd(client, message):
+    if not check_target_chat(message): return
+    if not is_auth(message.from_user.id):
+        await message.reply_text("🚫 Please /verify first to use this command.")
+        return
+
+    if len(message.command) < 2:
+        await message.reply_text("⚠️ Syntax: `/connect [channel_or_group_id]`\nExample: `/connect -100123456789`")
+        return
+
+    target_chat = message.command[1]
+
+    try:
+        target_chat = int(target_chat)
+        # Check bot permissions in that chat
+        member = await client.get_chat_member(target_chat, client.me.id)
+        if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
+            await message.reply_text("❌ Bot is in the chat but does NOT have Admin permissions. Please make it an admin first.")
+            return
+
+        # Save connection to DB
+        db = get_tg_auth_db()
+        db["connected_chat"] = target_chat
+        save_tg_auth_db(db)
+
+        chat_info = await client.get_chat(target_chat)
+        await message.reply_text(f"✅ **Successfully Connected!**\n\nBot is now linked to: **{chat_info.title}**\nAuto-search will now fetch media from both Vault and this chat.")
+
+    except ValueError:
+        await message.reply_text("❌ Invalid ID format. Must be a number (usually starting with -100).")
+    except Exception as e:
+        await message.reply_text(f"❌ Could not connect. Make sure the bot is added to the channel/group first.\nError: `{e}`")
+
+# --- HELPER: Auto-Search Pagination Builder ---
+async def send_search_page(client, message, query, page=0, is_callback=False):
+    db = get_db()
+    files = db.get("files", [])
+    
+    searchable_files = [f for f in files if not f.get("is_external") and f.get("mime_type", "").startswith(("video/", "audio/"))]
+    titles = [f.get("title", f.get("filename", "")) for f in searchable_files]
+    
+    # 1. Fetch from Vault (Up to 30 matches)
+    matches = difflib.get_close_matches(query, titles, n=30, cutoff=0.3)
+    all_results = []
+    
+    for match in matches:
+        file_record = next(f for f in searchable_files if f.get("title", f.get("filename", "")) == match)
+        slug = file_record["slug"]
+        all_results.append(("vault", slug, f"📁 [Vault] {match}"))
+
+    # 2. Fetch from Connected Channel (Up to 30 matches)
+    tg_db = get_tg_auth_db()
+    connected_chat = tg_db.get("connected_chat")
+    
+    if connected_chat:
+        try:
+            async for msg in client.search_messages(chat_id=connected_chat, query=query, limit=30):
+                if msg.video or msg.document or msg.audio:
+                    media = msg.video or msg.document or msg.audio
+                    file_name = getattr(media, 'file_name', 'Telegram Media')
+                    all_results.append(("chan", msg.id, f"📡 [Channel] {file_name}"))
+        except Exception as e:
+            logger.warning(f"Channel search failed: {e}")
+
+    # Agar kuch nahi mila
+    if not all_results:
+        text_msg = "🔍 No media assets found in the Vault or Connected Channel for that name."
+        if is_callback: await message.edit_text(text_msg)
+        else: await message.reply_text(text_msg)
+        return
+
+    # --- Pagination Math ---
+    ITEMS_PER_PAGE = 5
+    total_items = len(all_results)
+    total_pages = math.ceil(total_items / ITEMS_PER_PAGE)
+    
+    if page >= total_pages: page = total_pages - 1
+    if page < 0: page = 0
+    
+    start_idx = page * ITEMS_PER_PAGE
+    end_idx = start_idx + ITEMS_PER_PAGE
+    page_results = all_results[start_idx:end_idx]
+    
+    keyboard = []
+    # Add Item Buttons
+    for item_type, item_id, item_title in page_results:
+        if item_type == "vault":
+            keyboard.append([InlineKeyboardButton(item_title, callback_data=f"opt_{item_id}")])
+        else:
+            keyboard.append([InlineKeyboardButton(item_title, callback_data=f"chan_{item_id}")])
+            
+    # Add Navigation Buttons (Next / Prev)
+    nav_row = []
+    safe_query = query[:30] # Limit size for Telegram button data
+    
+    if page > 0:
+        nav_row.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"pg_{page-1}_{safe_query}"))
+        
+    nav_row.append(InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="ignore"))
+    
+    if page < total_pages - 1:
+        nav_row.append(InlineKeyboardButton("Next ➡️", callback_data=f"pg_{page+1}_{safe_query}"))
+        
+    if nav_row:
+        keyboard.append(nav_row)
+        
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    msg_text = f"🔍 Found **{total_items}** assets for `{query}`. (Page {page+1}/{total_pages}):"
+    
+    if is_callback:
+        await message.edit_text(msg_text, reply_markup=reply_markup)
+    else:
+        await message.reply_text(msg_text, reply_markup=reply_markup)
+        
 # --- TEXT HANDLER: Auth & Strict Vault Auto-Search ---
-@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch"]))
+@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch", "connect"]))
 async def text_handler(client, message):
     if not check_target_chat(message): return
     text = message.text
@@ -3195,7 +3312,10 @@ async def text_handler(client, message):
             await message.reply_text("❌ Incorrect Password. Intrusion attempt logged.")
         return
 
-    # 2. Strict Vault Auto-Search Logic (Only Videos/Audios, No External Links)
+    # 2. Trigger Smart Paginated Search
+    await send_search_page(client, message, query=text, page=0, is_callback=False)
+
+    # 2. Strict Vault & Channel Auto-Search Logic
     db = get_db()
     files = db.get("files", [])
     
@@ -3203,19 +3323,35 @@ async def text_handler(client, message):
     titles = [f.get("title", f.get("filename", "")) for f in searchable_files]
     
     matches = difflib.get_close_matches(text, titles, n=5, cutoff=0.3)
-    
-    if not matches:
-        await message.reply_text("🔍 No media assets found in the local vault for that name.")
-        return
-        
     keyboard = []
+    
+    # Add matches from HF Dataset
     for match in matches:
         file_record = next(f for f in searchable_files if f.get("title", f.get("filename", "")) == match)
         slug = file_record["slug"]
-        keyboard.append([InlineKeyboardButton(match, callback_data=f"opt_{slug}")])
+        keyboard.append([InlineKeyboardButton(f"📁 [Vault] {match}", callback_data=f"opt_{slug}")])
+
+    # Add matches from Telegram Connected Channel/Group
+    tg_db = get_tg_auth_db()
+    connected_chat = tg_db.get("connected_chat")
+    
+    if connected_chat:
+        try:
+            # Pyrogram ka search function
+            async for msg in client.search_messages(chat_id=connected_chat, query=text, limit=5):
+                if msg.video or msg.document or msg.audio:
+                    media = msg.video or msg.document or msg.audio
+                    file_name = getattr(media, 'file_name', 'Telegram Media')
+                    keyboard.append([InlineKeyboardButton(f"📡 [Channel] {file_name}", callback_data=f"chan_{msg.id}")])
+        except Exception as e:
+            logger.warning(f"Channel search failed: {e}")
+
+    if not keyboard:
+        await message.reply_text("🔍 No media assets found in the Vault or Connected Channel for that name.")
+        return
         
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await message.reply_text("🔍 Found these media assets in the Vault. Choose one:", reply_markup=reply_markup)
+    await message.reply_text("🔍 Found these media assets. Choose one:", reply_markup=reply_markup)
 
 # --- CALLBACK QUERIES: Buttons ---
 @tg_app.on_callback_query()
@@ -3274,6 +3410,39 @@ async def button_handler(client, query: CallbackQuery):
                 url = f"{STATIC_DOMAIN}/f/{slug}"
                 await query.message.edit_text(f"⚠️ **File Size Limit Hit by Telegram Servers!**\n\nThe bot couldn't stream this heavy file directly.\n\n🔗 Please use this direct link instead:\n{url}")
 
+    elif data.startswith("chan_"):
+        msg_id = int(data.split("_", 1)[1])
+        tg_db = get_tg_auth_db()
+        connected_chat = tg_db.get("connected_chat")
+        
+        if not connected_chat:
+            await query.answer("Channel connection lost.", show_alert=True)
+            return
+            
+        await query.message.edit_text("📤 Extracting directly from Channel...")
+        try:
+            # copy_message forwards the message but DROPS the author/forwarded tag automatically!
+            await client.copy_message(
+                chat_id=query.message.chat.id,
+                from_chat_id=connected_chat,
+                message_id=msg_id
+            )
+            # Purana "Extracting" wala message delete kar do taaki clean lage
+            await query.message.delete()
+        except Exception as e:
+            await query.message.edit_text(f"❌ Failed to fetch from channel. Ensure bot is still admin.\nError: {e}")
+
+    elif data.startswith("pg_"):
+        parts = data.split("_", 2)
+        page = int(parts[1])
+        search_q = parts[2]
+        # Edit the current message with the new page
+        await send_search_page(client, query.message, query=search_q, page=page, is_callback=True)
+        
+    elif data == "ignore":
+        # Do nothing (used for the 'Page X/Y' indicator button)
+        await query.answer()        
+            
 # --- MEDIA HANDLER: Smart Uploads, Queue System, MKV Fix & Native Thumbnails ---
 @tg_app.on_message(filters.media | filters.document)
 async def media_handler(client, message):
@@ -3297,7 +3466,15 @@ async def media_handler(client, message):
             return
 
         filename = getattr(media, 'file_name', f"telegram_upload_{uuid.uuid4().hex[:5]}")
-        title = message.caption if message.caption else filename
+        
+        # 🎵 FIX: Clean Title Logic (Remove extension and replace underscores with spaces)
+        if message.caption:
+            title = message.caption
+        else:
+            # os.path.splitext filename ko split karta hai: ('My_Awesome_Song', '.mp3')
+            # Hum sirf pehla part [0] lenge aur '_' ko ' ' (space) se replace kar denge
+            title = os.path.splitext(filename)[0].replace("_", " ")
+            
         slug = str(uuid.uuid4())[:8]
         ext = os.path.splitext(filename)[1].lower() if "." in filename else ".bin"
         temp_path = f"/tmp/raw_{slug}{ext}"
