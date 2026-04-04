@@ -3315,44 +3315,6 @@ async def text_handler(client, message):
     # 2. Trigger Smart Paginated Search
     await send_search_page(client, message, query=text, page=0, is_callback=False)
 
-    # 2. Strict Vault & Channel Auto-Search Logic
-    db = get_db()
-    files = db.get("files", [])
-    
-    searchable_files = [f for f in files if not f.get("is_external") and f.get("mime_type", "").startswith(("video/", "audio/"))]
-    titles = [f.get("title", f.get("filename", "")) for f in searchable_files]
-    
-    matches = difflib.get_close_matches(text, titles, n=5, cutoff=0.3)
-    keyboard = []
-    
-    # Add matches from HF Dataset
-    for match in matches:
-        file_record = next(f for f in searchable_files if f.get("title", f.get("filename", "")) == match)
-        slug = file_record["slug"]
-        keyboard.append([InlineKeyboardButton(f"📁 [Vault] {match}", callback_data=f"opt_{slug}")])
-
-    # Add matches from Telegram Connected Channel/Group
-    tg_db = get_tg_auth_db()
-    connected_chat = tg_db.get("connected_chat")
-    
-    if connected_chat:
-        try:
-            # Pyrogram ka search function
-            async for msg in client.search_messages(chat_id=connected_chat, query=text, limit=5):
-                if msg.video or msg.document or msg.audio:
-                    media = msg.video or msg.document or msg.audio
-                    file_name = getattr(media, 'file_name', 'Telegram Media')
-                    keyboard.append([InlineKeyboardButton(f"📡 [Channel] {file_name}", callback_data=f"chan_{msg.id}")])
-        except Exception as e:
-            logger.warning(f"Channel search failed: {e}")
-
-    if not keyboard:
-        await message.reply_text("🔍 No media assets found in the Vault or Connected Channel for that name.")
-        return
-        
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await message.reply_text("🔍 Found these media assets. Choose one:", reply_markup=reply_markup)
-
 # --- CALLBACK QUERIES: Buttons ---
 @tg_app.on_callback_query()
 async def button_handler(client, query: CallbackQuery):
@@ -3596,3 +3558,11 @@ async def media_handler(client, message):
             # Ensure cleanup if crashed
             if os.path.exists(temp_path): os.remove(temp_path)
             if final_path != temp_path and os.path.exists(final_path): os.remove(final_path)
+TwinMind
+TwinMind
+
+Ask TwinMind
+Page icon
+Summarize
+Disable for this site
+Disable for all sites
