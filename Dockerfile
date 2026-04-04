@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     ffmpeg \
     nodejs \
+    fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
 
 # User switch karo aur Environment variables set karo
