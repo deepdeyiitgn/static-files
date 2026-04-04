@@ -76,32 +76,29 @@ async def lifespan(app: FastAPI):
             
     except Exception as e:
         logger.error(f"CRITICAL STARTUP ERROR: Please check your HF_TOKEN permissions. Details: {e}")
-            # --- ADD THIS SINGLE LINE HERE ---
-    asyncio.create_task(media_optimizer_loop())
-# ... (Aapka purana lifespan code) ...
 
-# 💾 YEH NAYA BLOCK YAHAN ADD KAREIN (Memory Restore)
-        try:
-            session_file = "qlynk_userbot.session" if os.environ.get("TG_SESSION_STRING") else "qlynk_bot.session"
-            session_path = hf_hub_download(repo_id=DATASET_REPO, filename=session_file, repo_type="dataset", token=HF_TOKEN)
-            shutil.copy(session_path, session_file)
-            logger.info("💾 Telegram Session Memory Restored from Vault.")
-        except EntryNotFoundError:
-            logger.warning("No Telegram Session memory found. Will start fresh and learn IDs.")
-        except Exception as e:
-            pass
-            
+    # 💾 YEH NAYA BLOCK (Memory Restore)
+    try:
+        session_file = "qlynk_userbot.session" if os.environ.get("TG_SESSION_STRING") else "qlynk_bot.session"
+        session_path = hf_hub_download(repo_id=DATASET_REPO, filename=session_file, repo_type="dataset", token=HF_TOKEN)
+        shutil.copy(session_path, session_file)
+        logger.info("💾 Telegram Session Memory Restored from Vault.")
+    except EntryNotFoundError:
+        logger.warning("No Telegram Session memory found. Will start fresh and learn IDs.")
+    except Exception as e:
+        pass
+        
     # --- ENTERPRISE BACKGROUND TASKS ---
     asyncio.create_task(media_optimizer_loop())
     
-    # YEH NAYI 3 LINES ADD KARNI HAI:
+    # --- START BOT ---
     if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
         await tg_app.start()
         logger.info("🤖 Pyrogram Max Power MTProto Bot Started!")
     
     yield
     
-    # Aur shutdown hone par bot ko gracefully band karne ke liye (yield ke baad):
+    # --- SHUTDOWN SEQUENCE ---
     if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
         await tg_app.stop()
     logger.info("Shutting down Qlynk Host...")
