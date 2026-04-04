@@ -79,7 +79,18 @@ async def lifespan(app: FastAPI):
             # --- ADD THIS SINGLE LINE HERE ---
     asyncio.create_task(media_optimizer_loop())
 # ... (Aapka purana lifespan code) ...
-    
+
+# 💾 YEH NAYA BLOCK YAHAN ADD KAREIN (Memory Restore)
+        try:
+            session_file = "qlynk_userbot.session" if os.environ.get("TG_SESSION_STRING") else "qlynk_bot.session"
+            session_path = hf_hub_download(repo_id=DATASET_REPO, filename=session_file, repo_type="dataset", token=HF_TOKEN)
+            shutil.copy(session_path, session_file)
+            logger.info("💾 Telegram Session Memory Restored from Vault.")
+        except EntryNotFoundError:
+            logger.warning("No Telegram Session memory found. Will start fresh and learn IDs.")
+        except Exception as e:
+            pass
+            
     # --- ENTERPRISE BACKGROUND TASKS ---
     asyncio.create_task(media_optimizer_loop())
     
@@ -3070,21 +3081,20 @@ TG_SESSION_STRING = os.environ.get("TG_SESSION_STRING", "") # For True 2GB UserB
 STATIC_DOMAIN = "https://static.qlynk.me"
 
 # Initialize Pyrogram MTProto Client
+# Initialize Pyrogram MTProto Client
 if TG_SESSION_STRING:
     tg_app = Client(
         "qlynk_userbot",
         session_string=TG_SESSION_STRING,
         api_id=TG_API_ID,
-        api_hash=TG_API_HASH,
-        in_memory=True
+        api_hash=TG_API_HASH
     )
 else:
     tg_app = Client(
         "qlynk_bot",
         api_id=TG_API_ID,
         api_hash=TG_API_HASH,
-        bot_token=TG_BOT_TOKEN,
-        in_memory=True
+        bot_token=TG_BOT_TOKEN
     )
 
 # --- GLOBAL QUEUE LOCK (Ek ek karke upload karne ke liye) ---
@@ -3195,32 +3205,37 @@ async def connect_cmd(client, message):
         await message.reply_text("⚠️ Syntax: `/connect [channel_or_group_id]`\nExample: `/connect -100123456789`")
         return
 
-    # 1. Pehle strictly ID ko number me convert karo
     try:
         target_chat = int(message.command[1].strip())
     except ValueError:
         await message.reply_text("❌ Invalid ID format. Must be a number (usually starting with -100).")
         return
 
-    # 2. Ab Telegram server se check karo
     try:
         member = await client.get_chat_member(target_chat, client.me.id)
         if member.status not in [enums.ChatMemberStatus.ADMINISTRATOR, enums.ChatMemberStatus.OWNER]:
             await message.reply_text("❌ Bot is in the chat but does NOT have Admin permissions. Please make it an admin first.")
             return
 
-        # Save connection to DB
         db = get_tg_auth_db()
         db["connected_chat"] = target_chat
         save_tg_auth_db(db)
-
+        
         chat_info = await client.get_chat(target_chat)
-        await message.reply_text(f"✅ **Successfully Connected!**\n\nBot is now linked to: **{chat_info.title}**")
+
+        # 💾 THE MAGIC: Save the session file to Hugging Face so it NEVER forgets
+        try:
+            session_file = "qlynk_userbot.session" if os.environ.get("TG_SESSION_STRING") else "qlynk_bot.session"
+            if os.path.exists(session_file):
+                api.upload_file(path_or_fileobj=session_file, path_in_repo=session_file, repo_id=DATASET_REPO, repo_type="dataset")
+        except Exception as e:
+            logger.warning(f"Session sync failed: {e}")
+
+        await message.reply_text(f"✅ **Successfully Connected!**\n\nBot is now linked to: **{chat_info.title}**\n💾 Memory synced to Datacenter. I won't forget this channel again!")
 
     except Exception as e:
-        # Agar bot ne channel nahi dekha hai to Pyrogram PeerIdInvalid error deta hai.
-        await message.reply_text(f"❌ **Could not connect.**\n\nMake sure the bot is added to the channel as **Admin**.\n\n*(💡 Pro Tip: If you just added the bot, Forward any one message from that channel to me here so my database can memorize its ID, then try /connect again!)*\n\nError Details: `{e}`")
-
+        await message.reply_text(f"❌ **Could not connect.**\n\nMake sure the bot is added to the channel as **Admin**.\n\n*(💡 Pro Tip: Since memory was just wiped, Forward any one message from that channel to me here so my memory can register its ID, then try /connect again!)*\n\nError Details: `{e}`")
+        
 # --- COMMAND: /index (DEEP SCAN BYPASS) ---
 @tg_app.on_message(filters.command("index"))
 async def index_cmd(client, message):
