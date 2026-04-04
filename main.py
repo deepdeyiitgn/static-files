@@ -3221,7 +3221,7 @@ async def connect_cmd(client, message):
         # Agar bot ne channel nahi dekha hai to Pyrogram PeerIdInvalid error deta hai.
         await message.reply_text(f"❌ **Could not connect.**\n\nMake sure the bot is added to the channel as **Admin**.\n\n*(💡 Pro Tip: If you just added the bot, Forward any one message from that channel to me here so my database can memorize its ID, then try /connect again!)*\n\nError Details: `{e}`")
 
-# --- COMMAND: /index ---
+# --- COMMAND: /index (DEEP SCAN BYPASS) ---
 @tg_app.on_message(filters.command("index"))
 async def index_cmd(client, message):
     if not check_target_chat(message): return
@@ -3236,35 +3236,64 @@ async def index_cmd(client, message):
         await message.reply_text("❌ No channel connected. Use `/connect [id]` first.")
         return
 
-    status_msg = await message.reply_text("🔄 **Starting Channel Indexing...**\nFetching all messages (this might take a minute or two for large channels)...")
+    status_msg = await message.reply_text("🔄 **Initializing Deep Scan Bypass...**\nCalculating channel depth. Please wait...")
 
     db = {"messages": []}
     count = 0
 
     try:
-        # get_chat_history fetches everything from newest to oldest
-        async for msg in client.get_chat_history(chat_id=connected_chat):
-            media = msg.video or msg.document or msg.audio
-            if media:
-                # Priority: Caption > File Name > Fallback
-                title = msg.caption if msg.caption else getattr(media, 'file_name', f"Media_{msg.id}")
-                if title:
-                    # Sirf first line lo aur clean karo
-                    title = str(title).split('\n')[0].strip()
-                    db["messages"].append({
-                        "id": msg.id,
-                        "title": title
-                    })
-                    count += 1
-                    
-                    if count % 500 == 0:
-                        await status_msg.edit_text(f"🔄 **Indexing in progress...**\nScanned {count} media files so far...")
+        # 1. Sabse pehle latest message ki ID nikalte hain taaki pata chale kahan tak scan karna hai
+        dummy = await client.send_message(connected_chat, "Initializing Datacenter Scan...")
+        latest_id = dummy.id
+        await dummy.delete()
 
+        # 2. Telegram Bot limit: Hum ek baar mein max 200 messages fetch kar sakte hain
+        BATCH_SIZE = 200
+        
+        for start_id in range(1, latest_id + 1, BATCH_SIZE):
+            end_id = min(start_id + BATCH_SIZE, latest_id + 1)
+            msg_ids = list(range(start_id, end_id))
+            
+            try:
+                # get_messages is allowed for bots! Hum exact ID bhej kar data nikal lenge
+                messages = await client.get_messages(chat_id=connected_chat, message_ids=msg_ids)
+                
+                for msg in messages:
+                    # Agar message delete ho chuka hai ya empty hai toh ignore karo
+                    if getattr(msg, 'empty', False) or msg is None: 
+                        continue
+                        
+                    media = getattr(msg, 'video', None) or getattr(msg, 'document', None) or getattr(msg, 'audio', None)
+                    if media:
+                        # Caption ya File Name nikalna (Pehle wali logic)
+                        title = getattr(msg, 'caption', None)
+                        if not title:
+                            title = getattr(media, 'file_name', f"Media_{msg.id}")
+                            
+                        if title:
+                            # Clean the title (sirf pehli line)
+                            title = str(title).split('\n')[0].strip()
+                            db["messages"].append({
+                                "id": msg.id,
+                                "title": title
+                            })
+                            count += 1
+                            
+            except Exception as batch_err:
+                logger.warning(f"Batch {start_id} failed: {batch_err}")
+                await asyncio.sleep(2) # Error aane par server ko thoda aaram dena zaroori hai
+                
+            # Har 1000 messages ke baad status update (Telegram API Flood Wait se bachne ke liye)
+            if start_id % 1000 == 1:
+                await status_msg.edit_text(f"🔄 **Deep Indexing in Progress...**\nScanning Message ID: **{start_id}** of **{latest_id}**\nFound **{count}** media files so far...\n\n*(Do not send any other commands while this is running)*")
+                await asyncio.sleep(1.5) # Anti-Flood Wait
+
+        # 3. Jab pura scan ho jaye, HF Database me hamesha ke liye save kar do
         save_channel_db(db)
-        await status_msg.edit_text(f"✅ **Indexing Complete!**\n\nSuccessfully mapped and saved **{count}** media files to the Datacenter JSON Database.\nSmart Search is now fully powered up!")
+        await status_msg.edit_text(f"✅ **Deep Indexing Complete!**\n\nSuccessfully bypassed bot limits and mapped **{count}** media files to the Datacenter Database.\n\nSmart Search is now fully operational! 🎉")
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ Indexing Failed.\nError: `{e}`")        
+        await status_msg.edit_text(f"❌ Indexing Failed.\nError: `{e}`")
 
 # --- HELPER: Auto-Search Pagination Builder (SMART ENGINE) ---
 async def send_search_page(client, message, query, page=0, is_callback=False):
