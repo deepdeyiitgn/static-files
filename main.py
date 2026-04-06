@@ -1669,14 +1669,20 @@ async def generate_share_token(token: str = Depends(verify_auth)):
     return {"status": "success", "share_token": new_token}
 
 # --- 📁 Media Library API ---
+# --- 📁 Media Library API ---
 @app.get("/api/media_library")
 async def fetch_media_library(access: dict = Depends(verify_view_access)):
     db = get_db()
-    # Filter for videos and audios only
-    filtered_files = [
-        f for f in db.get("files", []) 
-        if not f.get("is_external") and str(f.get("mime_type", "")).startswith(("video/", "audio/"))
-    ]
+    filtered_files = []
+    for f in db.get("files", []):
+        mime = str(f.get("mime_type", ""))
+        is_ext = f.get("is_external", False)
+        ext_url = str(f.get("external_url", ""))
+        
+        # Rule: Local media ko allow karo, YA phir YouTube external links ko allow karo
+        if (not is_ext and mime.startswith(("video/", "audio/"))) or (is_ext and ("youtube.com" in ext_url or "youtu.be" in ext_url)):
+            filtered_files.append(f)
+            
     return sorted(filtered_files, key=lambda x: x.get("uploaded_at", ""), reverse=True)
 
 # --- 📝 Subtitle Upload API (Raw Safe Save) ---
@@ -2255,12 +2261,22 @@ MEDIA_TUBE_HTML = """
         }
 
         // --- RENDER LOCAL WATCH PAGE ---
+        // --- RENDER LOCAL WATCH PAGE ---
         async function renderWatchPage(slug) {
             document.getElementById('homeView').classList.add('hidden');
             document.getElementById('watchView').classList.remove('hidden');
             
             const file = masterLibrary.find(f => f.slug === slug);
             if(!file) return document.getElementById('wTitle').innerText = "File Not Found.";
+
+            // 🚀 NEW LOGIC: Agar yeh database mein external YouTube link hai, toh YouTube player trigger karo!
+            if (file.is_external && file.external_url) {
+                const ytMatch = extractYtId(file.external_url);
+                if (ytMatch) {
+                    renderYtPage(ytMatch);
+                    return; // Yahin ruk jao, aage local video ka logic mat chalao
+                }
+            }
 
             document.getElementById('wTitle').innerText = file.title;
             document.getElementById('wSize').innerText = formatBytes(file.size_bytes);
@@ -3438,7 +3454,7 @@ async def send_search_page(client, message, query, page=0, is_callback=False):
         await message.reply_text(msg_text, reply_markup=reply_markup)
         
 # --- TEXT HANDLER: Auth & Strict Vault Auto-Search ---
-@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch", "connect", "index"]))
+@tg_app.on_message(filters.text & ~filters.command(["start", "verify", "logout", "batch", "connect", "index", "support", "close"]))
 async def text_handler(client, message):
     if not check_target_chat(message): return
     
