@@ -3811,3 +3811,656 @@ async def media_handler(client, message):
             # Ensure cleanup if crashed
             if os.path.exists(temp_path): os.remove(temp_path)
             if final_path != temp_path and os.path.exists(final_path): os.remove(final_path)
+
+# ==========================================
+# 14. QLYNK SaaS CHECKOUT & PAYMENT ENGINE (ENTERPRISE EDITION)
+# ==========================================
+import razorpay
+from fpdf import FPDF
+import re
+import httpx
+from collections import defaultdict
+import time
+
+# --- Premium Pricing Plans ---
+PLANS = {
+    "basic": {"name": "Basic", "price_inr": 49, "days": 1, "desc": "24 Hours Full Access"},
+    "pro": {"name": "Pro", "price_inr": 99, "days": 3, "desc": "3 Days Unlimited Access"},
+    "ultra": {"name": "Ultra", "price_inr": 299, "days": 7, "desc": "7 Days Premium Access"}
+}
+
+# --- Razorpay Setup ---
+RZP_KEY = os.environ.get("RAZORPAY_KEY_ID")
+RZP_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
+rzp_client = razorpay.Client(auth=(RZP_KEY, RZP_SECRET)) if RZP_KEY and RZP_SECRET else None
+
+# --- Advanced Security: Anti-Spam Rate Limiter ---
+# Prevents hackers from spamming fake order creation requests
+rate_limiter_db = defaultdict(list)
+
+def check_rate_limit(ip: str):
+    now = time.time()
+    # Remove old requests (older than 1 minute)
+    rate_limiter_db[ip] = [t for t in rate_limiter_db[ip] if now - t < 60]
+    if len(rate_limiter_db[ip]) > 5: # Max 5 order attempts per minute
+        return False
+    rate_limiter_db[ip].append(now)
+    return True
+
+# --- PDF Generator Helper with SVG Logo ---
+def generate_receipt_pdf(data):
+    pdf = FPDF()
+    pdf.add_page()
+    
+    # 1. Fetch & Embed Logo
+    logo_path = "/tmp/qlynk_logo_receipt.svg"
+    try:
+        if not os.path.exists(logo_path):
+            with httpx.Client() as client:
+                r = client.get("https://qlynk.vercel.app/quicklink-logo.svg", timeout=10)
+                if r.status_code == 200:
+                    with open(logo_path, "wb") as f:
+                        f.write(r.content)
+        # Add logo to PDF (fpdf2 supports basic SVGs)
+        if os.path.exists(logo_path):
+            pdf.image(logo_path, x=10, y=8, w=25)
+    except Exception as e:
+        logger.warning(f"Failed to embed PDF logo: {e}")
+
+    # 2. Header
+    pdf.set_font("Arial", 'B', 18)
+    pdf.cell(0, 15, txt="QLYNK HOST - SECURE RECEIPT", ln=True, align='R')
+    pdf.set_font("Arial", 'I', 10)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 5, txt="Official Datacenter Node Invoice", ln=True, align='R')
+    
+    pdf.ln(15)
+    pdf.set_text_color(0, 0, 0)
+    
+    # 3. Transaction Meta
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(100, 8, txt=f"Order ID: {data['order_id']}")
+    pdf.cell(90, 8, txt=f"Date: {data['date'][:10]}", align='R', ln=True)
+    pdf.cell(100, 8, txt=f"Status: {data['status'].upper()}")
+    pdf.cell(90, 8, txt=f"Method: Razorpay Gateway", align='R', ln=True)
+    
+    # 4. Data Tables
+    pdf.ln(10)
+    pdf.set_fill_color(240, 240, 240)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, txt="  Billed To:", ln=True, fill=True)
+    pdf.set_font("Arial", size=11)
+    pdf.cell(0, 8, txt=f"  Name: {data['name']}", ln=True)
+    pdf.cell(0, 8, txt=f"  Email: {data['email']}", ln=True)
+    pdf.cell(0, 8, txt=f"  Contact: {data['tg_contact']}", ln=True)
+    
+    pdf.ln(5)
+    pdf.set_font("Arial", 'B', 12)
+    pdf.cell(0, 10, txt="  Purchase Summary:", ln=True, fill=True)
+    pdf.set_font("Arial", size=11)
+    pdf.cell(100, 8, txt=f"  Qlynk {data['plan_name']} Plan Access")
+    pdf.cell(90, 8, txt=f"INR {data['amount']}.00", align='R', ln=True)
+    
+    # 5. Token Box (If Success)
+    if data['status'] == 'success':
+        pdf.ln(15)
+        pdf.set_fill_color(230, 255, 230)
+        pdf.set_draw_color(46, 160, 67)
+        pdf.set_font("Arial", 'B', 12)
+        pdf.cell(0, 10, txt="  YOUR SECURE ACCESS TOKEN", ln=True, border='LRT', fill=True)
+        pdf.set_font("Courier", 'B', 14)
+        pdf.cell(0, 12, txt=f"  {data['token']}", ln=True, border='LRB')
+        pdf.set_font("Arial", 'I', 10)
+        pdf.cell(0, 8, txt=f"  Valid Until: {data['expires_at']}", ln=True)
+        
+    # 6. Footer
+    pdf.ln(20)
+    pdf.set_font("Arial", 'I', 10)
+    pdf.set_text_color(120, 120, 120)
+    note = "Thank you for using Qlynk! This is an auto-generated secure receipt." if data['status'] == 'success' else f"Transaction Aborted. Reason: {data.get('reason', 'User Cancelled')}"
+    pdf.cell(0, 10, txt=note, ln=True, align='C')
+    
+    temp_pdf_path = f"/tmp/receipt_{data['order_id']}.pdf"
+    pdf.output(temp_pdf_path)
+    return temp_pdf_path
+
+# --- Database User Handlers ---
+def get_user_db(email_slug):
+    try:
+        path = hf_hub_download(repo_id=DATASET_REPO, filename=f"users/{email_slug}/profile.json", repo_type="dataset", token=HF_TOKEN)
+        with open(path, "r") as f: return json.load(f)
+    except: return {"profile": {}, "history": []}
+
+def save_user_db(email_slug, db):
+    path = f"users/{email_slug}/profile.json"
+    with open("/tmp/temp_profile.json", "w") as f: json.dump(db, f, indent=4)
+    api.upload_file(path_or_fileobj="/tmp/temp_profile.json", path_in_repo=path, repo_id=DATASET_REPO, repo_type="dataset")
+
+# --- Telegram Notifier ---
+async def send_tg_receipt(tg_contact, text, pdf_path=None):
+    try:
+        if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
+            if pdf_path: await tg_app.send_document(tg_contact, document=pdf_path, caption=text)
+            else: await tg_app.send_message(tg_contact, text)
+    except Exception as e:
+        logger.warning(f"Failed to send TG Notification to {tg_contact}: {e}")
+
+# --- Massive Premium Frontend HTML Payload ---
+CHECKOUT_UI_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qlynk Host - Secure Checkout</title>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        :root { --bg: #050505; --card: rgba(22, 27, 34, 0.6); --accent: #bc8cff; --accent-glow: rgba(188, 140, 255, 0.4); --text: #e1e4e8; --border: #30363d; --success: #2ea043; --danger: #da3633; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background: var(--bg); color: var(--text); padding: 20px; background-image: radial-gradient(circle at top, #1a1a2e 0%, transparent 40%); min-height: 100vh; overflow-x: hidden;}
+        
+        /* Custom Toast Notifications */
+        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 9999; display: flex; flex-direction: column; gap: 10px; }
+        .toast { background: #1f2428; border: 1px solid var(--border); color: #fff; padding: 15px 20px; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; align-items: center; gap: 10px; transform: translateX(120%); transition: transform 0.3s cubic-bezier(0.68, -0.55, 0.265, 1.55); }
+        .toast.show { transform: translateX(0); }
+        .toast.success { border-left: 4px solid var(--success); }
+        .toast.error { border-left: 4px solid var(--danger); }
+
+        .navbar { display: flex; justify-content: space-between; align-items: center; padding: 15px 0; border-bottom: 1px solid var(--border); margin-bottom: 40px; }
+        .nav-brand { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 800; color: #fff; }
+        .nav-brand img { height: 35px; }
+        .btn-dash { background: transparent; border: 1px solid var(--accent); color: var(--accent); padding: 10px 20px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.3s ease;}
+        .btn-dash:hover { background: var(--accent); color: #000; box-shadow: 0 0 15px var(--accent-glow); }
+
+        .header-text { text-align: center; margin-bottom: 40px; }
+        .header-text h1 { font-size: 36px; margin-bottom: 10px; background: linear-gradient(90deg, #fff, #bc8cff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        
+        .pricing-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; max-width: 1100px; margin: 0 auto; }
+        .plan-card { background: var(--card); backdrop-filter: blur(20px); border: 1px solid var(--border); padding: 40px 30px; border-radius: 20px; transition: all 0.4s ease; position: relative; display: flex; flex-direction: column;}
+        .plan-card:hover { border-color: var(--accent); transform: translateY(-10px); box-shadow: 0 20px 40px rgba(0,0,0,0.4); }
+        
+        .popular-badge { position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: linear-gradient(45deg, var(--accent), #58a6ff); color: #000; padding: 5px 15px; border-radius: 20px; font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px;}
+        
+        .plan-title { font-size: 28px; font-weight: 800; color: #fff; margin-bottom: 15px; }
+        .plan-price { font-size: 48px; font-weight: 800; color: #fff; margin-bottom: 5px; display: flex; align-items: baseline; gap: 5px;}
+        .plan-price span { font-size: 16px; color: #8b949e; font-weight: 400;}
+        .plan-desc { color: #8b949e; margin-bottom: 30px; font-size: 15px; border-bottom: 1px solid var(--border); padding-bottom: 20px;}
+        
+        .feature-list { list-style: none; margin-bottom: 30px; flex-grow: 1;}
+        .feature-list li { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; font-size: 14px; color: #c9d1d9;}
+        .feature-list svg { width: 18px; height: 18px; fill: var(--success); flex-shrink: 0;}
+        
+        .btn-pay { width: 100%; padding: 15px; border: none; border-radius: 10px; background: #21262d; color: #fff; font-size: 16px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; display: flex; justify-content: center; align-items: center; gap: 10px;}
+        .btn-pay:hover { background: #30363d; }
+        .btn-pay.premium { background: var(--accent); color: #000; }
+        .btn-pay.premium:hover { background: #d0aeff; box-shadow: 0 0 20px var(--accent-glow); }
+
+        /* Modal Styles */
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.85); z-index: 100; display: none; justify-content:center; align-items:center; backdrop-filter: blur(10px); opacity: 0; transition: opacity 0.3s;}
+        .modal-overlay.show { opacity: 1; }
+        .modal { background: #0d1117; padding: 40px; border-radius: 20px; border: 1px solid var(--border); width: 90%; max-width: 450px; transform: scale(0.9); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 25px 50px rgba(0,0,0,0.5);}
+        .modal-overlay.show .modal { transform: scale(1); }
+        
+        .input-group { margin-bottom: 20px; text-align: left; position: relative;}
+        .input-group label { display: block; font-size: 13px; font-weight: 600; color: #8b949e; margin-bottom: 8px; }
+        .input-group input { width: 100%; padding: 12px 15px 12px 40px; background: #050505; border: 1px solid var(--border); color: #fff; border-radius: 10px; outline: none; font-size: 14px; transition: 0.2s;}
+        .input-group input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-glow);}
+        .input-icon { position: absolute; left: 12px; top: 38px; width: 18px; height: 18px; fill: #8b949e; }
+
+        .dashboard { max-width: 1000px; margin: 0 auto; display: none; animation: fadeIn 0.5s ease;}
+        @keyframes fadeIn { from {opacity: 0; transform: translateY(10px);} to {opacity: 1; transform: translateY(0);} }
+        .token-card { background: var(--card); border: 1px solid var(--border); padding: 20px; border-radius: 12px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; transition: 0.2s;}
+        .token-card:hover { border-color: #58a6ff; }
+        .t-active { border-left: 5px solid var(--success); }
+        .t-expired { border-left: 5px solid var(--border); opacity: 0.5; }
+        
+        .footer { text-align: center; margin-top: 60px; padding: 30px 0; border-top: 1px solid var(--border);}
+        .trust-badges { display: flex; justify-content: center; gap: 20px; margin-bottom: 20px; }
+        .trust-badges div { display: flex; align-items: center; gap: 5px; font-size: 12px; color: #8b949e; }
+        .footer-links a { color: #8b949e; text-decoration: none; margin: 0 15px; font-size: 13px; transition: 0.2s;}
+        .footer-links a:hover { color: var(--accent); }
+        
+        /* Loading Spinner */
+        .loader { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid var(--accent); border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; display: none;}
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="toast-container"></div>
+
+    <div class="navbar">
+        <div class="nav-brand">
+            <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk Logo">
+            Qlynk Host
+        </div>
+        <button class="btn-dash" onclick="openDashboard()">
+            <svg style="width:16px;height:16px;vertical-align:middle;margin-right:5px;" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z"/></svg>
+            My Tokens
+        </button>
+    </div>
+
+    <div id="pricingSection">
+        <div class="header-text">
+            <h1>Choose Your Access Plan</h1>
+            <p style="color:#8b949e;">Unlock secure, enterprise-grade file hosting and cinematic streaming.</p>
+        </div>
+
+        <div class="pricing-grid">
+            <div class="plan-card">
+                <div class="plan-title">Basic</div>
+                <div class="plan-price">₹49<span>/ 24 Hours</span></div>
+                <div class="plan-desc">Perfect for quick downloads and short-term access.</div>
+                <ul class="feature-list">
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> 24 Hours Full Vault Access</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Standard Streaming Quality</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> PDF Receipt Included</li>
+                </ul>
+                <button class="btn-pay" onclick="selectPlan('basic')">Get Basic Access</button>
+            </div>
+            
+            <div class="plan-card" style="border-color: var(--accent);">
+                <div class="popular-badge">Most Popular</div>
+                <div class="plan-title" style="color: var(--accent);">Pro</div>
+                <div class="plan-price">₹99<span>/ 3 Days</span></div>
+                <div class="plan-desc">The sweet spot for binging and extended projects.</div>
+                <ul class="feature-list">
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> 72 Hours Unlimited Access</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> 4K/HQ Cinematic Streaming</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Priority Network Routing</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Telegram Bot Notifications</li>
+                </ul>
+                <button class="btn-pay premium" onclick="selectPlan('pro')">Get Pro Access</button>
+            </div>
+            
+            <div class="plan-card">
+                <div class="plan-title">Ultra</div>
+                <div class="plan-price">₹299<span>/ 7 Days</span></div>
+                <div class="plan-desc">For heavy users who need uninterrupted reliability.</div>
+                <ul class="feature-list">
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> 7 Days Continuous Access</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Uncapped Download Speeds</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Complete Audit Trail History</li>
+                    <li><svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Dedicated IP Tracking</li>
+                </ul>
+                <button class="btn-pay" onclick="selectPlan('ultra')">Get Ultra Access</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="userModal">
+        <div class="modal">
+            <h2 style="margin-bottom:10px; text-align:center; color:#fff;">Complete Your Order</h2>
+            <p style="font-size:13px; color:#8b949e; text-align:center; margin-bottom:25px;">Secure connection established. Enter details for your receipt.</p>
+            
+            <div class="input-group">
+                <label>Full Name</label>
+                <svg class="input-icon" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                <input type="text" id="uName" placeholder="e.g. Deep Dey">
+            </div>
+            <div class="input-group">
+                <label>Email Address</label>
+                <svg class="input-icon" viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+                <input type="email" id="uEmail" placeholder="deep@example.com">
+            </div>
+            <div class="input-group">
+                <label>Telegram / Phone</label>
+                <svg class="input-icon" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+                <input type="text" id="uTg" placeholder="@username or +91...">
+            </div>
+            
+            <button class="btn-pay premium" id="payBtn" onclick="initiatePayment()">
+                <div class="loader" id="payLoader"></div>
+                <span id="payText">Proceed to Secure Payment</span>
+            </button>
+            <button class="btn-pay" style="background:transparent; color:#8b949e; margin-top:10px;" onclick="closeModal()">Cancel</button>
+        </div>
+    </div>
+
+    <div id="dashboardSection" class="dashboard">
+        <h2 style="font-size:32px; margin-bottom:10px;">My Secure Vault</h2>
+        <p style="color:#8b949e; margin-bottom:30px;">Manage your access tokens and download receipts.</p>
+        
+        <div style="display:flex; gap:15px; margin-bottom: 30px; flex-wrap: wrap;">
+            <input type="email" id="dashEmail" placeholder="Enter your registered email" style="padding:15px; border-radius:10px; border:1px solid var(--border); background:#000; color:#fff; flex:1; min-width:250px; font-size:15px; outline:none;">
+            <button class="btn-pay premium" style="width:auto; padding:0 30px;" onclick="fetchHistory()">Fetch History</button>
+            <button class="btn-pay" style="width:auto; padding:0 30px; background:#21262d;" onclick="closeDashboard()">Back</button>
+        </div>
+        <div id="historyList"></div>
+    </div>
+
+    <div class="footer">
+        <div class="trust-badges">
+            <div><svg style="width:16px;fill:var(--success);" viewBox="0 0 24 24"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/></svg> 256-bit AES Encryption</div>
+            <div><svg style="width:16px;fill:#58a6ff;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg> Razorpay Secure</div>
+        </div>
+        <div class="footer-links">
+            <a href="#">Terms of Service</a>
+            <a href="#">Privacy Policy</a>
+            <a href="#">Refund Policy</a>
+        </div>
+        <p style="margin-top:20px; font-size:12px; color:#4b5563;">&copy; 2026 Qlynk Architecture. All rights reserved.</p>
+    </div>
+
+    <script>
+        let selectedPlan = "";
+        
+        // --- Premium Toast Notification System ---
+        function showToast(message, type="success") {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            const icon = type === 'success' ? `<svg style="width:20px;fill:var(--success);" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>` : `<svg style="width:20px;fill:var(--danger);" viewBox="0 0 24 24"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>`;
+            toast.innerHTML = `${icon} <div>${message}</div>`;
+            container.appendChild(toast);
+            
+            setTimeout(() => toast.classList.add('show'), 10);
+            setTimeout(() => {
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // --- Infinite Cookie Logic (10 Years) ---
+        function setCookie(name, value) { document.cookie = `${name}=${value}; max-age=315360000; path=/`; }
+        function getCookie(name) {
+            let match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+            if (match) return match[2]; return "";
+        }
+
+        window.onload = () => {
+            document.getElementById('uName').value = getCookie('q_name');
+            document.getElementById('uEmail').value = getCookie('q_email');
+            document.getElementById('uTg').value = getCookie('q_tg');
+            document.getElementById('dashEmail').value = getCookie('q_email');
+        };
+
+        function selectPlan(planKey) {
+            selectedPlan = planKey;
+            const modalOverlay = document.getElementById('userModal');
+            modalOverlay.style.display = 'flex';
+            setTimeout(() => modalOverlay.classList.add('show'), 10);
+        }
+
+        function closeModal() {
+            const modalOverlay = document.getElementById('userModal');
+            modalOverlay.classList.remove('show');
+            setTimeout(() => modalOverlay.style.display = 'none', 300);
+        }
+
+        function setBtnLoading(isLoading) {
+            const text = document.getElementById('payText');
+            const loader = document.getElementById('payLoader');
+            const btn = document.getElementById('payBtn');
+            if(isLoading) { text.style.display = 'none'; loader.style.display = 'block'; btn.disabled = true; } 
+            else { text.style.display = 'block'; loader.style.display = 'none'; btn.disabled = false; }
+        }
+
+        async function initiatePayment() {
+            const name = document.getElementById('uName').value.trim();
+            const email = document.getElementById('uEmail').value.trim();
+            const tg = document.getElementById('uTg').value.trim();
+            
+            if(!name || !email || !tg) return showToast("Please fill all security details.", "error");
+            
+            setCookie('q_name', name); setCookie('q_email', email); setCookie('q_tg', tg);
+            setBtnLoading(true);
+
+            try {
+                // 1. Create Order
+                const orderRes = await fetch('/api/payment/create', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ plan: selectedPlan, email: email })
+                });
+                const orderData = await orderRes.json();
+                
+                if(orderData.status !== "success") throw new Error(orderData.detail);
+
+                // 2. Razorpay Options
+                const options = {
+                    "key": orderData.key_id,
+                    "amount": orderData.amount,
+                    "currency": "INR",
+                    "name": "Qlynk Enterprise",
+                    "description": `${selectedPlan.toUpperCase()} Node Access`,
+                    "image": "https://qlynk.vercel.app/quicklink-logo.svg",
+                    "order_id": orderData.order_id,
+                    "handler": async function (response) {
+                        // 3. Verify Payment
+                        document.querySelector('.modal').innerHTML = `<div style="text-align:center; padding:30px 0;"><div class="loader" style="display:inline-block; width:40px; height:40px; border-width:4px; margin-bottom:20px;"></div><h2 style="color:var(--success)">Verifying Crypto Signature...</h2><p style="color:#8b949e; margin-top:10px;">Establishing secure token. Do not close.</p></div>`;
+                        
+                        const verifyRes = await fetch('/api/payment/verify', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                razorpay_payment_id: response.razorpay_payment_id,
+                                razorpay_order_id: response.razorpay_order_id,
+                                razorpay_signature: response.razorpay_signature,
+                                plan: selectedPlan, name: name, email: email, tg: tg
+                            })
+                        });
+                        
+                        const verifyData = await verifyRes.json();
+                        if(verifyData.status === "success") {
+                            const link = window.location.origin + `/view?token=${verifyData.token}`;
+                            showToast("Payment Verified Successfully!");
+                            document.querySelector('.modal').innerHTML = `
+                                <div style="text-align:center;">
+                                    <svg style="width:60px; fill:var(--success); margin-bottom:15px;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                                    <h2 style="color:#fff; margin-bottom:10px;">Access Granted!</h2>
+                                    <p style="margin-bottom:25px; font-size:14px; color:#8b949e;">Your dedicated node token is ready. Receipt sent via bot.</p>
+                                    
+                                    <div style="background:#000; border:1px solid var(--border); padding:15px; border-radius:10px; margin-bottom:20px;">
+                                        <code style="color:var(--accent); word-break:break-all;">${link}</code>
+                                    </div>
+
+                                    <div style="display:flex; gap:15px; flex-direction:column;">
+                                        <button class="btn-pay premium" onclick="navigator.clipboard.writeText('${link}'); showToast('Token Link Copied!');">Copy Link to Clipboard</button>
+                                        <a href="${verifyData.receipt_url}" target="_blank" style="text-decoration:none;"><button class="btn-pay" style="background:#30363d;">Download PDF Receipt</button></a>
+                                    </div>
+                                    <button class="btn-dash" style="width:100%; margin-top:20px; border:none; color:#8b949e;" onclick="location.reload()">Return Home</button>
+                                </div>
+                            `;
+                        } else { throw new Error("Cryptographic Verification Failed"); }
+                    },
+                    "modal": {
+                        "ondismiss": async function() {
+                            closeModal();
+                            setBtnLoading(false);
+                            showToast("Transaction Aborted", "error");
+                            fetch('/api/payment/verify', {
+                                method: 'POST', headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ cancel: true, order_id: orderData.order_id, plan: selectedPlan, name: name, email: email, tg: tg })
+                            });
+                        }
+                    },
+                    "prefill": { "name": name, "email": email, "contact": tg },
+                    "theme": { "color": "#bc8cff" }
+                };
+                
+                const rzp1 = new Razorpay(options);
+                rzp1.open();
+                
+            } catch(e) {
+                showToast(e.message || "Network Error. Please try again.", "error");
+                setBtnLoading(false);
+            }
+        }
+
+        // --- Dashboard Logic ---
+        function openDashboard() {
+            document.getElementById('pricingSection').style.display = 'none';
+            document.getElementById('dashboardSection').style.display = 'block';
+        }
+        function closeDashboard() {
+            document.getElementById('dashboardSection').style.display = 'none';
+            document.getElementById('pricingSection').style.display = 'grid';
+        }
+        
+        async function fetchHistory() {
+            const email = document.getElementById('dashEmail').value.trim();
+            if(!email) return showToast("Enter your registered email.", "error");
+            
+            setCookie('q_email', email);
+            const listDiv = document.getElementById('historyList');
+            listDiv.innerHTML = `<div style="text-align:center; padding:40px;"><div class="loader" style="display:inline-block; border-color:var(--border); border-top-color:var(--accent);"></div></div>`;
+            
+            try {
+                const res = await fetch(`/api/user/history?email=${encodeURIComponent(email)}`);
+                const data = await res.json();
+                
+                if(data.history.length === 0) {
+                    listDiv.innerHTML = "<p style='color:#8b949e; text-align:center; padding:40px; background:var(--card); border-radius:10px;'>No purchase history found for this email.</p>"; return;
+                }
+                
+                listDiv.innerHTML = data.history.reverse().slice(0, 5).map(h => {
+                    const isActive = h.status === 'success' && new Date(h.expires_at) > new Date();
+                    const styleClass = isActive ? 't-active' : 't-expired';
+                    const statusText = isActive ? `<span style="color:var(--success); font-weight:600; font-size:12px;">● Active until ${h.expires_at.substring(0,10)}</span>` : `<span style="color:#8b949e; font-size:12px;">Expired</span>`;
+                    
+                    return `
+                        <div class="token-card ${styleClass}">
+                            <div>
+                                <div style="font-weight:800; font-size:18px; margin-bottom:5px; color:#fff;">${h.plan_name.toUpperCase()} <span style="font-weight:400; color:#8b949e; font-size:14px;">- ₹${h.amount}</span></div>
+                                <div style="font-size:12px; color:#8b949e; margin-bottom:8px;">Ord: ${h.order_id.substring(0,12)}... • ${h.date.substring(0,10)}</div>
+                                ${statusText}
+                            </div>
+                            <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end;">
+                                ${isActive ? `<button class="btn-pay premium" style="padding:8px 15px; font-size:12px;" onclick="navigator.clipboard.writeText('${window.location.origin}/view?token=${h.token}'); showToast('Token Copied!')">Copy Link</button>` : ''}
+                                ${h.receipt_url ? `<a href="${h.receipt_url}" target="_blank" style="color:var(--accent); font-size:12px; text-decoration:none; font-weight:600;">Download PDF</a>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch(e) { 
+                showToast("Error fetching database.", "error");
+                listDiv.innerHTML = "";
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+# --- API ROUTES ---
+@app.get("/checkout", response_class=HTMLResponse)
+async def serve_checkout_page():
+    return HTMLResponse(content=CHECKOUT_UI_HTML)
+
+class CreateOrderReq(BaseModel):
+    plan: str
+    email: str
+
+@app.post("/api/payment/create")
+async def create_rzp_order(req: CreateOrderReq, request: Request):
+    # Security: IP Rate Limiting check
+    client_ip = request.client.host
+    if not check_rate_limit(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests. Anti-Spam protection active.")
+        
+    if not rzp_client: raise HTTPException(status_code=500, detail="Razorpay Gateway offline.")
+    if req.plan not in PLANS: raise HTTPException(status_code=400, detail="Invalid Plan Signature.")
+    
+    amount = PLANS[req.plan]["price_inr"] * 100 
+    try:
+        order = rzp_client.order.create({
+            "amount": amount, "currency": "INR", "payment_capture": "1",
+            "notes": {"email": req.email, "plan": req.plan, "ip": client_ip}
+        })
+        return {"status": "success", "order_id": order["id"], "amount": amount, "key_id": RZP_KEY}
+    except Exception as e:
+        logger.error(f"Order Gateway Error: {e}")
+        raise HTTPException(status_code=500, detail="Could not mount payment order.")
+
+class VerifyPaymentReq(BaseModel):
+    cancel: bool = False
+    order_id: str = None
+    razorpay_payment_id: str = None
+    razorpay_order_id: str = None
+    razorpay_signature: str = None
+    plan: str
+    name: str
+    email: str
+    tg: str
+
+@app.post("/api/payment/verify")
+async def verify_rzp_payment(req: VerifyPaymentReq, request: Request):
+    email_slug = re.sub(r'[^a-zA-Z0-9]', '_', req.email.lower())
+    user_db = get_user_db(email_slug)
+    
+    # Update Profile Identity
+    user_db["profile"]["name"] = req.name
+    user_db["profile"]["email"] = req.email
+    user_db["profile"]["tg"] = req.tg
+    user_db["profile"]["last_ip"] = request.client.host
+    
+    current_time_iso = datetime.utcnow().isoformat() + "Z"
+    
+    # 1. Handle Canceled/Failed Payments
+    if req.cancel:
+        receipt_data = {
+            "order_id": req.order_id, "date": current_time_iso, "status": "cancelled",
+            "name": req.name, "email": req.email, "tg_contact": req.tg,
+            "plan_name": PLANS[req.plan]["name"], "amount": PLANS[req.plan]["price_inr"],
+            "reason": "User abandoned secure checkout."
+        }
+        pdf_path = generate_receipt_pdf(receipt_data)
+        hf_pdf_path = f"users/{email_slug}/receipts/cancel_{req.order_id}.pdf"
+        api.upload_file(path_or_fileobj=pdf_path, path_in_repo=hf_pdf_path, repo_id=DATASET_REPO, repo_type="dataset")
+        
+        receipt_data["receipt_url"] = f"https://huggingface.co/datasets/{DATASET_REPO}/resolve/main/{hf_pdf_path}"
+        user_db["history"].append(receipt_data)
+        save_user_db(email_slug, user_db)
+        
+        # Bot remarketing
+        await send_tg_receipt(req.tg, f"❌ Oops! Your Qlynk {PLANS[req.plan]['name']} checkout was cancelled. If you changed your mind, you can re-initiate anytime at {STATIC_DOMAIN}/checkout.", pdf_path)
+        return {"status": "cancelled"}
+
+    # 2. Verify Successful Cryptographic Signature
+    try:
+        rzp_client.utility.verify_payment_signature({
+            'razorpay_order_id': req.razorpay_order_id,
+            'razorpay_payment_id': req.razorpay_payment_id,
+            'razorpay_signature': req.razorpay_signature
+        })
+    except razorpay.errors.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Cryptographic Signature Failed. Hack attempt logged.")
+
+    # 3. Generate Dedicated Token
+    plan_days = PLANS[req.plan]["days"]
+    new_token = uuid.uuid4().hex
+    expiry_time = time.time() + (plan_days * 86400)
+    
+    token_db = get_tokens_db()
+    token_db["tokens"][new_token] = {
+        "expires_at": expiry_time, "status": "active", "created_at": current_time_iso, "email": req.email
+    }
+    save_tokens_db(token_db)
+    
+    # 4. Generate Success Invoice PDF
+    receipt_data = {
+        "order_id": req.razorpay_order_id, "date": current_time_iso, "status": "success",
+        "name": req.name, "email": req.email, "tg_contact": req.tg,
+        "plan_name": PLANS[req.plan]["name"], "amount": PLANS[req.plan]["price_inr"],
+        "token": new_token, "expires_at": datetime.fromtimestamp(expiry_time).isoformat() + "Z"
+    }
+    pdf_path = generate_receipt_pdf(receipt_data)
+    hf_pdf_path = f"users/{email_slug}/receipts/success_{req.razorpay_order_id}.pdf"
+    
+    api.upload_file(path_or_fileobj=pdf_path, path_in_repo=hf_pdf_path, repo_id=DATASET_REPO, repo_type="dataset")
+    
+    receipt_data["receipt_url"] = f"https://huggingface.co/datasets/{DATASET_REPO}/resolve/main/{hf_pdf_path}"
+    user_db["history"].append(receipt_data)
+    save_user_db(email_slug, user_db)
+    
+    # 5. Enterprise Telegram Alert
+    msg = f"🎉 **Payment Authorized & Verified!**\n\nPlan: {PLANS[req.plan]['name']}\nAmount: ₹{PLANS[req.plan]['price_inr']}\n\nHere is your secure access link:\n{STATIC_DOMAIN}/view?token={new_token}\n\nOfficial PDF Receipt is attached."
+    await send_tg_receipt(req.tg, msg, pdf_path)
+    
+    return {"status": "success", "token": new_token, "receipt_url": receipt_data["receipt_url"]}
+
+@app.get("/api/user/history")
+async def get_user_history(email: str):
+    email_slug = re.sub(r'[^a-zA-Z0-9]', '_', email.lower())
+    db = get_user_db(email_slug)
+    return {"history": db.get("history", [])}            
