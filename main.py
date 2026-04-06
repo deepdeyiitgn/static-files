@@ -189,25 +189,21 @@ async def get_progress(task_id: str):
         status = data.get("status", "")
         
         # Smart Status Mapping for Frontend
-        if status == "done":
-            return {"progress": 100.0}
-        elif status == "uploading_to_hf":
-            return {"progress": 99.0} # Fake 99% while sending to Vault
-        elif status == "processing_media":
-            return {"progress": 95.0} # Processing MKV/FFmpeg
+        if status == "error": return {"progress": 100.0, "status": "fallback"} # Fake 100% to safely close loader
+        if status == "done": return {"progress": 100.0, "status": "success"}
+        if status == "uploading_to_hf": return {"progress": 99.0, "status": "syncing"}
+        if status == "processing_media": return {"progress": 95.0, "status": "optimizing"}
             
         total = data.get("total", 0)
         loaded = data.get("loaded", 0)
         if total > 0:
-            # Max 90% in downloading, rest for processing/uploading
             prog = round((loaded / total) * 90, 2)
-            return {"progress": prog}
+            return {"progress": prog, "status": "downloading"}
             
-        return {"progress": 5.0} # Initializing state
+        return {"progress": 5.0, "status": "initializing"}
         
     # 2. Fallback to Local File Upload Tracker
-    return {"progress": progress_store.get(task_id, 0.0)}
-
+    return {"progress": progress_store.get(task_id, 0.0), "status": "uploading"}
 # ==========================================
 # 5. CORE REST APIs (THE MEGA SYSTEM)
 # ==========================================
@@ -353,16 +349,16 @@ async def process_advanced_upload(
 
                 # 🌟 THE DATACENTER BYPASS ENGINE 🌟
                 # 🌟 THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix) 🌟
+# 🌟 THE PURE TERMINAL ENGINE (IPv4 Datacenter Fix) 🌟
                 ydl_opts = {
                     'outtmpl': f'/tmp/{final_slug}_media.%(ext)s',
                     'progress_hooks': [ytdl_progress_hook],
                     'quiet': True,
                     'no_warnings': True,
                     'nocheckcertificate': True,
-                    'socket_timeout': 60,
-                    'force_ipv4': True,  # 👈 YEH RAKHNA HAI (HF ke IPv6 ban hote hain)
+                    'socket_timeout': 15,  # 👈 REDUCED TO 15s so it fails faster if blocked
+                    'force_ipv4': True,  
                     'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
-                    # ❌ Yahan se 'extractor_args' (Smart TV wali line) HATA DI HAI!
                 }
 
                 progress_store[final_slug] = 0
@@ -387,16 +383,22 @@ async def process_advanced_upload(
                 elif media_format == "yt_video":
                     ydl_opts['format'] = 'bestvideo+bestaudio/best'
                     ydl_opts['merge_output_format'] = 'mp4'
-                else:
-                    # yt_default: Terminal jaisa same behave karega
-                    pass
 
                 def download_yt():
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(link_url, download=True)
                         return info.get('thumbnail'), info.get('title')
                 
-                extracted_thumb, extracted_title = await asyncio.to_thread(download_yt)
+                try:
+                    # 🚀 THE 25-SECOND FIREWALL: Agar YT-DLP hang hua, toh 25s mein kill karke aage badho!
+                    extracted_thumb, extracted_title = await asyncio.wait_for(
+                        asyncio.to_thread(download_yt), 
+                        timeout=25.0
+                    )
+                except asyncio.TimeoutError:
+                    # Connection tootne se pehle deliberately error throw karo
+                    raise Exception("YT-DLP Timeout: Server took too long, forcing 308 fallback.")
+
                 if extracted_title and not title:
                     title = extracted_title
                 
