@@ -3169,7 +3169,8 @@ def check_target_chat(message):
 # --- COMMAND: /start ---
 @tg_app.on_message(filters.command("start"))
 async def start_cmd(client, message):
-    if not check_target_chat(message): return
+    # DHYAN DE: Yahan se 'check_target_chat' wali line hata di gayi hai
+    # Taki sabko tera branding message aur buttons dikhein!
     
     keyboard = [
         [InlineKeyboardButton("💻 Source Code", url="https://huggingface.co/spaces/deydeep/static-files/")],
@@ -3183,9 +3184,11 @@ async def start_cmd(client, message):
         "👋 **Welcome to Qlynk Node Master!**\n\n"
         "I am the advanced remote control for your secure file hosting datacenter engineered by **Deep Dey**.\n\n"
         "To unlock my full potential (Uploads, Auto-Search, Batch Uploads), please verify your identity using:\n"
-        "👉 `/verify`"
+        "👉 `/verify`\n\n"
+        "🎧 **Need Help or waiting for a Premium Receipt?**\n"
+        "Type 👉 `/support`"
     )
-    await message.reply_text(welcome_text, reply_markup=reply_markup)
+    await message.reply_text(welcome_text, reply_markup=reply_markup, disable_web_page_preview=True)
 
 # --- COMMAND: /verify ---
 @tg_app.on_message(filters.command("verify"))
@@ -4110,9 +4113,15 @@ CHECKOUT_UI_HTML = """
                 <input type="email" id="uEmail" placeholder="deep@example.com">
             </div>
             <div class="input-group">
-                <label>Telegram / Phone</label>
+                <label>Telegram Username (Start Bot First)</label>
                 <svg class="input-icon" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
-                <input type="text" id="uTg" placeholder="@username or +91...">
+                <input type="text" id="uTg" placeholder="@username">
+            </div>
+            
+            <div style="text-align:center; margin-bottom:15px;">
+                <a href="https://t.me/qlynknode_bot?start=xyz" target="_blank" style="color:var(--accent); font-size:12px; text-decoration:none; font-weight:800; background:rgba(188, 140, 255, 0.1); padding:8px 15px; border-radius:20px; border:1px solid var(--accent);">
+                    🤖 Click here to Start Bot before paying!
+                </a>
             </div>
             
             <button class="btn-pay premium" id="payBtn" onclick="initiatePayment()">
@@ -4665,9 +4674,9 @@ def save_ticket_history(email_slug, ticket_id, history, status="closed"):
     except Exception as e: logger.error(f"Failed to save ticket: {e}")
 
 # --- 1. SUPPORT INITIATOR ---
+# --- 1. SUPPORT INITIATOR ---
 @tg_app.on_message(filters.command("support"))
 async def support_cmd(client, message):
-    if not check_target_chat(message): return
     user_id = message.from_user.id
     
     if user_id in support_states:
