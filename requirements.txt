@@ -13,3 +13,6 @@ psutil
 websockets
 pyrogram
 tgcrypto
+razorpay
+fpdf2
+httpx
