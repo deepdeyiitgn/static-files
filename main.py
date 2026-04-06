@@ -472,27 +472,25 @@ async def process_advanced_upload(
                 filename = f"YouTube_{yt_id}"
                 extracted_thumb = f"https://img.youtube.com/vi/{yt_id}/maxresdefault.jpg"
                 
-                # --- ACTUAL TITLE FETCH (OEmbed API) ---
+                # Try to get Actual YouTube Title
                 if not title:
                     try:
-                        # YouTube OEmbed is server-friendly and usually not blocked
                         oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={yt_id}&format=json"
                         async with aiohttp.ClientSession() as session:
                             async with session.get(oembed_url, timeout=5) as resp:
                                 if resp.status == 200:
                                     o_json = await resp.json()
                                     title = o_json.get("title")
-                                    logger.info(f"✅ Actual YouTube title fetched: {title}")
-                    except Exception as title_err:
-                        logger.warning(f"Metadata fetch failed, using fallback: {title_err}")
+                    except: pass
                 
-                # Placeholder if OEmbed also fails
+                # Fallback if YouTube OEmbed fails
                 if not title: title = f"YouTube Video [{yt_id}]"
             else:
-                # 🔗 NON-YOUTUBE LINKS: Use raw link as title so you can identify it
+                # 🔗 IDENTICAL/UNIDENTICAL NON-YOUTUBE LINKS
                 filename = "External_Resource"
+                # User's specific format: EXTERNAL_URL[LINK HERE]
                 if not title: 
-                    title = link_url # Direct link as title for other sites
+                    title = f"EXTERNAL_URL[{link_url}]"
                 
             url_progress_tracker[tracker_id]["status"] = "error"
 
