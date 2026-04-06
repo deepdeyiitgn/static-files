@@ -183,8 +183,30 @@ def progress_hook(d):
 
 @app.get("/api/progress/{task_id}")
 async def get_progress(task_id: str):
-    # Task ID (Slug) ke base par progress return karega
-    return {"progress": progress_store.get(task_id, 0)}
+    # 1. Check URL Progress Tracker (For YT-DLP & Direct Links)
+    if task_id in url_progress_tracker:
+        data = url_progress_tracker[task_id]
+        status = data.get("status", "")
+        
+        # Smart Status Mapping for Frontend
+        if status == "done":
+            return {"progress": 100.0}
+        elif status == "uploading_to_hf":
+            return {"progress": 99.0} # Fake 99% while sending to Vault
+        elif status == "processing_media":
+            return {"progress": 95.0} # Processing MKV/FFmpeg
+            
+        total = data.get("total", 0)
+        loaded = data.get("loaded", 0)
+        if total > 0:
+            # Max 90% in downloading, rest for processing/uploading
+            prog = round((loaded / total) * 90, 2)
+            return {"progress": prog}
+            
+        return {"progress": 5.0} # Initializing state
+        
+    # 2. Fallback to Local File Upload Tracker
+    return {"progress": progress_store.get(task_id, 0.0)}
 
 # ==========================================
 # 5. CORE REST APIs (THE MEGA SYSTEM)
