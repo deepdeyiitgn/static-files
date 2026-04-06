@@ -327,6 +327,19 @@
             font-size: 0.9rem;
         }
 
+/* Premium Checkout Button */
+        .btn-checkout {
+            background: linear-gradient(45deg, #bc8cff, #58a6ff);
+            color: #000 !important;
+            border: none;
+            font-weight: 800;
+            transition: all 0.3s ease;
+        }
+        .btn-checkout:hover {
+            box-shadow: 0 5px 20px rgba(188, 140, 255, 0.4);
+            transform: translateY(-2px);
+        }      
+
         /* ------------------------------------------- */
         /* FORMS & INPUTS                              */
         /* ------------------------------------------- */
@@ -1250,6 +1263,14 @@ response = requests.post(
             <button class="btn btn-outline" style="width: 100%; padding: 1rem; margin-top: 1rem;" onclick="closeLoginModal()">
                 Cancel
             </button>
+
+            <div style="margin: 2rem 0; border-top: 1px dashed var(--border); position: relative;">
+                <span style="position: absolute; top: -12px; left: 50%; transform: translateX(-50%); background: var(--bg-card); padding: 0 15px; color: var(--text-muted); font-size: 0.85rem; font-weight: 600;">FOR GUESTS</span>
+            </div>
+            
+            <a href="/checkout" class="btn btn-checkout" style="width: 100%; padding: 1.2rem; font-size: 1.1rem; text-decoration: none; display: flex; justify-content: center; align-items: center; gap: 10px;">
+                <i class="fa-solid fa-crown"></i> Get Qlynk Tube Access
+            </a>
         </div>
     </div>
 
