@@ -3829,8 +3829,13 @@ PLANS = {
     "ultra": {"name": "Ultra", "price_inr": 299, "days": 7, "desc": "7 Days Premium Access"}
 }
 
-# --- Razorpay Setup ---
+# --- Razorpay Setup & Feature Toggle ---
+CHECKOUT_TOGGLE = os.environ.get("CHECKOUT_TOGGLE")
 RZP_KEY = os.environ.get("RAZORPAY_KEY_ID")
+
+def is_checkout_enabled():
+    # Check if toggle exists and matches the SPACE_PASSWORD
+    return CHECKOUT_TOGGLE and SPACE_PASSWORD and CHECKOUT_TOGGLE == SPACE_PASSWORD
 RZP_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
 rzp_client = razorpay.Client(auth=(RZP_KEY, RZP_SECRET)) if RZP_KEY and RZP_SECRET else None
 
@@ -4345,6 +4350,11 @@ CHECKOUT_UI_HTML = """
 # --- API ROUTES ---
 @app.get("/checkout", response_class=HTMLResponse)
 async def serve_checkout_page():
+    if not is_checkout_enabled():
+        return HTMLResponse(
+            content="<body style='background:#050505; color:#8b949e; font-family:sans-serif; text-align:center; padding-top:100px;'><h2>🔒 Commercial Features are Disabled</h2><p>This node is operating in free/personal mode.</p></body>", 
+            status_code=403
+        )
     return HTMLResponse(content=CHECKOUT_UI_HTML)
 
 class CreateOrderReq(BaseModel):
@@ -4353,6 +4363,8 @@ class CreateOrderReq(BaseModel):
 
 @app.post("/api/payment/create")
 async def create_rzp_order(req: CreateOrderReq, request: Request):
+    if not is_checkout_enabled(): 
+        raise HTTPException(status_code=403, detail="Checkout feature is disabled on this node.")
     # Security: IP Rate Limiting check
     client_ip = request.client.host
     if not check_rate_limit(client_ip):
@@ -4385,6 +4397,8 @@ class VerifyPaymentReq(BaseModel):
 
 @app.post("/api/payment/verify")
 async def verify_rzp_payment(req: VerifyPaymentReq, request: Request):
+    if not is_checkout_enabled(): 
+        raise HTTPException(status_code=403, detail="Checkout feature is disabled on this node.")
     email_slug = re.sub(r'[^a-zA-Z0-9]', '_', req.email.lower())
     user_db = get_user_db(email_slug)
     
