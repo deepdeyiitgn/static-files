@@ -1593,8 +1593,23 @@ import re
 from datetime import datetime
 from huggingface_hub import hf_hub_download
 
-# --- 🧠 In-Memory Token Store & Subtitle DB Managers ---
-share_tokens_store = {} 
+# --- 🧠 Persistent Token Store & Subtitle DB Managers ---
+
+# Database loader for Share Tokens
+def get_tokens_db() -> Dict[str, Any]:
+    try:
+        file_path = hf_hub_download(repo_id=DATASET_REPO, filename="share_tokens.json", repo_type="dataset", token=HF_TOKEN)
+        with open(file_path, "r") as f:
+            return json.load(f)
+    except Exception:
+        # Agar pehli baar run ho raha hai, toh empty structure return karo
+        return {"tokens": {}}
+
+# Database saver for Share Tokens
+def save_tokens_db(db_data: Dict[str, Any]):
+    with open("share_tokens.json", "w") as f:
+        json.dump(db_data, f, indent=4)
+    api.upload_file(path_or_fileobj="share_tokens.json", path_in_repo="share_tokens.json", repo_id=DATASET_REPO, repo_type="dataset")
 
 def get_sub_db() -> Dict[str, Any]:
     try:
@@ -1609,24 +1624,48 @@ def save_sub_db(db_data: Dict[str, Any]):
         json.dump(db_data, f, indent=4)
     api.upload_file(path_or_fileobj="history_subtitle.json", path_in_repo="history_subtitle.json", repo_id=DATASET_REPO, repo_type="dataset")
 
-# --- 🔒 Dual-Auth Verifier ---
+# --- 🔒 Dual-Auth Verifier (Persistent) ---
 def verify_view_access(password: str = Header(None), auth_token: str = Cookie(None), share_token: str = Cookie(None)):
     admin_token = password or auth_token
     if admin_token and admin_token == SPACE_PASSWORD:
         return {"role": "admin"}
+        
     if share_token:
-        expiry = share_tokens_store.get(share_token)
-        if expiry and time.time() < expiry:
-            return {"role": "guest"}
-        elif expiry:
-            del share_tokens_store[share_token] 
+        db = get_tokens_db()
+        token_data = db["tokens"].get(share_token)
+        
+        if token_data:
+            current_time = time.time()
+            
+            # Check if token is still within its 24-hour window
+            if current_time < token_data["expires_at"]:
+                # Agar active nahi mark kiya hai ti active kar do
+                if token_data.get("status") != "active":
+                    token_data["status"] = "active"
+                    save_tokens_db(db)
+                return {"role": "guest"}
+            else:
+                # Token ka time khtam ho gaya hai, isko permanently 'expired' mark karo (delete nahi)
+                if token_data.get("status") != "expired":
+                    token_data["status"] = "expired"
+                    save_tokens_db(db)
+                    
     raise HTTPException(status_code=401, detail="Access Expired or Denied.")
 
-# --- 🔗 Share Token API ---
+# --- 🔗 Share Token API (Persistent) ---
 @app.post("/api/share/generate")
 async def generate_share_token(token: str = Depends(verify_auth)):
     new_token = uuid.uuid4().hex
-    share_tokens_store[new_token] = time.time() + 86400  # 24 Hours expiry
+    
+    db = get_tokens_db()
+    # 86400 seconds = 24 Hours TTL
+    db["tokens"][new_token] = {
+        "expires_at": time.time() + 86400,
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+    save_tokens_db(db)
+    
     return {"status": "success", "share_token": new_token}
 
 # --- 📁 Media Library API ---
