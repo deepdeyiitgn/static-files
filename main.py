@@ -4635,3 +4635,215 @@ async def serve_refund_page():
 # ==========================================
 # END OF FILE
 # ==========================================
+
+# ==========================================
+# 16. ISOLATED AI HELPDESK & SUPPORT SYSTEM
+# ==========================================
+from pyrogram import StopPropagation, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+import json
+import re
+from datetime import datetime
+from huggingface_hub import hf_hub_download
+
+# --- Support Globals ---
+support_states = {} # Track users in support flow
+active_tickets = {} # Track active tickets
+owner_chat_state = {} # Track admin's current support action
+
+def get_faq_db():
+    try:
+        path = hf_hub_download(repo_id=DATASET_REPO, filename="support_faq.json", repo_type="dataset", token=HF_TOKEN)
+        with open(path, "r") as f: return json.load(f)
+    except: return {"faqs": []} # Fallback if JSON doesn't exist yet
+
+def save_ticket_history(email_slug, ticket_id, history, status="closed"):
+    try:
+        user_db = get_user_db(email_slug)
+        user_db.setdefault("tickets", []).append({"ticket_id": ticket_id, "status": status, "closed_at": datetime.utcnow().isoformat() + "Z", "history": history})
+        save_user_db(email_slug, user_db)
+    except Exception as e: logger.error(f"Failed to save ticket: {e}")
+
+# --- 1. SUPPORT INITIATOR ---
+@tg_app.on_message(filters.command("support"))
+async def support_cmd(client, message):
+    if not check_target_chat(message): return
+    user_id = message.from_user.id
+    
+    if user_id in support_states:
+        await message.reply_text("⚠️ You are already in a support session. Type your query or /cancel.")
+        return
+        
+    support_states[user_id] = {"step": "email"}
+    await message.reply_text("🎧 **Qlynk Auto-Support System**\n\nPlease enter your **Registered Email ID** to verify your account:")
+
+# --- 2. ADMIN CLOSE COMMAND ---
+@tg_app.on_message(filters.command("close"))
+async def close_ticket_cmd(client, message):
+    owner_id = message.from_user.id
+    if not is_auth(owner_id): return
+    
+    if len(message.command) < 2:
+        return await message.reply_text("⚠️ Syntax: `/close [ticket_id]`\nExample: `/close TCK-1A2B3C`")
+        
+    ticket_id = message.command[1].strip()
+    if ticket_id not in active_tickets:
+        return await message.reply_text("❌ Ticket not found or already closed.")
+        
+    t_data = active_tickets[ticket_id]
+    
+    save_ticket_history(t_data["email_slug"], ticket_id, t_data["history"], "closed_by_admin")
+    
+    try: await client.send_message(t_data["user_id"], f"🔒 **Ticket {ticket_id} has been closed by the Admin.**\nAll chat logs have been secured in your vault. Thank you!")
+    except: pass
+    
+    if t_data["user_id"] in support_states: del support_states[t_data["user_id"]]
+    if owner_id in owner_chat_state: del owner_chat_state[owner_id]
+    del active_tickets[ticket_id]
+    
+    await message.reply_text(f"✅ **Ticket {ticket_id} Closed.**\nChat history permanently archived in the user's dataset folder.")
+
+# --- 3. THE SHIELD INTERCEPTOR (Group -1 runs before anything else) ---
+@tg_app.on_message((filters.text | filters.media | filters.document) & ~filters.command(["start", "verify", "logout", "batch", "connect", "index", "support", "close"]), group=-1)
+async def support_interceptor(client, message):
+    user_id = message.from_user.id
+    text_content = message.text or message.caption or ""
+    
+    # A. ADMIN ACTION ROUTING
+    if user_id in owner_chat_state:
+        state = owner_chat_state[user_id]
+        ticket_id = state["ticket_id"]
+        t_data = active_tickets.get(ticket_id)
+        
+        if t_data:
+            if state["action"] == "chatting":
+                if message.text: await client.send_message(t_data["user_id"], f"👨‍💻 **Admin:**\n{message.text}")
+                else: await client.copy_message(t_data["user_id"], message.chat.id, message.id, caption=f"👨‍💻 **Admin:**\n{message.caption or ''}")
+                t_data["history"].append({"sender": "admin", "text": message.text or "[Media Attached]"})
+                raise StopPropagation 
+                
+            elif state["action"] == "rejecting":
+                reason = message.text or "No specific reason provided."
+                await client.send_message(t_data["user_id"], f"❌ **Your support request was declined.**\n\n**Reason:** {reason}\n\n*Ticket {ticket_id} closed.*")
+                t_data["history"].append({"sender": "system", "text": f"Ticket Rejected. Reason: {reason}"})
+                save_ticket_history(t_data["email_slug"], ticket_id, t_data["history"], "rejected")
+                
+                del active_tickets[ticket_id]
+                del owner_chat_state[user_id]
+                if t_data["user_id"] in support_states: del support_states[t_data["user_id"]]
+                await message.reply_text(f"✅ Ticket {ticket_id} rejected and user notified.")
+                raise StopPropagation
+
+    # B. USER SUPPORT FLOW
+    if user_id in support_states:
+        state = support_states[user_id]
+        
+        if message.text and message.text.lower() == "/cancel":
+            del support_states[user_id]
+            await message.reply_text("❌ Support session cancelled.")
+            raise StopPropagation
+
+        if state["step"] == "email":
+            email = text_content.strip()
+            email_slug = re.sub(r'[^a-zA-Z0-9]', '_', email.lower())
+            state["email"] = email
+            state["email_slug"] = email_slug
+            state["step"] = "ai_bot"
+            await message.reply_text("🤖 **Account Verified. I am the Qlynk AI Assistant.**\n\nPlease describe your problem. I will try to solve it instantly!")
+            raise StopPropagation
+            
+        elif state["step"] == "ai_bot":
+            if not message.text:
+                await message.reply_text("I can only process text right now. Please describe your issue in words.")
+                raise StopPropagation
+                
+            query = message.text.lower()
+            state["last_query"] = message.text 
+            faq_db = get_faq_db()
+            found_answer = None
+            
+            for item in faq_db.get("faqs", []):
+                for kw in item.get("keywords", []):
+                    if kw in query:
+                        found_answer = item.get("answer")
+                        break
+                if found_answer: break
+                
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Yes, this solved it", callback_data="faq_solve")],
+                [InlineKeyboardButton("🗣️ No, Talk to a Human", callback_data="faq_human")]
+            ])
+            
+            if found_answer: await message.reply_text(f"💡 **Here is what I found:**\n\n{found_answer}", reply_markup=kb)
+            else: await message.reply_text("I couldn't find an automatic solution for that. Would you like me to connect you with our human support team?", reply_markup=kb)
+            raise StopPropagation
+            
+        elif state["step"] == "chatting":
+            ticket_id = state.get("ticket_id")
+            t_data = active_tickets.get(ticket_id)
+            if t_data:
+                t_data["history"].append({"sender": "user", "text": text_content})
+                admin_id = state.get("admin_id")
+                if admin_id:
+                    if message.text: await client.send_message(admin_id, f"👤 **User:**\n{message.text}")
+                    else: await client.copy_message(admin_id, message.chat.id, message.id, caption=f"👤 **User:**\n{message.caption or ''}")
+            raise StopPropagation
+
+# --- 4. ISOLATED CALLBACK BUTTONS (Only triggers for support buttons) ---
+@tg_app.on_callback_query(filters.regex(r"^(faq_|accept_|reject_)"), group=-1)
+async def support_button_handler(client, query: CallbackQuery):
+    data = query.data
+    user_id = query.from_user.id
+    
+    if data == "faq_solve":
+        if user_id in support_states: del support_states[user_id]
+        await query.message.edit_text("Awesome! Glad I could help. Support session closed. 🎉")
+        
+    elif data == "faq_human":
+        if user_id not in support_states: return
+        state = support_states[user_id]
+        
+        ticket_id = f"TCK-{uuid.uuid4().hex[:6].upper()}"
+        state["ticket_id"] = ticket_id
+        state["step"] = "waiting_admin"
+        
+        active_tickets[ticket_id] = {
+            "user_id": user_id, "email_slug": state["email_slug"], 
+            "history": [{"sender": "user", "text": state.get("last_query", "User requested human support.")}]
+        }
+        
+        await query.message.edit_text(f"🎫 **Ticket {ticket_id} Created!**\n\nForwarding your issue to the core team. Please hold on...")
+        
+        owners = get_tg_auth_db().get("authorized_users", [])
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Accept & Chat", callback_data=f"accept_{ticket_id}")],
+            [InlineKeyboardButton("❌ Reject Ticket", callback_data=f"reject_{ticket_id}")]
+        ])
+        for owner in owners:
+            try: await client.send_message(owner, f"🚨 **Human Support Required** | `{ticket_id}`\n👤 **User:** {state['email']}\n\n**Query:**\n{state.get('last_query')}", reply_markup=kb)
+            except: pass
+
+    elif data.startswith("accept_"):
+        ticket_id = data.split("_")[1]
+        if ticket_id not in active_tickets: return await query.answer("Ticket invalid or closed.", show_alert=True)
+        
+        t_data = active_tickets[ticket_id]
+        target_user = t_data["user_id"]
+        
+        support_states[target_user]["step"] = "chatting"
+        support_states[target_user]["admin_id"] = user_id
+        owner_chat_state[user_id] = {"action": "chatting", "ticket_id": ticket_id}
+        
+        await query.message.edit_text(query.message.text + f"\n\n🟢 **YOU ACCEPTED THIS TICKET.**\n(Type to chat. Use `/close {ticket_id}` to end.)")
+        try: await client.send_message(target_user, "👨‍💻 **An Admin has joined the chat.** How can I help you today?")
+        except: pass
+
+    elif data.startswith("reject_"):
+        ticket_id = data.split("_")[1]
+        if ticket_id not in active_tickets: return await query.answer("Ticket invalid.", show_alert=True)
+        
+        owner_chat_state[user_id] = {"action": "rejecting", "ticket_id": ticket_id}
+        await query.message.edit_text(query.message.text + f"\n\n🔴 **YOU ARE REJECTING THIS TICKET.**")
+        await client.send_message(user_id, f"Please type the reason for rejecting ticket `{ticket_id}`. (This will be sent directly to the user).")
+        
+    raise StopPropagation # Prevents these buttons from going to your other handlers
