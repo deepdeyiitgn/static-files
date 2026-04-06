@@ -463,7 +463,37 @@ async def process_advanced_upload(
             logger.warning(f"Backend URL fetch failed (Falling back to 308): {e}")
             is_external = True
             external_url = link_url
-            filename = "External_Media_Link"
+            
+            # 🚀 SMART METADATA RECOVERY
+            yt_id_match = re.search(r"(?:v=|\/|embed\/|shorts\/)([0-9A-Za-z_-]{11})", link_url)
+            
+            if yt_id_match:
+                yt_id = yt_id_match.group(1)
+                filename = f"YouTube_{yt_id}"
+                extracted_thumb = f"https://img.youtube.com/vi/{yt_id}/maxresdefault.jpg"
+                
+                # --- ACTUAL TITLE FETCH (OEmbed API) ---
+                if not title:
+                    try:
+                        # YouTube OEmbed is server-friendly and usually not blocked
+                        oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={yt_id}&format=json"
+                        async with aiohttp.ClientSession() as session:
+                            async with session.get(oembed_url, timeout=5) as resp:
+                                if resp.status == 200:
+                                    o_json = await resp.json()
+                                    title = o_json.get("title")
+                                    logger.info(f"✅ Actual YouTube title fetched: {title}")
+                    except Exception as title_err:
+                        logger.warning(f"Metadata fetch failed, using fallback: {title_err}")
+                
+                # Placeholder if OEmbed also fails
+                if not title: title = f"YouTube Video [{yt_id}]"
+            else:
+                # 🔗 NON-YOUTUBE LINKS: Use raw link as title so you can identify it
+                filename = "External_Resource"
+                if not title: 
+                    title = link_url # Direct link as title for other sites
+                
             url_progress_tracker[tracker_id]["status"] = "error"
 
     # ==========================================
