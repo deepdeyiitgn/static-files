@@ -356,7 +356,7 @@ async def process_advanced_upload(
                     'quiet': True,
                     'no_warnings': True,
                     'nocheckcertificate': True,
-                    'socket_timeout': 15,  # 👈 REDUCED TO 15s so it fails faster if blocked
+                    'socket_timeout': 25,  # 👈 REDUCED TO 15s so it fails faster if blocked
                     'force_ipv4': True,  
                     'cookiefile': 'cookies.txt' if os.path.exists('cookies.txt') else None
                 }
@@ -390,14 +390,13 @@ async def process_advanced_upload(
                         return info.get('thumbnail'), info.get('title')
                 
                 try:
-                    # 🚀 THE 25-SECOND FIREWALL: Agar YT-DLP hang hua, toh 25s mein kill karke aage badho!
-                    extracted_thumb, extracted_title = await asyncio.wait_for(
-                        asyncio.to_thread(download_yt), 
-                        timeout=25.0
-                    )
-                except asyncio.TimeoutError:
-                    # Connection tootne se pehle deliberately error throw karo
-                    raise Exception("YT-DLP Timeout: Server took too long, forcing 308 fallback.")
+                    # 🚀 THE SMART FIREWALL: 
+                    # Hard timeout hata diya. Ab yt-dlp ka internal 'socket_timeout' kaam karega.
+                    # Agar download chal raha hai, toh pura time lega. Agar HF block karega (hang hoga), toh 15s mein fallback chalega!
+                    extracted_thumb, extracted_title = await asyncio.to_thread(download_yt)
+                except Exception as e:
+                    # Connection block hone par exception aayegi aur turant 308 link save hoga
+                    raise Exception(f"YT-DLP Failed or Blocked (Moving to 308 Fallback): {e}")
 
                 if extracted_title and not title:
                     title = extracted_title
