@@ -836,7 +836,7 @@ async def generate_sitemap(request: Request):
         """)
         
         # 2. Social & Redirects (Priority 0.7)
-        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/status", "/clock"]
+        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/status", "/clock", "/terms", "/privacy", "/refund"]
         for link in social_links:
             urls.append(f"""
             <url>
@@ -2111,7 +2111,7 @@ MEDIA_TUBE_HTML = """
         async function init() {
             try {
                 const res = await fetch('/api/media_library');
-                if(res.status === 401) return document.getElementById('homeView').innerHTML = "<h2 style='color:var(--yt-muted); text-align:center; width:100%;'>🔒 ACCESS DENIED</h2>";
+                if(res.status === 401) return document.getElementById('homeView').innerHTML = "<div style='text-align:center; width:100%; margin-top:50px;'><h2 style='color:var(--yt-muted); margin-bottom:15px;'>🔒 ACCESS DENIED</h2><p style='color:#8b949e; margin-bottom:25px;'>You need an active token to view the cinematic vault.</p><a href='/checkout' style='display:inline-block; background:linear-gradient(45deg, #bc8cff, #58a6ff); color:#000; padding:12px 24px; border-radius:30px; text-decoration:none; font-weight:bold; transition:transform 0.2s;'>Get Premium Access</a></div>";
                 
                 if(isAdmin) {
                     document.getElementById('shareBtn').style.display = 'block';
@@ -4141,9 +4141,9 @@ CHECKOUT_UI_HTML = """
             <div><svg style="width:16px;fill:#58a6ff;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg> Razorpay Secure</div>
         </div>
         <div class="footer-links">
-            <a href="#">Terms of Service</a>
-            <a href="#">Privacy Policy</a>
-            <a href="#">Refund Policy</a>
+            <a href="/terms">Terms of Service</a>
+            <a href="/privacy">Privacy Policy</a>
+            <a href="/refund">Refund Policy</a>
         </div>
         <p style="margin-top:20px; font-size:12px; color:#4b5563;">&copy; 2026 Qlynk Architecture. All rights reserved.</p>
     </div>
@@ -4478,3 +4478,160 @@ async def get_user_history(email: str):
     email_slug = re.sub(r'[^a-zA-Z0-9]', '_', email.lower())
     db = get_user_db(email_slug)
     return {"history": db.get("history", [])}            
+
+# ==========================================
+# 15. LEGAL & COMPLIANCE PAGES (Dynamic Routing)
+# ==========================================
+
+# --- Premium Master HTML Template ---
+def generate_legal_page(title: str, content: str) -> str:
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Qlynk - {title}</title>
+        <link rel="icon" type="image/png" href="https://qlynk.vercel.app/quicklink-logo.png">
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+            :root {{ --bg: #050505; --card: rgba(22, 27, 34, 0.6); --accent: #bc8cff; --text: #e1e4e8; --text-muted: #8b949e; --border: #30363d; }}
+            * {{ box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }}
+            body {{ background: var(--bg); color: var(--text); background-image: radial-gradient(circle at top, #1a1a2e 0%, transparent 40%); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 20px; line-height: 1.6;}}
+            
+            .navbar {{ width: 100%; max-width: 900px; display: flex; justify-content: space-between; align-items: center; padding: 20px 0; border-bottom: 1px solid var(--border); margin-bottom: 40px; }}
+            .nav-brand {{ display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 800; color: #fff; text-decoration: none; }}
+            .nav-brand img {{ height: 30px; }}
+            .btn-back {{ background: #21262d; color: #fff; text-decoration: none; padding: 8px 16px; border-radius: 8px; font-size: 14px; font-weight: 600; border: 1px solid var(--border); transition: 0.3s; }}
+            .btn-back:hover {{ background: var(--accent); color: #000; border-color: var(--accent); }}
+            
+            .content-box {{ width: 100%; max-width: 900px; background: var(--card); backdrop-filter: blur(20px); border: 1px solid var(--border); padding: 50px; border-radius: 20px; margin-bottom: 50px; box-shadow: 0 20px 40px rgba(0,0,0,0.4); }}
+            
+            .page-title {{ font-size: 36px; font-weight: 800; margin-bottom: 10px; background: linear-gradient(90deg, #fff, var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }}
+            .last-updated {{ font-size: 13px; color: var(--text-muted); margin-bottom: 40px; border-bottom: 1px solid var(--border); padding-bottom: 20px; }}
+            
+            .legal-content h2 {{ font-size: 20px; color: #fff; margin: 30px 0 15px 0; }}
+            .legal-content p {{ color: var(--text-muted); margin-bottom: 15px; font-size: 15px; }}
+            .legal-content ul {{ color: var(--text-muted); margin-bottom: 15px; padding-left: 20px; font-size: 15px; }}
+            .legal-content li {{ margin-bottom: 8px; }}
+            .legal-content a {{ color: var(--accent); text-decoration: none; }}
+            .legal-content a:hover {{ text-decoration: underline; }}
+            
+            @media (max-width: 768px) {{ .content-box {{ padding: 30px 20px; }} .page-title {{ font-size: 28px; }} }}
+        </style>
+    </head>
+    <body>
+        <div class="navbar">
+            <a href="/" class="nav-brand">
+                <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk">
+                Qlynk Node
+            </a>
+            <a href="/checkout" class="btn-back">Return to Checkout</a>
+        </div>
+        
+        <div class="content-box">
+            <h1 class="page-title">{title}</h1>
+            <div class="last-updated">Last Updated: April 2026 | Governing Authority: Qlynk Architecture</div>
+            <div class="legal-content">
+                {content}
+            </div>
+        </div>
+        
+        <div style="text-align:center; color:var(--text-muted); font-size:12px; margin-bottom:20px;">
+            &copy; 2026 Qlynk Architecture. Engineered by Deep Dey. All rights reserved.
+        </div>
+    </body>
+    </html>
+    """
+
+# --- 1. Terms of Service Content ---
+TERMS_CONTENT = """
+<h2>1. Acceptance of Terms</h2>
+<p>By accessing and using the Qlynk Node ecosystem, including the Secure File Vault and Qlynk Tube streaming capabilities, you agree to comply with and be bound by these Terms of Service. If you do not agree to these terms, please do not use our services.</p>
+
+<h2>2. Service Description & Access</h2>
+<p>Qlynk provides enterprise-grade, decentralized file hosting and media streaming utilizing Hugging Face Datasets infrastructure. Access to premium bandwidth, high-definition streaming, and dedicated node tokens requires a valid commercial pass obtained via our secure checkout.</p>
+<ul>
+    <li>Tokens are generated per user and are strictly non-transferable.</li>
+    <li>We reserve the right to modify or discontinue any part of the service with or without notice.</li>
+</ul>
+
+<h2>3. User Conduct & Acceptable Use</h2>
+<p>You agree not to use the Qlynk infrastructure for any unlawful purpose. The following activities are strictly prohibited:</p>
+<ul>
+    <li>Hosting or transmitting malware, viruses, or malicious code.</li>
+    <li>Bypassing or attempting to crack our cryptographic token system.</li>
+    <li>Using automated scraping tools or bots against our API without authorization.</li>
+</ul>
+
+<h2>4. Termination of Access</h2>
+<p>Qlynk Architecture reserves the right to terminate or suspend your access to the node immediately, without prior notice or liability, for any reason whatsoever, including without limitation if you breach the Terms.</p>
+"""
+
+# --- 2. Privacy Policy Content ---
+PRIVACY_CONTENT = """
+<h2>1. Information We Collect</h2>
+<p>At Qlynk, we prioritize your privacy. During the checkout process and general usage, we collect strictly necessary data to provision your tokens and ensure security:</p>
+<ul>
+    <li><strong>Identity Data:</strong> Name, Email address, and Telegram/Phone contact details for receipt delivery.</li>
+    <li><strong>Technical Data:</strong> IP addresses, browser types, and device information for security routing and anti-spam measures.</li>
+    <li><strong>Transaction Data:</strong> Secure Payment IDs provided by Razorpay (We do NOT store your credit card or UPI PINs).</li>
+</ul>
+
+<h2>2. How We Use Your Data</h2>
+<p>Your data is utilized exclusively for providing and improving the Qlynk service. Specifically, we use it to:</p>
+<ul>
+    <li>Generate secure, personalized access tokens.</li>
+    <li>Send automated PDF receipts and notifications via our official Telegram Bot.</li>
+    <li>Prevent fraud and enforce our Anti-Spam Rate Limiting protocols.</li>
+</ul>
+
+<h2>3. Data Storage & Security</h2>
+<p>Your profile data is stored securely within isolated folders inside the Hugging Face Vault architecture. We employ 256-bit encryption for data in transit. You have the right to request deletion of your data logs by contacting the administrator.</p>
+
+<h2>4. Cookies & Local Storage</h2>
+<p>We use ultra-long-lasting cookies (approx. 10 years) strictly to enhance your user experience by auto-filling your details during repeat checkouts. You can clear these at any time via your browser settings.</p>
+"""
+
+# --- 3. Refund Policy Content ---
+REFUND_CONTENT = """
+<h2>1. General Refund Policy</h2>
+<p>Due to the digital nature of our services (Node Tokens, Streaming Bandwidth, Vault Access), <strong>all sales are generally final once a token has been generated and utilized</strong>. Instant digital delivery means the service is consumed immediately upon access.</p>
+
+<h2>2. Eligible Refund Conditions</h2>
+<p>We believe in fairness. Refunds or token extensions will only be issued under the following circumstances:</p>
+<ul>
+    <li><strong>System Failure:</strong> If the Qlynk Node experiences an extended global outage (exceeding 12 hours) during your active premium window.</li>
+    <li><strong>Cryptographic Errors:</strong> If a token generated by our system fails to grant you access due to an internal backend error.</li>
+    <li><strong>Accidental Double Charges:</strong> If the Razorpay gateway accidentally bills you twice for a single order.</li>
+</ul>
+
+<h2>3. Non-Refundable Scenarios</h2>
+<p>Refunds will <strong>NOT</strong> be provided if:</p>
+<ul>
+    <li>You simply change your mind after the token has been issued.</li>
+    <li>Your token expires because you forgot to use it within the allotted time (24h, 3 Days, or 7 Days).</li>
+    <li>Your access is terminated due to a violation of our Terms of Service.</li>
+</ul>
+
+<h2>4. How to Request a Refund</h2>
+<p>If you believe you are eligible for a refund due to a technical fault, please contact the administrator via the Telegram Bot or Discord channel. You must provide your <strong>Order ID</strong> (found on your PDF receipt) for verification. Approved refunds are processed within 5-7 business days.</p>
+"""
+
+# --- API ROUTES ---
+
+@app.get("/terms", response_class=HTMLResponse)
+async def serve_terms_page():
+    return HTMLResponse(content=generate_legal_page("Terms of Service", TERMS_CONTENT))
+
+@app.get("/privacy", response_class=HTMLResponse)
+async def serve_privacy_page():
+    return HTMLResponse(content=generate_legal_page("Privacy Policy", PRIVACY_CONTENT))
+
+@app.get("/refund", response_class=HTMLResponse)
+async def serve_refund_page():
+    return HTMLResponse(content=generate_legal_page("Refund Policy", REFUND_CONTENT))
+
+# ==========================================
+# END OF FILE
+# ==========================================
