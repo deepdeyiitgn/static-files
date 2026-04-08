@@ -297,7 +297,7 @@ async def process_advanced_upload(
     db = get_db()
     files_list = db.get("files", [])
     
-    final_slug = slug.strip() if slug and slug.strip() != "" else str(uuid.uuid4())[:8]
+    final_slug = slug.strip() if slug and slug.strip() != "" else uuid.uuid4().hex
     
     if chunk_index == 0:
         if any(item["slug"] == final_slug for item in files_list):
@@ -761,35 +761,62 @@ import random
 import os
 from fastapi.responses import Response
 
+# --- 1. ADD THIS GLOBAL DICTIONARY HERE ---
+# This keeps track of how many times an IP has guessed wrong
+ip_strikes = {}
+
+# --- 2. REPLACE THE FUNCTION WITH THIS UPDATED VERSION ---
 @app.get("/f/{slug:path}")
-async def serve_file_publicly(slug: str):
+async def serve_file_publicly(slug: str, request: Request): # Notice 'request: Request' is added here!
+    client_ip = request.client.host
+    
+    # [THE BLACK HOLE] 
+    # If this IP has failed more than 20 times, they are a scanner.
+    if ip_strikes.get(client_ip, 0) > 20:
+        # Hold their connection open for 5 minutes to crash their script's RAM
+        await asyncio.sleep(300) 
+        return Response(status_code=403, content="Blocked by Omniscient Engine.")
+
     db = get_db()
     file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
     
-    # 1. THE TARPIT (Anti-Hacker Fake Data)
+    # [ADAPTIVE TARPIT & HONEYPOT] - Fake File Logic
     if not file_record:
-        await asyncio.sleep(random.uniform(2.0, 5.0))
+        # Add a strike to this IP
+        ip_strikes[client_ip] = ip_strikes.get(client_ip, 0) + 1
+        current_strikes = ip_strikes[client_ip]
+        
+        # Exponential sleep: 1st strike = 2s, 5th strike = 10s, 10th strike = 20s
+        penalty_time = float(current_strikes * 2.0)
+        await asyncio.sleep(penalty_time)
+        
+        # Generate Fake File
         fake_size = random.randint(10240, 102400)
         fake_bytes = os.urandom(fake_size)
         fake_types = ["image/jpeg", "video/mp4", "application/zip", "application/pdf", "audio/mpeg"]
+        
         return Response(
             content=fake_bytes, 
             media_type=random.choice(fake_types), 
             status_code=200,
-            # 🛡️ FIX: Tells Vercel/Cloudflare NEVER to cache this fake data!
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"} 
+            headers={"Cache-Control": "public, max-age=86400"} # Matches real files (Phase 2 Fix)
         )
         
+    # [LEGITIMATE USER LOGIC]
+    # If they successfully requested a real file, reset their strikes to 0
+    if client_ip in ip_strikes:
+        ip_strikes[client_ip] = 0
+
+    # Handle external redirects (Social links)
     if file_record.get("is_external") and file_record.get("external_url"):
         return RedirectResponse(url=file_record["external_url"], status_code=308)
         
-    # 2. REAL FILE DELIVERY
+    # [REAL FILE DELIVERY]
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
         return FileResponse(
             path=file_path, filename=file_record["filename"],
             media_type=file_record.get("mime_type", "application/octet-stream"), content_disposition_type="inline",
-            # ✅ FIX: Tells proxy to safely cache the REAL images for 24 hours
             headers={"Cache-Control": "public, max-age=86400"} 
         )
     except Exception as e:
@@ -799,7 +826,7 @@ async def serve_file_publicly(slug: str):
             content=os.urandom(10240), 
             media_type="application/octet-stream", 
             status_code=200,
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+            headers={"Cache-Control": "public, max-age=86400"}
         )
 
 # ==========================================
