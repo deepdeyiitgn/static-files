@@ -8,13 +8,13 @@
 
 **Qlynk Node Master** is an enterprise-grade, highly secure private cloud storage and streaming datacenter. Engineered to run entirely on Hugging Face Spaces (Free Tier), it acts as a self-sustaining media vault with an integrated Telegram ingestion bot, dynamic anti-hacker defenses, and a cinematic web player.
 
-**Built by Deep Dey** (11th Grader & JEE Aspirant) 👨‍💻
+**Built by Deep Dey** (12th Grader & JEE Aspirant) 👨‍💻
 
 ---
 
 > ⚠️ **PROJECT STATUS: ACTIVE DEVELOPMENT PAUSED (Effective April 9, 2026)**
 > 
-> *As of 09.04.2026 (1:21 PM IST), all active updates, feature additions, and bug fixes for Qlynk Node Master have been officially stopped.* > *I am currently in the 11th grade, and I am pausing all my software development projects to dedicate 100% of my focus to my upcoming Annual Exams and my preparation for the JEE Advanced. The goal is IIT Kharagpur CSE. The codebase provided here is stable and enterprise-ready. Thank you to everyone who supported this architecture!*
+> *As of 09.04.2026 (1:20-22 PM IST), all active updates, feature additions, and bug fixes for Qlynk Node Master have been officially stopped.* > *I am currently in the 12th grade, and I am pausing all my software development projects to dedicate 100% of my focus to my upcoming Annual Exams and my preparation for the JEE Advanced. The goal is IIT Kharagpur CSE. The codebase provided here is stable and enterprise-ready. Thank you to everyone who supported this architecture!*
 
 
 ---
