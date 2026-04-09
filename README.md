@@ -1,13 +1,21 @@
-# 🚀 Qlynk Node Master (V1.4.1 Ultimate)
+# 🚀 Qlynk Node Master (V09.04.2026 Enterprise Edition)
 
-![Version](https://img.shields.io/badge/Version-1.4.1_Ultimate-blue.svg)
+![Version](https://img.shields.io/badge/Version-2.0.0_Enterprise-blue.svg)
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blueviolet.svg)
+![Status](https://img.shields.io/badge/Status-On_Hiatus_(JEE_Prep)-orange.svg)
 ![FastAPI](https://img.shields.io/badge/Framework-FastAPI-green.svg)
-![License](https://img.shields.io/badge/License-Custom-red.svg)
+![License](https://img.shields.io/badge/License-Custom_Dual-red.svg)
 
 **Qlynk Node Master** is an enterprise-grade, highly secure private cloud storage and streaming datacenter. Engineered to run entirely on Hugging Face Spaces (Free Tier), it acts as a self-sustaining media vault with an integrated Telegram ingestion bot, dynamic anti-hacker defenses, and a cinematic web player.
 
 **Built by Deep Dey** (11th Grader & JEE Aspirant) 👨‍💻
+
+---
+
+> ⚠️ **PROJECT STATUS: ACTIVE DEVELOPMENT PAUSED (Effective April 9, 2026)**
+> 
+> *As of 09.04.2026 (1:20 PM IST), all active updates, feature additions, and bug fixes for Qlynk Node Master have been officially stopped.* > *I am currently in the 11th grade, and I am pausing all my software development projects to dedicate 100% of my focus to my upcoming Annual Exams and my preparation for the JEE Advanced. The goal is IIT Kharagpur CSE. The codebase provided here is stable and enterprise-ready. Thank you to everyone who supported this architecture!*
+
 
 ---
 
@@ -18,7 +26,10 @@
 - **🎬 Cinematic Media Tube:** A beautiful, responsive web player with custom visualizers, auto-subtitle conversion (SRT to VTT), Playback Speed controls, Picture-in-Picture (PiP), and Spacebar shortcuts.
 - **📊 God-Mode Telemetry:** Real-time WebSockets-powered dashboard (`/status`) showing core-by-core CPU usage, RAM pool, Network I/O, API latencies, and HF Cloud Quota.
 - **♾️ 24/7 Self-Sustaining:** An automated anti-sleep background ping system keeps the HF container alive infinitely.
-
+- **💳 SaaS Checkout Engine:** Built-in Razorpay payment gateway to sell premium streaming tokens. Features anti-spam rate limiting and automatic PDF invoice generation with SVG logos.
+- **🎧 AI Helpdesk & Support System:** An isolated ticketing system running via Telegram. Users can raise tickets, talk to an automated AI bot (FAQ matching), or request human admin support directly through the dashboard.
+- **⏳ Dual-Auth & Token Vault:** Advanced time-limited share tokens (Basic, Pro, Ultra) with cryptographic signature verification. Generates auto-expiring secure links.
+- 
 ---
 
 ## 📂 Project Structure & Main Code
@@ -52,6 +63,11 @@ Go to your Space's **Settings -> Variables and secrets -> Secrets** and add the 
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather on Telegram. |
 | `TG_SESSION_STRING` | *(Optional)* Pyrogram session string to unlock true 2GB file upload limits. |
 | `PROXY_URL` | *(Optional)* Proxy URL if your datacenter IP gets blocked by external sites. |
+| `CHECKOUT_TOGGLE` | Set this to match your SPACE_PASSWORD to enable the Razorpay Checkout UI. |
+| `RAZORPAY_KEY_ID` | Your Razorpay API Key for the payment gateway. |
+| `RAZORPAY_KEY_SECRET` | Your Razorpay API Secret. |
+| `YT_COOKIES` | (Optional) YouTube cookies in Netscape format to bypass age-restrictions or blockades. |
+| `DOMAIN_1`, `DOMAIN_2` | (Optional) Whitelist specific domains for CORS (e.g., `https://mywebsite.com`). |
 
 ### Step 3: Clone and Push the Code
 Clone this repository to your local machine and push it to your newly created Hugging Face Space:
@@ -73,15 +89,21 @@ This project utilizes the `yt-dlp` library solely as a technical demonstration o
 - Do not use this tool to pirate, distribute, or infringe upon copyrighted material. 
 - The creator (Deep Dey) holds absolutely no liability for how users choose to utilize this software or the content they process through it. You are solely responsible for complying with the Terms of Service of any platform you interact with.
 
-**⚠️ Copyright & Licensing Rules:**
-You are free to fork, deploy, and use this architecture exactly as it is for your personal servers. However:
-1. **No White-labeling:** You **CANNOT** remove, modify, or hide the attribution, developer credits (Deep Dey / Qlynk), or original copyright notices present in the code, UI, or Footer.
-2. **Commercial Use:** Commercial distribution or selling this software as a SaaS product without explicit permission from the original author is strictly prohibited.
+**⚠️ Copyright & Licensing Rules (Dual-License Model):**
+This repository operates under a **Strict Attribution & Non-Commercial Custom License**. 
+
+1. **Free for Learning:** You are free to fork, read, and deploy this architecture strictly for **Personal, Educational, or Testing purposes**.
+2. **No White-labeling:** You **CANNOT** remove, modify, or hide the attribution, developer credits (Deep Dey / Qlynk), or original copyright notices present in the code, UI, or Footer.
+3. **COMMERCIAL USE IS STRICTLY PROHIBITED:** Enterprise deployment, use in production environments, or integration into monetized SaaS projects is **NOT permitted** under this free license. 
+4. **Enterprise License:** If you represent a company or wish to use this architecture for commercial purposes to generate revenue, you must obtain a separate **Paid Commercial License** directly from the author. Contact me to discuss commercial deployment.
 
 ---
 
-### 🌟 Support the Developer
-If you found this architecture helpful or learned something new about API security and Python web servers, please give this repository a **⭐ Star**! 
+<!-- ### 🌟 Support the Developer
+If you found this architecture helpful or learned something new about API security and Python web servers, please give this repository a **⭐ Star**!  -->
 
-*Dreaming of IIT Kharagpur CSE. Keep coding, keep building!*
+### 🌟 Final Note from the Developer
+Building Qlynk Node Master and taking it to an Enterprise SaaS level has been an incredible engineering journey. If you found this architecture helpful or learned something new about API security, rate-limiting, and Python web servers, please give this repository a **⭐ Star**! 
+
+*Signing off for now. Dreaming of IIT Kharagpur CSE. Keep coding, keep building!* 🚀📚
 
