@@ -1,10 +1,14 @@
-CUSTOM STRICT ATTRIBUTION LICENSE
+CUSTOM STRICT ATTRIBUTION & NON-COMMERCIAL LICENSE
 Copyright (c) 2026 Deep Dey
 
 TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
-1. PERMISSIONS
-You are hereby granted the right to use, copy, modify, merge, publish, and distribute this software and its documentation files (the "Software"), subject to the strict conditions outlined in Section 2. You may use this Software for personal, educational, or commercial purposes and may integrate it into your own projects.
+1. PERMISSIONS AND RESTRICTIONS
+You are hereby granted the right to use, copy, modify, merge, publish, and distribute this software and its documentation files (the "Software"), subject to the strict conditions outlined in Section 2. 
+
+You may use this Software strictly for personal, educational, or testing purposes. 
+
+COMMERCIAL USE IS STRICTLY PROHIBITED: Enterprise deployment, use in production environments, or integration into monetized and/or commercial projects is not permitted under this license. To use this Software for commercial purposes, you must obtain a separate Commercial License directly from the original author.
 
 2. STRICT ATTRIBUTION AND COPYRIGHT RETENTION (MANDATORY)
 The core condition of this license is STRICT ATTRIBUTION. Under no circumstances shall the original copyright notice, credit lines, author information, or this license document be altered, removed, hidden, or obscured in any distributed, modified, or compiled version of the Software. 
@@ -12,13 +16,13 @@ The core condition of this license is STRICT ATTRIBUTION. Under no circumstances
 If you modify the Software and make it "your own," you must prominently display the original author's credit alongside your own in the source code, user interface (if applicable), and documentation.
 
 3. LEGAL PROTECTION & ENFORCEMENT
-This Software is intellectually protected work. Any unauthorized removal of copyright notices or credits constitutes a direct violation of this license and infringes upon the intellectual property rights of the original author. 
+This Software is intellectually protected work. Any unauthorized commercial use, or the unauthorized removal of copyright notices or credits, constitutes a direct violation of this license and infringes upon the intellectual property rights of the original author. 
 Violators will be subject to legal action under:
 - The Indian Copyright Act, 1957 (and its subsequent amendments).
 - The Digital Millennium Copyright Act (DMCA) of the United States.
 - Relevant International Intellectual Property (IP) and Copyright Treaties.
 
-In the event of a violation, the original author reserves the right to issue formal legal notices, DMCA takedown requests to hosting providers, and seek damages for copyright infringement.
+In the event of a violation, the original author reserves the right to issue formal legal notices, DMCA takedown requests to hosting providers, and seek damages for copyright infringement and unauthorized commercial usage.
 
 4. DISCLAIMER OF WARRANTY
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
