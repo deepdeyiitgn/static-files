@@ -19,7 +19,7 @@ This repository is engineered with military-grade security protocols. Before sub
 If you have discovered a legitimate security vulnerability that bypasses the active defenses mentioned above, please report it privately. **Do not open a public issue.**
 
 **How to report:**
-1. Send an email to: **[TERA_EMAIL_ID_YAHAN_DAAL@gmail.com]**
+1. Send an email to: **[team.deepdey@gmail.com]**
 2. Include `[QLYNK SECURITY]` in the subject line.
 3. Provide a detailed description of the vulnerability, the steps to reproduce it, and any potential impact.
 
