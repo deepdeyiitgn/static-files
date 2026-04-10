@@ -113,6 +113,9 @@ git remote add hf [https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE_NAME](
 # 3. Push the entire architecture to Hugging Face
 git push hf main
 ```
+
+Once pushed, Hugging Face will automatically read the Dockerfile, build the secure container, and execute the start.sh bootloader. Within 2-3 minutes, your Enterprise Node will be fully operational. You can then navigate to https://hf.space/.../dashboard to access the Virtual OS.
+
 ---
 ---
 
