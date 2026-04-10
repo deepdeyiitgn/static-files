@@ -42,6 +42,13 @@ logger = logging.getLogger("QlynkHost")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 SPACE_PASSWORD = os.environ.get("SPACE_PASSWORD")
 
+# 🛡️ SECURITY SWITCH: CDN Mode vs High-Security Mode
+# True = Slugs rotate automatically (Best for private vaults)
+# False = Links are permanent (Best for CDN & Profile Pics)
+# 🛡️ CDN MODE CONFIGURATION
+# Set to 'false' in Hugging Face Secrets if using as a permanent CDN for websites
+AUTO_SLUG_ROTATOR = str(os.environ.get("AUTO_SLUG_ROTATOR", "true")).lower() == "true"
+
 api = HfApi(token=HF_TOKEN)
 DATASET_REPO = os.environ.get("DATASET_REPO")
 
@@ -93,9 +100,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         pass
         
-    # --- ENTERPRISE BACKGROUND TASKS ---
+    # --- ENTERPRISE BACKGROUND TASKS --- # <--- YEH NAYI LINE ADD KAR DE
     asyncio.create_task(media_optimizer_loop())
-    asyncio.create_task(dynamic_slug_rotator())  # <--- YEH NAYI LINE ADD KAR DE
+# --- ENTERPRISE BACKGROUND TASKS ---
+  #  asyncio.create_task(media_optimizer_loop())
+    
+    # Start Rotator only if not disabled (For CDN Mode)
+    if AUTO_SLUG_ROTATOR:
+        logger.info("🛡️ Dynamic Slug Rotator is ENABLED.")
+        asyncio.create_task(dynamic_slug_rotator())  # <--- YEH NAYI LINE ADD KAR DE
+    else:
+        logger.info("⚡ CDN Mode Active: Dynamic Slug Rotator is DISABLED.")
+    
+    # --- START BOT ---  
     
     # --- START BOT ---
     if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
