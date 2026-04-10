@@ -711,8 +711,23 @@ async def get_server_stats(token: str = Depends(verify_auth)):
 stream_sessions = {}
 
 @app.get("/api/stream/generate/{slug}")
-async def generate_secure_stream(slug: str, request: Request, token: str = Depends(verify_auth)):
+async def generate_secure_stream(slug: str, request: Request):
     """Generates a temporary, 4-hour valid unique streaming link."""
+    
+    # 🛡️ THE GUEST & ADMIN VERIFIER FIX 🛡️
+    auth_token = request.cookies.get("auth_token")
+    share_token = request.cookies.get("share_token")
+    
+    if auth_token and auth_token == os.environ.get("SPACE_PASSWORD"):
+        pass # Admin has full access
+    elif share_token:
+        db = get_tokens_db()
+        token_data = db["tokens"].get(share_token)
+        if not token_data or time.time() > token_data["expires_at"]:
+            raise HTTPException(status_code=401, detail="Premium Access Expired")
+    else:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     session_id = uuid.uuid4().hex
     
     # Expiry set to 4 hours (14400 seconds) from now
@@ -831,10 +846,19 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         ip_strikes[client_ip] = 0
 
     # Handle external redirects (Social links)
-    if file_record.get("is_external") and file_record.get("external_url"):
-        return RedirectResponse(url=file_record["external_url"], status_code=308)
+        if file_record.get("is_external") and file_record.get("external_url"):
+            return RedirectResponse(url=file_record["external_url"], status_code=308)
+            
+        # 🛡️ THE IDEA 1.5 SMART COOKIE FIREWALL 🛡️
+        auth_cookie = request.cookies.get("auth_token", "")
+        is_admin = (auth_cookie == os.environ.get("SPACE_PASSWORD")) and bool(os.environ.get("SPACE_PASSWORD"))
         
-    # [REAL FILE DELIVERY]
+        mime = file_record.get("mime_type", "")
+        if mime.startswith(("video/", "audio/")) and not is_admin:
+            # Block direct download for public, redirect to cinematic player
+            return RedirectResponse(url=f"/video?q={slug}", status_code=302)
+            
+        # [REAL FILE DELIVERY]
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
         
