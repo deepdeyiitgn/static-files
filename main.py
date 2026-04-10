@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
         
     # --- ENTERPRISE BACKGROUND TASKS ---
     asyncio.create_task(media_optimizer_loop())
+    asyncio.create_task(dynamic_slug_rotator())  # <--- YEH NAYI LINE ADD KAR DE
     
     # --- START BOT ---
     if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
@@ -3787,7 +3788,7 @@ async def media_handler(client, message):
             # Hum sirf pehla part [0] lenge aur '_' ko ' ' (space) se replace kar denge
             title = os.path.splitext(filename)[0].replace("_", " ")
             
-        slug = str(uuid.uuid4())[:8]
+        slug = uuid.uuid4().hex  # <--- YAHAN CHANGE KIYA HAI
         ext = os.path.splitext(filename)[1].lower() if "." in filename else ".bin"
         temp_path = f"/tmp/raw_{slug}{ext}"
         final_path = temp_path
@@ -4950,3 +4951,384 @@ async def support_button_handler(client, query: CallbackQuery):
         await client.send_message(user_id, f"Please type the reason for rejecting ticket `{ticket_id}`. (This will be sent directly to the user).")
         
     raise StopPropagation # Prevents these buttons from going to your other handlers
+
+# ==========================================
+# 17. DYNAMIC SLUG ROTATOR (MOVING TARGET DEFENSE)
+# ==========================================
+import random
+
+async def dynamic_slug_rotator():
+    logger.info("🛡️ Dynamic Slug Rotator Initialized. Standing by...")
+    # Thoda wait karega server start hone ke baad (taki crash na ho)
+    await asyncio.sleep(600) 
+    
+    while True:
+        # Generate random sleep time between 6 hours (21600s) and 24 hours (86400s)
+        sleep_time = random.randint(21600, 86400)
+        hours = sleep_time / 3600
+        logger.info(f"🕒 Next Slug Rotation scheduled in {hours:.2f} hours.")
+        
+        await asyncio.sleep(sleep_time)
+        logger.info("🔄 Initiating Global Slug Rotation for Security...")
+        
+        try:
+            db = get_db()
+            sub_db = get_sub_db()
+            
+            files = db.get("files", [])
+            subs = sub_db.get("subtitles", [])
+            
+            # Dictionary to map Old Slug -> New Slug
+            slug_map = {}
+            
+            # 1. Generate new 32-char slugs for all files
+            for f in files:
+                old_slug = f["slug"]
+                new_slug = uuid.uuid4().hex
+                slug_map[old_slug] = new_slug
+                f["slug"] = new_slug
+            
+            # 2. Fix Internal Thumbnail Links
+            for f in files:
+                if f.get("thumbnail", "").startswith("/f/"):
+                    old_t_slug = f["thumbnail"].replace("/f/", "")
+                    if old_t_slug in slug_map:
+                        f["thumbnail"] = f"/f/{slug_map[old_t_slug]}"
+            
+            # 3. Fix Subtitle Linkages
+            for s in subs:
+                if s["media_slug"] in slug_map:
+                    s["media_slug"] = slug_map[s["media_slug"]]
+            
+            # 4. Save Everything Back to Datacenter
+            db["files"] = files
+            save_db(db)
+            
+            sub_db["subtitles"] = subs
+            save_sub_db(sub_db)
+            
+            logger.info(f"✅ HIGH SECURITY: Successfully rotated {len(files)} slugs to prevent scraping!")
+        except Exception as e:
+            logger.error(f"❌ Slug Rotator Error: {e}")
+
+# ==========================================
+# 18. THE MASTER ADMIN DASHBOARD (VIRTUAL OS)
+# ==========================================
+
+class BulkDeleteReq(BaseModel):
+    slugs: List[str]
+
+@app.delete("/api/admin/bulk_delete")
+async def bulk_delete_files(req: BulkDeleteReq, token: str = Depends(verify_auth)):
+    db = get_db()
+    files_list = db.get("files", [])
+    
+    deleted_count = 0
+    for slug in req.slugs:
+        file_record = next((item for item in files_list if item["slug"] == slug), None)
+        if file_record:
+            try:
+                api.delete_file(path_in_repo=file_record["path"], repo_id=DATASET_REPO, repo_type="dataset")
+            except Exception as e:
+                logger.warning(f"File {slug} might already be deleted from HF: {e}")
+            files_list = [item for item in files_list if item["slug"] != slug]
+            deleted_count += 1
+            
+    db["files"] = files_list
+    save_db(db)
+    return {"status": "success", "message": f"{deleted_count} files securely wiped from Datacenter."}
+
+@app.get("/api/admin/tokens")
+async def get_all_tokens(token: str = Depends(verify_auth)):
+    return get_tokens_db()
+
+ADMIN_DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qlynk Master Console</title>
+    <link rel="icon" type="image/png" href="https://qlynk.vercel.app/quicklink-logo.png">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        :root { --bg: #050505; --card: #161b22; --accent: #bc8cff; --text: #e1e4e8; --border: #30363d; --danger: #da3633; --success: #2ea043;}
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
+        body { background: var(--bg); color: var(--text); overflow-x: hidden; }
+        
+        /* MOBILE BLOCKER */
+        #mobile-blocker { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:9999; justify-content:center; align-items:center; flex-direction:column; padding:30px; text-align:center;}
+        @media (max-width: 1024px) { 
+            #app-layout { display: none !important; }
+            #mobile-blocker { display: flex; }
+        }
+
+        #app-layout { display: flex; height: 100vh; }
+        
+        /* SIDEBAR */
+        .sidebar { width: 250px; background: var(--card); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; gap: 10px;}
+        .brand { font-size: 20px; font-weight: 800; color: #fff; margin-bottom: 30px; display: flex; align-items: center; gap: 10px;}
+        .brand img { height: 24px; }
+        .nav-btn { background: transparent; color: #8b949e; border: none; padding: 12px 15px; text-align: left; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        .nav-btn:hover { background: rgba(255,255,255,0.05); color: #fff;}
+        .nav-btn.active { background: rgba(188, 140, 255, 0.1); color: var(--accent); border: 1px solid rgba(188, 140, 255, 0.3);}
+        
+        /* MAIN CONTENT */
+        .main-content { flex: 1; padding: 40px; overflow-y: auto; background-image: radial-gradient(circle at top right, #1a1a2e 0%, transparent 40%);}
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;}
+        h1 { font-size: 28px; font-weight: 800; color: #fff;}
+        
+        /* TABS */
+        .tab-content { display: none; animation: fadeIn 0.3s; }
+        .tab-content.active { display: block; }
+        @keyframes fadeIn { from {opacity: 0; transform: translateY(10px);} to {opacity: 1; transform: translateY(0);} }
+
+        /* DATA TABLE */
+        .table-container { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
+        table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;}
+        th, td { padding: 15px 20px; border-bottom: 1px solid var(--border); }
+        th { background: #0d1117; color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 1px;}
+        tr:hover { background: rgba(255,255,255,0.02); }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
+        .b-vid { background: rgba(188,140,255,0.2); color: var(--accent); }
+        .b-doc { background: rgba(88,166,255,0.2); color: #58a6ff; }
+        .b-ext { background: rgba(218,54,51,0.2); color: var(--danger); }
+        
+        /* CHECKBOXES */
+        input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer;}
+        
+        /* ACTION BAR */
+        .action-bar { background: rgba(218,54,51,0.1); border: 1px solid var(--danger); padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; display: none; justify-content: space-between; align-items: center;}
+        .action-bar.show { display: flex; }
+        .btn-danger { background: var(--danger); color: #fff; border: none; padding: 8px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s;}
+        .btn-danger:hover { background: #ff5c5c; }
+        
+        .loader { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid var(--accent); border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 50px auto;}
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="mobile-blocker">
+        <svg style="width:60px; fill:var(--danger); margin-bottom:20px;" viewBox="0 0 24 24"><path d="M19 1H5c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 18H5V5h14v14zM8 14l3 3 5-5-1.41-1.41L11 14.17l-1.59-1.59L8 14z"/></svg>
+        <h2 style="color:#fff; margin-bottom:10px;">Security Lock Active</h2>
+        <p style="color:#8b949e; font-size:14px; max-width:300px;">The Master Console requires a high-resolution display. Please access this panel from a Desktop or Laptop browser.</p>
+    </div>
+
+    <div id="app-layout">
+        <div class="sidebar">
+            <div class="brand">
+                <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk">
+                Master Console
+            </div>
+            <button class="nav-btn active" onclick="switchTab('files', this)">📂 File Vault</button>
+            <button class="nav-btn" onclick="switchTab('tokens', this)">🔑 Active Tokens</button>
+            <button class="nav-btn" style="margin-top:auto; color:var(--danger);" onclick="window.location.href='/'">🚪 Exit Console</button>
+        </div>
+
+        <div class="main-content">
+            
+            <div id="tab-files" class="tab-content active">
+                <div class="header">
+                    <h1>Vault Management</h1>
+                    <span style="color:#8b949e; font-size:14px;" id="total-files-count">Loading...</span>
+                </div>
+                
+                <div class="action-bar" id="actionBar">
+                    <span style="color:var(--danger); font-weight:bold;" id="selectedCount">0 files selected</span>
+                    <button class="btn-danger" onclick="executeBulkDelete()">Delete Selected Files</button>
+                </div>
+
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th><input type="checkbox" id="selectAll" onchange="toggleAll(this)"></th>
+                                <th>File Name / Title</th>
+                                <th>Size</th>
+                                <th>Engine Type</th>
+                                <th>Date Added</th>
+                            </tr>
+                        </thead>
+                        <tbody id="filesTableBody">
+                            <tr><td colspan="5"><div class="loader"></div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-tokens" class="tab-content">
+                <div class="header">
+                    <h1>Premium Token Matrix</h1>
+                </div>
+                <div class="table-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Token Signature</th>
+                                <th>Linked Email</th>
+                                <th>Status</th>
+                                <th>Created At</th>
+                                <th>Expires At</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tokensTableBody">
+                            <tr><td colspan="5"><div class="loader"></div></td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        let allFiles = [];
+        let selectedSlugs = new Set();
+
+        function switchTab(tabId, btnElement) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById('tab-' + tabId).classList.add('active');
+            btnElement.classList.add('active');
+            
+            if(tabId === 'tokens') fetchTokens();
+            if(tabId === 'files') fetchFiles();
+        }
+
+        function formatBytes(bytes) {
+            if(bytes === 0) return '0 B';
+            const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        async function fetchFiles() {
+            try {
+                const res = await fetch('/api/history');
+                allFiles = await res.json();
+                document.getElementById('total-files-count').innerText = `${allFiles.length} Total Assets`;
+                renderFilesTable();
+            } catch(e) {
+                document.getElementById('filesTableBody').innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--danger);">Connection Error</td></tr>`;
+            }
+        }
+
+        function renderFilesTable() {
+            const tbody = document.getElementById('filesTableBody');
+            tbody.innerHTML = '';
+            
+            if(allFiles.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#8b949e;">Vault is empty.</td></tr>`;
+                return;
+            }
+
+            allFiles.forEach(f => {
+                const isVideo = f.mime_type.startsWith('video');
+                const badge = f.is_external ? `<span class="badge b-ext">External</span>` : 
+                             (isVideo ? `<span class="badge b-vid">Video</span>` : `<span class="badge b-doc">Document</span>`);
+                
+                const isChecked = selectedSlugs.has(f.slug) ? 'checked' : '';
+                
+                tbody.innerHTML += `
+                    <tr>
+                        <td><input type="checkbox" class="file-chk" value="${f.slug}" ${isChecked} onchange="toggleSelection('${f.slug}', this.checked)"></td>
+                        <td><div style="font-weight:600; color:#fff; display:-webkit-box; -webkit-line-clamp:1; overflow:hidden;">${f.title}</div><div style="font-size:11px; color:#8b949e; margin-top:4px;">${f.slug}</div></td>
+                        <td>${formatBytes(f.size_bytes)}</td>
+                        <td>${badge}</td>
+                        <td style="color:#8b949e;">${f.uploaded_at.substring(0,10)}</td>
+                    </tr>
+                `;
+            });
+            updateActionBar();
+        }
+
+        function toggleSelection(slug, isChecked) {
+            if(isChecked) selectedSlugs.add(slug);
+            else selectedSlugs.delete(slug);
+            updateActionBar();
+        }
+
+        function toggleAll(chkElement) {
+            document.querySelectorAll('.file-chk').forEach(chk => {
+                chk.checked = chkElement.checked;
+                toggleSelection(chk.value, chkElement.checked);
+            });
+        }
+
+        function updateActionBar() {
+            const bar = document.getElementById('actionBar');
+            if(selectedSlugs.size > 0) {
+                bar.classList.add('show');
+                document.getElementById('selectedCount').innerText = `⚠️ ${selectedSlugs.size} files selected for permanent deletion`;
+            } else {
+                bar.classList.remove('show');
+                document.getElementById('selectAll').checked = false;
+            }
+        }
+
+        async function executeBulkDelete() {
+            if(!confirm(`Are you absolutely sure you want to PERMANENTLY delete ${selectedSlugs.size} files? This action cannot be undone.`)) return;
+            
+            try {
+                const res = await fetch('/api/admin/bulk_delete', {
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({slugs: Array.from(selectedSlugs)})
+                });
+                const data = await res.json();
+                alert(data.message);
+                selectedSlugs.clear();
+                fetchFiles();
+            } catch(e) { alert("Deletion failed. Check server logs."); }
+        }
+
+        async function fetchTokens() {
+            try {
+                const res = await fetch('/api/admin/tokens');
+                const data = await res.json();
+                const tokensObj = data.tokens || {};
+                const tbody = document.getElementById('tokensTableBody');
+                tbody.innerHTML = '';
+                
+                const tokenKeys = Object.keys(tokensObj);
+                if(tokenKeys.length === 0) {
+                    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#8b949e;">No tokens generated yet.</td></tr>`;
+                    return;
+                }
+
+                const now = Date.now() / 1000;
+
+                tokenKeys.sort((a,b) => tokensObj[b].created_at.localeCompare(tokensObj[a].created_at)).forEach(key => {
+                    const t = tokensObj[key];
+                    const isExpired = t.expires_at < now || t.status === 'expired';
+                    const statusBadge = isExpired ? `<span style="color:var(--danger); font-weight:bold;">Expired</span>` : `<span style="color:var(--success); font-weight:bold;">Active</span>`;
+                    
+                    tbody.innerHTML += `
+                        <tr style="opacity: ${isExpired ? '0.5' : '1'};">
+                            <td style="font-family:monospace; color:var(--accent);">${key}</td>
+                            <td style="color:#fff;">${t.email || 'Admin Generated'}</td>
+                            <td>${statusBadge}</td>
+                            <td style="color:#8b949e;">${t.created_at.substring(0,10)}</td>
+                            <td style="color:#8b949e;">${new Date(t.expires_at * 1000).toISOString().substring(0,10)}</td>
+                        </tr>
+                    `;
+                });
+            } catch(e) {
+                document.getElementById('tokensTableBody').innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--danger);">Connection Error</td></tr>`;
+            }
+        }
+
+        // Initialize
+        fetchFiles();
+    </script>
+</body>
+</html>
+"""
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_admin_dashboard(request: Request, token: str = Depends(verify_auth)):
+    return HTMLResponse(content=ADMIN_DASHBOARD_HTML)
+
+# ==========================================
+# END OF FILE (FOR REAL THIS TIME! GO STUDY!)
+# ==========================================
