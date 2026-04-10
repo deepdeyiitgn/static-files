@@ -6,6 +6,8 @@
 ![FastAPI](https://img.shields.io/badge/Framework-FastAPI-green.svg)
 ![License](https://img.shields.io/badge/License-Custom_Dual-red.svg)
 
+> 💡 **Tip:** Press Ctrl+F (or Cmd+F) to search this documentation quickly.
+
 **Qlynk Node Master** is an enterprise-grade, highly secure private cloud storage and streaming datacenter. Engineered to run entirely on Hugging Face Spaces (Free Tier), it acts as a self-sustaining media vault with an integrated Telegram ingestion bot, dynamic anti-hacker defenses, and a cinematic web player.
 
 **Built by Deep Dey** (12th Grader & JEE Aspirant) 👨‍💻
@@ -89,6 +91,7 @@ Before pushing the code, you must configure the Master Keys. Go to your Space's 
 | `TG_API_ID` | Your Telegram API ID (Get this from my.telegram.org). |
 | `TG_API_HASH` | Your Telegram API Hash. |
 | `TELEGRAM_BOT_TOKEN` | Your Telegram Bot Token (Get from @BotFather). |
+| `AUTO_SLUG_ROTATOR` | Set to `false` to disable dynamic URL rotation. Useful if you want to use Qlynk as a permanent CDN for your website's profile pictures or CSS assets. Default is `true`. |
 
 **Optional Enterprise Secrets (For Monetization):**
 | Secret Name | Description |
@@ -155,6 +158,7 @@ Go to your Space's **Settings -> Variables and secrets -> Secrets** and add the 
 | `RAZORPAY_KEY_SECRET` | Your Razorpay API Secret. |
 | `YT_COOKIES` | (Optional) YouTube cookies in Netscape format to bypass age-restrictions or blockades. |
 | `DOMAIN_1`, `DOMAIN_2` | (Optional) Whitelist specific domains for CORS (e.g., `https://mywebsite.com`). |
+| `AUTO_SLUG_ROTATOR` | Set to `false` to disable dynamic URL rotation. Useful if you want to use Qlynk as a permanent CDN for your website's profile pictures or CSS assets. Default is `true`. |
 
 ### Step 3: Clone and Push the Code
 Clone this repository to your local machine and push it to your newly created Hugging Face Space:
@@ -165,6 +169,403 @@ git remote add hf [https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE_NAME](
 git push -u hf main
 ```
 Your server will start building. Once the status says "Running", your private vault is ready!
+
+---
+
+## 🆘 Emergency Troubleshooting & Node Diagnostics
+
+*Is your datacenter node acting up? Before raising a support ticket, consult this rapid-response diagnostic matrix.*
+
+> 🛑 **1. FATAL: Git Exit Code 128 (Build Failure)**
+> * **Symptom:** Hugging Face Space fails to build or fetch the repository.
+> * **Diagnosis:** Binary file clash in version control (usually caused by compiled `.pyc` files).
+> * **Fix:** Delete the `__pycache__` folder from your local machine, add `__pycache__/` to your `.gitignore`, commit, and push again. Alternatively, click **Factory Rebuild** in HF Space Settings.
+
+> 🔌 **2. ERROR 500: Internal Server Error on Boot**
+> * **Symptom:** The FastAPI server crashes immediately upon opening the URL.
+> * **Diagnosis:** Missing or misconfigured Environment Secrets.
+> * **Fix:** Ensure `DATASET_REPO` is correctly typed (`username/repo-name`) and your `HF_TOKEN` has strictly **WRITE** permissions.
+
+> 🐢 **3. NETWORK: YouTube/Instagram Links Failing (Falling back to 308)**
+> * **Symptom:** Sending external links to the bot results in an error or fallback redirect.
+> * **Diagnosis:** The Hugging Face Datacenter IP is temporarily rate-limited or blocked by the target platform (YouTube/Meta).
+> * **Fix:** Add a fresh, rotating proxy URL to the `PROXY_URL` environment secret to bypass the firewall.
+
+> 🤖 **4. BOT: Unresponsive to `/index` or `/connect`**
+> * **Symptom:** The Pyrogram bot ignores commands in a specific channel.
+> * **Diagnosis:** Missing permissions or wiped memory cache.
+> * **Fix:** Make sure the bot is an **Admin** in the target channel. If the database was recently wiped, manually forward *one* message from that channel to the bot so it can learn the Chat ID, then try again.
+
+> 📱 **5. ACCESS: Mobile Dashboard is Locked/Blocked**
+> * **Symptom:** Opening `/dashboard` on a phone shows a Security Lock screen.
+> * **Diagnosis:** Expected behavior. The Master OS is dense with data tables and admin controls.
+> * **Fix:** This is a security and UX enforcement. Please access the Master OS terminal strictly from a **Desktop or Laptop browser**.
+
+---
+
+## ❓ The Omniscient Knowledge Base (50 FAQs)
+
+*Click on any question below to reveal the detailed answer.*
+
+### 🏛️ Core Architecture & Hosting
+
+<details>
+<summary><b>1. What exactly is Qlynk Node Master?</b></summary>
+<blockquote>
+It is a self-sustaining, enterprise-grade private cloud storage and media streaming ecosystem built entirely on Hugging Face Spaces, acting as a zero-cost decentralized datacenter.
+</blockquote>
+</details>
+
+<details>
+<summary><b>2. Do I need to pay for AWS, GCP, or any VPS hosting?</b></summary>
+<blockquote>
+<b>No.</b> The architecture is mathematically engineered to exploit Hugging Face's free Docker SDK tier and free Datasets, giving you a powerful backend without traditional server costs.
+</blockquote>
+</details>
+
+<details>
+<summary><b>3. Is my uploaded data public to the world?</b></summary>
+<blockquote>
+<b>No.</b> If you configure your Hugging Face Dataset visibility to "Private" as instructed, nobody can access your raw files, database, or API without your strict cryptographic tokens.
+</blockquote>
+</details>
+
+<details>
+<summary><b>4. What programming languages power this engine?</b></summary>
+<blockquote>
+The backend is driven by asynchronous <b>Python 3.10+</b> (FastAPI & Pyrogram), while the frontend UI and Cinematic Player are built with raw HTML, CSS, and Vanilla JavaScript for maximum speed.
+</blockquote>
+</details>
+
+<details>
+<summary><b>5. Can I use a Custom Domain (like mywebsite.com)?</b></summary>
+<blockquote>
+<b>Yes.</b> You can easily map a custom domain to your Hugging Face Space using Cloudflare proxy or Vercel edge functions.
+</blockquote>
+</details>
+
+<details>
+<summary><b>6. What happens if the Hugging Face Space goes to sleep?</b></summary>
+<blockquote>
+Free tier Spaces pause after inactivity. However, the moment a request hits the URL or the Telegram Bot receives a message, the FastAPI server cold-boots in seconds and resumes normal operations.
+</blockquote>
+</details>
+
+<details>
+<summary><b>7. Why is there a Dual-License on this repository?</b></summary>
+<blockquote>
+To protect the Intellectual Property. The code is free for personal, educational, and testing use. However, commercial deployment or SaaS monetization requires a paid enterprise license from the original author.
+</blockquote>
+</details>
+
+<details>
+<summary><b>8. What does "System Hiatus" mean?</b></summary>
+<blockquote>
+The original architect (Deep Dey) is currently in the 12th grade and has locked the repository to focus 100% on the upcoming JEE Advanced examinations. No new features will be added during this period.
+</blockquote>
+</details>
+
+<details>
+<summary><b>9. How is the database managed without SQL?</b></summary>
+<blockquote>
+We use a highly optimized, asynchronous JSON document system (<code>history.json</code>, <code>tg_users.json</code>) that syncs natively with the Hugging Face Hub, bypassing the need for heavy SQL databases.
+</blockquote>
+</details>
+
+<details>
+<summary><b>10. Can I deploy this on Render or Heroku instead?</b></summary>
+<blockquote>
+While possible, the code relies heavily on the <code>huggingface_hub</code> Python library to write data to Datasets. You would need to heavily modify the storage logic to use AWS S3 or local disks if moving away from HF.
+</blockquote>
+</details>
+
+### 🛡️ Military-Grade Security
+
+<details>
+<summary><b>11. What is the Honeypot (Tarpit) mechanism?</b></summary>
+<blockquote>
+If a scraper bot guesses random file URLs, our server doesn't return a "404 Not Found". Instead, it returns a "200 OK" and feeds the bot infinite garbage bytes, actively crashing the bot's RAM and wasting its bandwidth.
+</blockquote>
+</details>
+
+<details>
+<summary><b>12. Why do my file URLs change automatically?</b></summary>
+<blockquote>
+This is our <b>Moving Target Defense</b>. A background Cron-job rotates the 32-character URLs randomly every 6 to 24 hours to make systematic link scraping mathematically impossible.
+</blockquote>
+</details>
+
+<details>
+<summary><b>13. Can I turn off the dynamic URL rotation?</b></summary>
+<blockquote>
+<b>Yes.</b> Set the Environment Secret <code>AUTO_SLUG_ROTATOR = false</code>. This puts the node into "CDN Mode," keeping links permanent for hosting website assets like CSS or Profile Pictures.
+</blockquote>
+</details>
+
+<details>
+<summary><b>14. How does the IP Banning (Fail2Ban) work?</b></summary>
+<blockquote>
+If an IP hits the honeypot 20+ times, they are shadow-banned using an exponential backoff timer (10 mins, 30 mins, etc.). 
+</blockquote>
+</details>
+
+<details>
+<summary><b>15. What if a legitimate user makes a typo and gets banned?</b></summary>
+<blockquote>
+The system is self-healing. The moment the penalized IP successfully accesses a valid, real URL, their penalty strikes are instantly reset to zero.
+</blockquote>
+</details>
+
+<details>
+<summary><b>16. How is the Master Dashboard secured?</b></summary>
+<blockquote>
+The <code>/dashboard</code> route is protected by a strict Header/Cookie authentication system requiring the exact <code>SPACE_PASSWORD</code> defined in your environment variables.
+</blockquote>
+</details>
+
+<details>
+<summary><b>17. Can someone bypass the payment gateway to get tokens?</b></summary>
+<blockquote>
+<b>No.</b> The backend cryptographically verifies the Razorpay signature (Order ID + Payment ID + Secret) before generating and storing the secure token in the database.
+</blockquote>
+</details>
+
+<details>
+<summary><b>18. Are my Telegram messages end-to-end encrypted?</b></summary>
+<blockquote>
+Telegram's MTProto protocol secures the connection between you and the bot. The files are then downloaded to the container and uploaded to HF via HTTPS (TLS 1.2+).
+</blockquote>
+</details>
+
+<details>
+<summary><b>19. Why does the API return JSON by default?</b></summary>
+<blockquote>
+For enterprise interoperability. You can integrate this node directly into other frontends, mobile apps, or CLI tools seamlessly via the <code>/api/rest</code> endpoints.
+</blockquote>
+</details>
+
+<details>
+<summary><b>20. What prevents DDOS attacks on the API?</b></summary>
+<blockquote>
+The payment and checkout APIs are protected by an in-memory Rate Limiter (max 5 requests per minute per IP) to prevent fraudulent spam requests.
+</blockquote>
+</details>
+
+### 📤 Data Ingestion & Storage
+
+<details>
+<summary><b>21. What is the maximum file size I can upload?</b></summary>
+<blockquote>
+If you configure a Telegram UserBot session, you can upload up to <b>2GB</b> per file. Via the standard Web API or normal Bot Token, the limit is governed by Telegram's standard limits (50MB).
+</blockquote>
+</details>
+
+<details>
+<summary><b>22. What happens if I upload multiple files at once?</b></summary>
+<blockquote>
+The bot uses an <code>asyncio.Lock()</code> Queue System. It will acknowledge all files but strictly process and upload them one by one to prevent server RAM overflow and crashes.
+</blockquote>
+</details>
+
+<details>
+<summary><b>23. What is the <code>/batch</code> command?</b></summary>
+<blockquote>
+Activating batch mode tells the bot to expect a massive dump of files. It optimizes the queue and suppresses repetitive status updates to keep your chat clean.
+</blockquote>
+</details>
+
+<details>
+<summary><b>24. How do I upload files via YouTube or Instagram links?</b></summary>
+<blockquote>
+Just send the URL to the bot. The integrated <code>yt-dlp</code> engine will download the highest quality media, process it locally, and push it to your private HF Vault.
+</blockquote>
+</details>
+
+<details>
+<summary><b>25. What is the <code>/index</code> deep-scan bypass?</b></summary>
+<blockquote>
+Bots normally cannot read old channel history. The <code>/index</code> command forces the bot to crawl backwards through thousands of messages, map the media IDs, and save them to your database for instant searching.
+</blockquote>
+</details>
+
+<details>
+<summary><b>26. Can I upload non-media files like ZIPs or PDFs?</b></summary>
+<blockquote>
+<b>Yes.</b> The vault supports any MIME type. Non-media files will trigger a standard direct download when accessed via their secure links.
+</blockquote>
+</details>
+
+<details>
+<summary><b>27. What happens if my <code>history.json</code> is accidentally deleted?</b></summary>
+<blockquote>
+The FastAPI lifespan manager will detect the missing database on boot and automatically generate a fresh, empty JSON structure to prevent fatal crashes.
+</blockquote>
+</details>
+
+<details>
+<summary><b>28. How are thumbnails generated?</b></summary>
+<blockquote>
+For Telegram uploads, it extracts native Telegram thumbnails. For WebP/SVG uploads, it uses the image itself. For YouTube, it fetches the MaxRes thumbnail automatically.
+</blockquote>
+</details>
+
+<details>
+<summary><b>29. Where do the files actually live?</b></summary>
+<blockquote>
+In the "Files and versions" tab of the Hugging Face Dataset repository you connected during Step 1 of the deployment.
+</blockquote>
+</details>
+
+<details>
+<summary><b>30. Is there a storage limit on Hugging Face Datasets?</b></summary>
+<blockquote>
+Currently, Hugging Face offers practically limitless storage for Datasets, though massive usage (hundreds of Terabytes) might eventually trigger fair-use flags from their automated systems.
+</blockquote>
+</details>
+
+### 🎬 Cinematic Streaming & Media
+
+<details>
+<summary><b>31. What makes the Web Player "Cinematic"?</b></summary>
+<blockquote>
+It features a dark-mode UI, dynamic dominant color extraction (the UI changes color based on the thumbnail), audio visualizers, and YouTube-style keyboard logic.
+</blockquote>
+</details>
+
+<details>
+<summary><b>32. Why do MKV/AVI files take longer to process?</b></summary>
+<blockquote>
+Browsers cannot stream MKV files natively. When uploaded, a background FFmpeg worker automatically converts MKV/AVI to MP4 and fixes audio to AAC format for flawless web playback.
+</blockquote>
+</details>
+
+<details>
+<summary><b>33. How does Tokenized Streaming work?</b></summary>
+<blockquote>
+Clicking "Secure Stream" generates a temporary token link (valid for 4 hours). This hides the original dataset URL and protects your bandwidth from direct download scraping.
+</blockquote>
+</details>
+
+<details>
+<summary><b>34. Can Internet Download Manager (IDM) steal the videos?</b></summary>
+<blockquote>
+<b>No.</b> The streaming endpoint uses strict `sec-fetch-dest` header inspection. If a request comes from an external downloader rather than a browser `<video>` tag, it is blocked with a 403 error.
+</blockquote>
+</details>
+
+<details>
+<summary><b>35. Does the video stop buffering if I pause for 4 hours?</b></summary>
+<blockquote>
+We use <b>Rolling Expiries</b>. Every time the video player requests a new chunk of data, the 4-hour token timer is automatically extended, ensuring long movies never crash mid-watch.
+</blockquote>
+</details>
+
+<details>
+<summary><b>36. How do I add Subtitles to a video?</b></summary>
+<blockquote>
+Open the Admin Dashboard, go to the vault, click "Add CC", and upload your <code>.srt</code> or <code>.vtt</code> file.
+</blockquote>
+</details>
+
+<details>
+<summary><b>37. Does the player support SRT subtitles?</b></summary>
+<blockquote>
+Browsers natively only support VTT. However, our server automatically converts your SRT files into VTT format <i>on-the-fly</i> before sending them to the browser!
+</blockquote>
+</details>
+
+<details>
+<summary><b>38. Can I adjust the subtitle size?</b></summary>
+<blockquote>
+<b>Yes.</b> While watching a video, press the <b>`+`</b> or <b>`-`</b> keys on your keyboard to scale the subtitle font size dynamically.
+</blockquote>
+</details>
+
+<details>
+<summary><b>39. Does the player have Picture-in-Picture (PiP)?</b></summary>
+<blockquote>
+<b>Yes.</b> You can click the PiP button or press the <b>`I`</b> key to pop the video out and browse other tabs while watching.
+</blockquote>
+</details>
+
+<details>
+<summary><b>40. How does the spacebar fast-forward work?</b></summary>
+<blockquote>
+Just like YouTube, if you press and hold the spacebar, the video speed doubles (2x) instantly. Release it, and it returns to normal speed.
+</blockquote>
+</details>
+
+### 💼 SaaS Checkout & Administration
+
+<details>
+<summary><b>41. How do I enable the Razorpay Checkout?</b></summary>
+<blockquote>
+Set the <code>CHECKOUT_TOGGLE</code> environment secret to exactly match your <code>SPACE_PASSWORD</code>. This activates the <code>/checkout</code> route for public users.
+</blockquote>
+</details>
+
+<details>
+<summary><b>42. What do users receive after a successful payment?</b></summary>
+<blockquote>
+They immediately receive a cryptographic access token displayed on the screen, and the server generates a personalized PDF Receipt (with your logo) and sends it to their Telegram.
+</blockquote>
+</details>
+
+<details>
+<summary><b>43. Can users log in to multiple devices with one token?</b></summary>
+<blockquote>
+The Token Forge allows you to set concurrent login limits (e.g., max 2 active sessions). If they exceed this, access is denied.
+</blockquote>
+</details>
+
+<details>
+<summary><b>44. How does the AI Helpdesk (<code>/support</code>) work?</b></summary>
+<blockquote>
+Users type <code>/support</code> in the bot. The AI checks their query against your <code>support_faq.json</code>. If a match is found, it replies instantly. If not, it generates a ticket for Human Support.
+</blockquote>
+</details>
+
+<details>
+<summary><b>45. How do I reply to support tickets?</b></summary>
+<blockquote>
+As an admin, you will receive a notification with "Accept" or "Reject" buttons. Clicking "Accept" connects your chat directly to the user, masking your identity as "Admin".
+</blockquote>
+</details>
+
+<details>
+<summary><b>46. What is the Virtual Master OS?</b></summary>
+<blockquote>
+It is the highly-secured <code>/dashboard</code> route. It acts as a desktop-grade operating system to monitor server health, manage files, and revoke user tokens.
+</blockquote>
+</details>
+
+<details>
+<summary><b>47. What does "Clear Active Sessions" do in the dashboard?</b></summary>
+<blockquote>
+If you suspect a user is sharing their token with friends, clicking this button instantly changes the token's cryptographic salt, forcing all currently watching devices to be logged out.
+</blockquote>
+</details>
+
+<details>
+<summary><b>48. What is the Universal Preview Engine?</b></summary>
+<blockquote>
+Instead of downloading files to check what they are, clicking a thumbnail in the Dashboard opens a dark-mode modal that natively plays videos, audio, images, or displays text/code directly.
+</blockquote>
+</details>
+
+<details>
+<summary><b>49. Can I bulk delete files?</b></summary>
+<blockquote>
+<b>Yes.</b> The Dashboard allows you to select multiple files via checkboxes and execute a bulk wipe, permanently deleting them from the Hugging Face dataset.
+</blockquote>
+</details>
+
+<details>
+<summary><b>50. How accurate is the "Server Health" tab?</b></summary>
+<blockquote>
+It uses high-precision telemetry middleware (`time.perf_counter()`) to track real-time API latencies, CPU/RAM limits, and Honeypot metrics directly from the Docker container.
+</blockquote>
+</details>
 
 ---
 
