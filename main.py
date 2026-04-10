@@ -847,22 +847,68 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
 
         # Handle external redirects (Social links)
         # Handle external redirects (Social links)
+        # Handle external redirects (Social links)
         if file_record.get("is_external") and file_record.get("external_url"):
             return RedirectResponse(url=file_record["external_url"], status_code=308)
             
-        # 🛡️ THE IDEA 1.5 SMART COOKIE FIREWALL (Upgraded Extension Blocker) 🛡️
+        # 🛡️ THE IDEA 1.5 SMART COOKIE FIREWALL (Ultimate Edition) 🛡️
         auth_cookie = request.cookies.get("auth_token", "")
         is_admin = (auth_cookie == os.environ.get("SPACE_PASSWORD")) and bool(os.environ.get("SPACE_PASSWORD"))
         
-        mime = file_record.get("mime_type", "").lower()
-        fname = file_record.get("filename", "").lower()
+        # FIX: Bulletproof string conversion to prevent 'NoneType' silent crashes (The 206 Bypass)
+        mime = str(file_record.get("mime_type") or "").lower()
+        fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
         if is_media and not is_admin:
-            # STRICT BLOCK: Hard 403 kills fallback scripts and direct URL hits instantly.
+            # STRICT BLOCK: 403 Status + Cinematic 5s Countdown Auto-Redirect
+            html_page = f"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <meta http-equiv="refresh" content="5;url=/video?q={slug}">
+                <title>Secure Vault | Access Denied</title>
+                <style>
+                    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+                    body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; text-align: center; padding: 20px; }}
+                    .box {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px; border-radius: 16px; max-width: 450px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
+                    .icon {{ width: 60px; height: 60px; fill: #da3633; margin-bottom: 20px; }}
+                    h2 {{ color: #da3633; margin: 0 0 10px 0; font-size: 22px; }}
+                    p {{ color: #8b949e; font-size: 14px; margin-bottom: 25px; line-height: 1.5; }}
+                    .timer-box {{ background: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; font-weight: 600; color: #bc8cff; font-size: 16px; }}
+                    .redirect-btn {{ display: inline-block; margin-top: 25px; padding: 10px 20px; background: transparent; border: 1px solid #bc8cff; color: #bc8cff; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; transition: 0.3s; }}
+                    .redirect-btn:hover {{ background: #bc8cff; color: #000; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
+                </style>
+            </head>
+            <body>
+                <div class="box">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>
+                    <h2>Direct Access Blocked</h2>
+                    <p>Raw media files are protected by the Qlynk Architecture. Direct downloading or hotlinking is strictly prohibited.</p>
+                    <div class="timer-box">
+                        Routing to Secure Player in <span id="time" style="font-size: 20px;">5</span>s...
+                    </div>
+                    <a href="/video?q={slug}" class="redirect-btn">Force Route Now</a>
+                </div>
+                <script>
+                    let sec = 5;
+                    const timerEl = document.getElementById('time');
+                    const interval = setInterval(() => {{
+                        sec--;
+                        if(sec > 0) timerEl.innerText = sec;
+                        else clearInterval(interval);
+                    }}, 1000);
+                </script>
+            </body>
+            </html>
+            """
             return HTMLResponse(
                 status_code=403, 
-                content="<body style='background:#050505; color:#da3633; font-family:sans-serif; text-align:center; padding-top:100px;'><h2>🔒 Direct Access Blocked</h2><p>Media files cannot be downloaded directly. Please use the secure player.</p></body>"
+                content=html_page,
+                # Force browser to never cache this 403 page
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
             )
             
         # [REAL FILE DELIVERY]
