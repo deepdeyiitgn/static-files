@@ -841,11 +841,11 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         )
         
     # [LEGITIMATE USER LOGIC]
-    # If they successfully requested a real file, reset their strikes to 0
-    if client_ip in ip_strikes:
-        ip_strikes[client_ip] = 0
+        # If they successfully requested a real file, reset their strikes to 0
+        if client_ip in ip_strikes:
+            ip_strikes[client_ip] = 0
 
-    # Handle external redirects (Social links)
+        # Handle external redirects (Social links)
         if file_record.get("is_external") and file_record.get("external_url"):
             return RedirectResponse(url=file_record["external_url"], status_code=308)
             
