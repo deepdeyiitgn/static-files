@@ -49,6 +49,8 @@ I am an aspiring software engineer and full-stack developer based in Tripura, In
 - **⏳ Dual-Auth & Token Vault:** Advanced time-limited share tokens (Basic, Pro, Ultra) with cryptographic signature verification. Generates auto-expiring secure links.
 - **🖥️ Virtual Master OS (Admin Dashboard):** A desktop-enforced, highly secured GUI panel to manage the entire datacenter. Includes bulk file wiping, custom token forging (with precise user/session limits), session killing, and live server vitals.
 - **👁️ Universal Preview Engine & Native Rendering:** Built directly into the dashboard, a dark-mode modal seamlessly renders videos, audio, images, and code/text files without opening new tabs. Additionally, WebP, SVG, and GIF formats are natively forced to render inline in browsers with auto-generated thumbnails.
+* 🏢 **Intelligent Role-Based Routing (RBAC):** The core engine dynamically reads cryptographic cookies to differentiate between the Master Admin, Premium Guests, and Public Users. It flawlessly serves raw media for Admin Dashboard previews while automatically routing public users to the frontend cinematic player.
+* 💼 **Autonomous Premium SaaS Delivery:** Built-in support for "Guest Share Tokens." When customers purchase access, the architecture seamlessly grants them the same high-security 4-hour streaming privileges as the admin, allowing the datacenter to function as an automated commercial streaming platform.
 
 ---
 
@@ -59,6 +61,8 @@ This architecture is fortified with advanced cybersecurity protocols designed to
 - **🔄 Moving Target Defense (Dynamic Slug Rotator):** A background chron-job autonomously triggers every 6 to 24 hours to entirely wipe and regenerate new 32-character Hex URLs for all files in the database. This makes link-scraping mathematically impossible while safely preserving all internal subtitle and thumbnail linkages.
 - **🛡️ WAF & Exponential Backoff (Fail2Ban Logic):** The API is protected by a self-healing IP rate-limiter. If an IP guesses incorrect links repeatedly, they are shadow-banned for 10 minutes, then 30 minutes, and so on. If a legitimate user makes a typo but subsequently enters a valid link, their penalty is instantly reset to zero.
 - **⏳ Cryptographic Token Vault:** Original Hugging Face repository paths are permanently hidden. The system generates secure, time-bound access tokens (Basic, Pro, Ultra) with cryptographic signatures. These tokens have a "Rolling Expiry" (e.g., 4 hours) and strict anti-IDM (Internet Download Manager) headers to completely block piracy and direct downloading.
+* **🛡️ Smart Cookie Firewall (Anti-IDOR):** Raw CDN file routes are cryptographically shielded. Public scrapers or Download Managers attempting direct access are instantly intercepted and 302-redirected to the secure cinematic player, ensuring 100% piracy protection.
+* **🔑 Dual-Auth Tokenized Streaming:** The streaming API seamlessly supports both Admin Master Cookies and rolling Guest Share Tokens, ensuring premium customers get uninterrupted access while public access is firmly denied (HTTP 401).
 
 ---
 ---
@@ -348,6 +352,20 @@ For enterprise interoperability. You can integrate this node directly into other
 <summary><b>20. What prevents DDOS attacks on the API?</b></summary>
 <blockquote>
 The payment and checkout APIs are protected by an in-memory Rate Limiter (max 5 requests per minute per IP) to prevent fraudulent spam requests.
+</blockquote>
+</details>
+
+<details>
+<summary><b>20.1. Can users bypass the player and download videos directly using IDM or scripts?</b></summary>
+<blockquote>
+<b>No.</b> The node is protected by a <b>Smart Cookie Firewall (IDOR Protection)</b>. If a public user tries to reverse-engineer the URL and access the raw CDN file route (<code>/f/[slug]</code>) for a media file, the server detects the missing Admin cookie and instantly hits them with a 302 Redirect back to the secure cinematic player. 
+</blockquote>
+</details>
+
+<details>
+<summary><b>20.2. Do premium users (Guest Tokens) get the same streaming security as the Admin?</b></summary>
+<blockquote>
+<b>Yes.</b> The architecture dynamically verifies dual-auth cookies (Admin <code>auth_token</code> or Guest <code>share_token</code>). Premium users get seamless access to the tokenized 4-hour streaming endpoint, while unauthorized public requests are outright blocked with a 401 error.
 </blockquote>
 </details>
 
