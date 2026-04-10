@@ -27,6 +27,11 @@ from huggingface_hub.utils import EntryNotFoundError
 # ==========================================
 # 1. LOGGING & CONFIGURATION SETUP
 # ==========================================
+# 🛡️ FIX: Force Python to recognize WebP, SVG, and GIF as images
+mimetypes.add_type('image/webp', '.webp')
+mimetypes.add_type('image/svg+xml', '.svg')
+mimetypes.add_type('image/gif', '.gif')
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -815,9 +820,17 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
     # [REAL FILE DELIVERY]
     try:
         file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
+        
+        # 🛡️ FIX: Force correct mime-type for browser rendering (Fixes even old uploaded files)
+        serve_mime = file_record.get("mime_type", "application/octet-stream")
+        fname_lower = file_record["filename"].lower()
+        if fname_lower.endswith('.webp'): serve_mime = "image/webp"
+        elif fname_lower.endswith('.svg'): serve_mime = "image/svg+xml"
+        elif fname_lower.endswith('.gif'): serve_mime = "image/gif"
+        
         return FileResponse(
             path=file_path, filename=file_record["filename"],
-            media_type=file_record.get("mime_type", "application/octet-stream"), content_disposition_type="inline",
+            media_type=serve_mime, content_disposition_type="inline",
             headers={"Cache-Control": "public, max-age=86400"} 
         )
     except Exception as e:
@@ -3883,6 +3896,10 @@ async def media_handler(client, message):
                 api.upload_file, path_or_fileobj=final_path, path_in_repo=repo_path, repo_id=DATASET_REPO, repo_type="dataset"
             )
             os.remove(final_path)
+            
+            # 🛡️ FIX: Agar uploaded file WebP/SVG/GIF/Image hai, toh woh khud apna thumbnail banegi
+            if not final_thumbnail_url and mime_type and mime_type.startswith("image/"):
+                final_thumbnail_url = f"/f/{slug}"
             
             # 5. Update Main DB Record
             file_record = {
