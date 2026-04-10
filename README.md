@@ -59,6 +59,62 @@ This architecture is fortified with advanced cybersecurity protocols designed to
 - **⏳ Cryptographic Token Vault:** Original Hugging Face repository paths are permanently hidden. The system generates secure, time-bound access tokens (Basic, Pro, Ultra) with cryptographic signatures. These tokens have a "Rolling Expiry" (e.g., 4 hours) and strict anti-IDM (Internet Download Manager) headers to completely block piracy and direct downloading.
 
 ---
+---
+
+## 🛠️ How to Deploy (Build Your Own Enterprise Node)
+
+This architecture is strictly designed to run natively on **Hugging Face Spaces (Docker SDK)**. You do not need an external VPS or paid cloud hosting. Follow these precise steps to deploy your own autonomous media vault:
+
+### Step 1: Create the Storage Vault (Database)
+The architecture uses Hugging Face Datasets as a limitless, zero-cost private database.
+1. Go to [Hugging Face Datasets](https://huggingface.co/datasets) and click **Create new Dataset**.
+2. Name it (e.g., `qlynk-storage-vault`).
+3. **CRITICAL:** Set the visibility to **Private** to ensure your data and `history.json` remain completely secure.
+4. Note down the Repository ID (Format: `your-username/qlynk-storage-vault`).
+
+### Step 2: Create the Main Server (Node)
+1. Go to [Hugging Face Spaces](https://huggingface.co/spaces) and click **Create new Space**.
+2. Name your space (e.g., `qlynk-node-master`).
+3. Select **Docker** as the Space SDK and choose the **Blank** template.
+4. Keep the Space hardware on the **Free Tier** (The architecture is optimized to run flawlessly on basic hardware).
+
+### Step 3: Configure Environment Secrets
+Before pushing the code, you must configure the Master Keys. Go to your Space's **Settings -> Variables and secrets -> Secrets** and add the following mandatory keys:
+
+| Secret Name | Description |
+|---|---|
+| `HF_TOKEN` | Your Hugging Face Access Token. It **MUST** have `WRITE` permissions. |
+| `DATASET_REPO` | The exact ID of the dataset you created in Step 1 (e.g., `username/dataset-name`). |
+| `SPACE_PASSWORD` | A strong master password. This unlocks the Virtual OS (`/dashboard`). |
+| `TG_API_ID` | Your Telegram API ID (Get this from my.telegram.org). |
+| `TG_API_HASH` | Your Telegram API Hash. |
+| `TELEGRAM_BOT_TOKEN` | Your Telegram Bot Token (Get from @BotFather). |
+
+**Optional Enterprise Secrets (For Monetization):**
+| Secret Name | Description |
+|---|---|
+| `CHECKOUT_TOGGLE` | Set this to exactly match your `SPACE_PASSWORD` to activate the Razorpay SaaS Checkout UI. |
+| `RAZORPAY_KEY_ID` | Your Razorpay API Key ID. |
+| `RAZORPAY_KEY_SECRET`| Your Razorpay API Secret. |
+| `PROXY_URL` | Proxy URL if Hugging Face IPs get blocked by external media scraping sources. |
+
+### Step 4: Clone & Push the Architecture
+Open your terminal or command prompt. You will pull the code directly from this GitHub repository and push it to your Hugging Face Space.
+
+```bash
+# 1. Clone this repository to your local machine
+git clone [https://github.com/deepdeyiitgn/static-files.git](https://github.com/deepdeyiitgn/static-files.git)
+cd static-files
+
+# 2. Add your Hugging Face Space as a remote origin
+# Replace YOUR_USERNAME and YOUR_SPACE_NAME with your actual HF details
+git remote add hf [https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE_NAME](https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE_NAME)
+
+# 3. Push the entire architecture to Hugging Face
+git push hf main
+```
+---
+---
 
 ## 📂 Project Structure & Main Code
 Here is where the core logic lives:
