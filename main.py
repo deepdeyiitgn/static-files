@@ -846,17 +846,24 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
             ip_strikes[client_ip] = 0
 
         # Handle external redirects (Social links)
+        # Handle external redirects (Social links)
         if file_record.get("is_external") and file_record.get("external_url"):
             return RedirectResponse(url=file_record["external_url"], status_code=308)
             
-        # 🛡️ THE IDEA 1.5 SMART COOKIE FIREWALL 🛡️
+        # 🛡️ THE IDEA 1.5 SMART COOKIE FIREWALL (Upgraded Extension Blocker) 🛡️
         auth_cookie = request.cookies.get("auth_token", "")
         is_admin = (auth_cookie == os.environ.get("SPACE_PASSWORD")) and bool(os.environ.get("SPACE_PASSWORD"))
         
-        mime = file_record.get("mime_type", "")
-        if mime.startswith(("video/", "audio/")) and not is_admin:
-            # Block direct download for public, redirect to cinematic player
-            return RedirectResponse(url=f"/video?q={slug}", status_code=302)
+        mime = file_record.get("mime_type", "").lower()
+        fname = file_record.get("filename", "").lower()
+        is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
+        
+        if is_media and not is_admin:
+            # STRICT BLOCK: Hard 403 kills fallback scripts and direct URL hits instantly.
+            return HTMLResponse(
+                status_code=403, 
+                content="<body style='background:#050505; color:#da3633; font-family:sans-serif; text-align:center; padding-top:100px;'><h2>🔒 Direct Access Blocked</h2><p>Media files cannot be downloaded directly. Please use the secure player.</p></body>"
+            )
             
         # [REAL FILE DELIVERY]
     try:
