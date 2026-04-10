@@ -860,7 +860,12 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        if is_media and not is_admin:
+        # 🔥 CRITICAL 206 BYPASS FIX: Catch Range headers (IDM/Incognito) & Fetch Destiny
+        has_range = "range" in request.headers
+        fetch_dest = request.headers.get("sec-fetch-dest", "")
+        
+        # Agar file media hai, YA FIR koi background fetch/Range request maar raha hai bypass ke liye
+        if (is_media or has_range or fetch_dest in ["video", "audio"]) and not is_admin:
             # STRICT BLOCK: 403 Status + Cinematic 5s Countdown Auto-Redirect
             html_page = f"""
             <!DOCTYPE html>
