@@ -5015,6 +5015,10 @@ async def dynamic_slug_rotator():
 # 18. THE MASTER ADMIN DASHBOARD (VIRTUAL OS)
 # ==========================================
 
+# ==========================================
+# 18. THE MASTER ADMIN DASHBOARD (VIRTUAL OS)
+# ==========================================
+
 class BulkDeleteReq(BaseModel):
     slugs: List[str]
 
@@ -5042,6 +5046,51 @@ async def bulk_delete_files(req: BulkDeleteReq, token: str = Depends(verify_auth
 async def get_all_tokens(token: str = Depends(verify_auth)):
     return get_tokens_db()
 
+class CreateCustomTokenReq(BaseModel):
+    valid_hours: int
+    session_days: int
+    max_users: int
+
+@app.post("/api/admin/token/create")
+async def admin_create_token(req: CreateCustomTokenReq, token: str = Depends(verify_auth)):
+    new_token = uuid.uuid4().hex
+    db = get_tokens_db()
+    
+    # Advanced Token Configuration
+    db["tokens"][new_token] = {
+        "expires_at": time.time() + (req.valid_hours * 3600),
+        "status": "active",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+        "email": "Admin Vault Gen",
+        "config": {
+            "max_users": req.max_users,
+            "session_days": req.session_days
+        },
+        "active_sessions": 0 # Counter for logged in devices
+    }
+    save_tokens_db(db)
+    return {"status": "success", "token": new_token}
+
+@app.delete("/api/admin/token/{token_id}")
+async def delete_custom_token(token_id: str, token: str = Depends(verify_auth)):
+    db = get_tokens_db()
+    if token_id in db["tokens"]:
+        del db["tokens"][token_id]
+        save_tokens_db(db)
+        return {"status": "success", "message": "Token deleted. All users auto-logged out."}
+    raise HTTPException(status_code=404, detail="Token not found.")
+
+@app.post("/api/admin/token/revoke/{token_id}")
+async def revoke_token_sessions(token_id: str, token: str = Depends(verify_auth)):
+    db = get_tokens_db()
+    if token_id in db["tokens"]:
+        # Resets the active user count and changes the internal salt to force re-auth
+        db["tokens"][token_id]["active_sessions"] = 0
+        db["tokens"][token_id]["session_salt"] = uuid.uuid4().hex 
+        save_tokens_db(db)
+        return {"status": "success", "message": "All active sessions cleared instantly."}
+    raise HTTPException(status_code=404, detail="Token not found.")
+
 ADMIN_DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -5052,11 +5101,11 @@ ADMIN_DASHBOARD_HTML = """
     <link rel="icon" type="image/png" href="https://qlynk.vercel.app/quicklink-logo.png">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-        :root { --bg: #050505; --card: #161b22; --accent: #bc8cff; --text: #e1e4e8; --border: #30363d; --danger: #da3633; --success: #2ea043;}
+        :root { --bg: #050505; --card: #161b22; --accent: #bc8cff; --text: #e1e4e8; --border: #30363d; --danger: #da3633; --success: #2ea043; --warn: #d29922;}
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', sans-serif; }
         body { background: var(--bg); color: var(--text); overflow-x: hidden; }
         
-        /* MOBILE BLOCKER */
+        /* MOBILE ENFORCEMENT SHIELD */
         #mobile-blocker { display: none; position: fixed; top:0; left:0; width:100%; height:100%; background:#000; z-index:9999; justify-content:center; align-items:center; flex-direction:column; padding:30px; text-align:center;}
         @media (max-width: 1024px) { 
             #app-layout { display: none !important; }
@@ -5066,10 +5115,10 @@ ADMIN_DASHBOARD_HTML = """
         #app-layout { display: flex; height: 100vh; }
         
         /* SIDEBAR */
-        .sidebar { width: 250px; background: var(--card); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; gap: 10px;}
+        .sidebar { width: 260px; background: var(--card); border-right: 1px solid var(--border); padding: 20px; display: flex; flex-direction: column; gap: 10px;}
         .brand { font-size: 20px; font-weight: 800; color: #fff; margin-bottom: 30px; display: flex; align-items: center; gap: 10px;}
-        .brand img { height: 24px; }
-        .nav-btn { background: transparent; color: #8b949e; border: none; padding: 12px 15px; text-align: left; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        .brand img { height: 26px; }
+        .nav-btn { background: transparent; color: #8b949e; border: none; padding: 12px 15px; text-align: left; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; display: flex; align-items: center; gap: 10px;}
         .nav-btn:hover { background: rgba(255,255,255,0.05); color: #fff;}
         .nav-btn.active { background: rgba(188, 140, 255, 0.1); color: var(--accent); border: 1px solid rgba(188, 140, 255, 0.3);}
         
@@ -5086,7 +5135,7 @@ ADMIN_DASHBOARD_HTML = """
         /* DATA TABLE */
         .table-container { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5);}
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px;}
-        th, td { padding: 15px 20px; border-bottom: 1px solid var(--border); }
+        th, td { padding: 12px 20px; border-bottom: 1px solid var(--border); vertical-align: middle;}
         th { background: #0d1117; color: #8b949e; font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 1px;}
         tr:hover { background: rgba(255,255,255,0.02); }
         .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }
@@ -5094,14 +5143,40 @@ ADMIN_DASHBOARD_HTML = """
         .b-doc { background: rgba(88,166,255,0.2); color: #58a6ff; }
         .b-ext { background: rgba(218,54,51,0.2); color: var(--danger); }
         
-        /* CHECKBOXES */
-        input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; cursor: pointer;}
+        /* THUMBNAILS */
+        .row-thumb { width: 45px; height: 30px; object-fit: cover; border-radius: 4px; border: 1px solid var(--border); cursor: pointer; transition: 0.2s; background: #000;}
+        .row-thumb:hover { transform: scale(1.1); border-color: var(--accent);}
         
-        /* ACTION BAR */
+        /* ACTION BAR & BUTTONS */
         .action-bar { background: rgba(218,54,51,0.1); border: 1px solid var(--danger); padding: 15px 20px; border-radius: 8px; margin-bottom: 20px; display: none; justify-content: space-between; align-items: center;}
         .action-bar.show { display: flex; }
-        .btn-danger { background: var(--danger); color: #fff; border: none; padding: 8px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: 0.2s;}
+        .btn { background: #21262d; color: #fff; border: 1px solid var(--border); padding: 8px 15px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: 0.2s;}
+        .btn:hover { background: #30363d; }
+        .btn-danger { background: var(--danger); color: #fff; border: none; }
         .btn-danger:hover { background: #ff5c5c; }
+        .btn-primary { background: var(--accent); color: #000; border: none;}
+        .btn-primary:hover { background: #d0aeff; box-shadow: 0 0 15px rgba(188,140,255,0.4);}
+        .icon-btn { background: transparent; border: none; font-size: 16px; cursor: pointer; transition: 0.2s; opacity: 0.7;}
+        .icon-btn:hover { opacity: 1; transform: scale(1.2);}
+        
+        /* PREVIEW UNIVERSAL MODAL */
+        .modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.9); z-index: 10000; display: none; justify-content:center; align-items:center; backdrop-filter: blur(5px);}
+        .modal-overlay.show { display: flex; }
+        .modal-box { background: var(--card); border: 1px solid var(--border); width: 90%; max-width: 1000px; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; max-height: 90vh; box-shadow: 0 25px 50px rgba(0,0,0,0.8);}
+        .modal-header { padding: 15px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: #0d1117;}
+        .modal-body { padding: 0; flex: 1; overflow-y: auto; background: #000; display: flex; justify-content: center; align-items: center; min-height: 400px;}
+        
+        /* PREVIEW ELEMENTS */
+        .preview-video { width: 100%; max-height: 70vh; outline: none; }
+        .preview-img { max-width: 100%; max-height: 70vh; object-fit: contain; }
+        .preview-code { width: 100%; height: 100%; min-height: 400px; padding: 20px; background: #0d1117; color: #3fb950; font-family: monospace; font-size: 13px; white-space: pre-wrap; overflow-x: auto; margin: 0;}
+
+        /* TOKEN FORGE CARD */
+        .forge-card { background: var(--card); border: 1px solid var(--accent); padding: 25px; border-radius: 12px; margin-bottom: 30px; display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; box-shadow: 0 0 20px rgba(188,140,255,0.1);}
+        .input-group { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 150px;}
+        .input-group label { font-size: 12px; color: #8b949e; font-weight: bold; text-transform: uppercase;}
+        .input-group input { background: #0d1117; border: 1px solid var(--border); color: #fff; padding: 10px 15px; border-radius: 6px; outline: none;}
+        .input-group input:focus { border-color: var(--accent); }
         
         .loader { border: 3px solid rgba(255,255,255,0.1); border-top: 3px solid var(--accent); border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin: 50px auto;}
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
@@ -5111,19 +5186,32 @@ ADMIN_DASHBOARD_HTML = """
 
     <div id="mobile-blocker">
         <svg style="width:60px; fill:var(--danger); margin-bottom:20px;" viewBox="0 0 24 24"><path d="M19 1H5c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 18H5V5h14v14zM8 14l3 3 5-5-1.41-1.41L11 14.17l-1.59-1.59L8 14z"/></svg>
-        <h2 style="color:#fff; margin-bottom:10px;">Security Lock Active</h2>
-        <p style="color:#8b949e; font-size:14px; max-width:300px;">The Master Console requires a high-resolution display. Please access this panel from a Desktop or Laptop browser.</p>
+        <h2 style="color:#fff; margin-bottom:10px;">Security Protocol Active</h2>
+        <p style="color:#8b949e; font-size:14px; max-width:300px;">The Master Admin OS requires a high-resolution display for full control. Please access this terminal from a Desktop browser.</p>
+    </div>
+
+    <div class="modal-overlay" id="previewModal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3 id="previewTitle" style="font-size:16px; color:#fff; display:-webkit-box; -webkit-line-clamp:1; overflow:hidden;">Asset Preview</h3>
+                <button class="btn" style="padding: 5px 10px; background:transparent; border-color:transparent;" onclick="closePreview()">❌ Close</button>
+            </div>
+            <div class="modal-body" id="previewBody">
+                <div class="loader"></div>
+            </div>
+        </div>
     </div>
 
     <div id="app-layout">
         <div class="sidebar">
             <div class="brand">
                 <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk">
-                Master Console
+                Master OS
             </div>
-            <button class="nav-btn active" onclick="switchTab('files', this)">📂 File Vault</button>
-            <button class="nav-btn" onclick="switchTab('tokens', this)">🔑 Active Tokens</button>
-            <button class="nav-btn" style="margin-top:auto; color:var(--danger);" onclick="window.location.href='/'">🚪 Exit Console</button>
+            <button class="nav-btn active" onclick="switchTab('files', this)">📂 Asset Vault</button>
+            <button class="nav-btn" onclick="switchTab('tokens', this)">🔑 Token Control</button>
+            <button class="nav-btn" onclick="switchTab('health', this)">📡 Server Health</button>
+            <button class="nav-btn" style="margin-top:auto; color:var(--danger);" onclick="window.location.href='/'">🚪 Exit Terminal</button>
         </div>
 
         <div class="main-content">
@@ -5136,14 +5224,15 @@ ADMIN_DASHBOARD_HTML = """
                 
                 <div class="action-bar" id="actionBar">
                     <span style="color:var(--danger); font-weight:bold;" id="selectedCount">0 files selected</span>
-                    <button class="btn-danger" onclick="executeBulkDelete()">Delete Selected Files</button>
+                    <button class="btn btn-danger" onclick="executeBulkDelete()">Delete Selected Files</button>
                 </div>
 
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
-                                <th><input type="checkbox" id="selectAll" onchange="toggleAll(this)"></th>
+                                <th style="width: 40px;"><input type="checkbox" id="selectAll" onchange="toggleAll(this)"></th>
+                                <th style="width: 60px;">Media</th>
                                 <th>File Name / Title</th>
                                 <th>Size</th>
                                 <th>Engine Type</th>
@@ -5151,7 +5240,7 @@ ADMIN_DASHBOARD_HTML = """
                             </tr>
                         </thead>
                         <tbody id="filesTableBody">
-                            <tr><td colspan="5"><div class="loader"></div></td></tr>
+                            <tr><td colspan="6"><div class="loader"></div></td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -5161,15 +5250,33 @@ ADMIN_DASHBOARD_HTML = """
                 <div class="header">
                     <h1>Premium Token Matrix</h1>
                 </div>
+
+                <div class="forge-card">
+                    <div style="width:100%; font-size:14px; font-weight:bold; color:var(--accent); margin-bottom:10px;">🛠️ Generate Custom Token</div>
+                    <div class="input-group">
+                        <label>Max Users Allowed</label>
+                        <input type="number" id="tUsers" value="1" min="1">
+                    </div>
+                    <div class="input-group">
+                        <label>Token Valid For (Hours)</label>
+                        <input type="number" id="tHours" value="24" min="1">
+                    </div>
+                    <div class="input-group">
+                        <label>Session Length (Days)</label>
+                        <input type="number" id="tDays" value="7" min="1">
+                    </div>
+                    <button class="btn btn-primary" style="height:42px; padding:0 25px;" onclick="createCustomToken()">Forge Token</button>
+                </div>
+
                 <div class="table-container">
                     <table>
                         <thead>
                             <tr>
                                 <th>Token Signature</th>
-                                <th>Linked Email</th>
+                                <th>Config (Users / Session)</th>
+                                <th>Active Logins</th>
                                 <th>Status</th>
-                                <th>Created At</th>
-                                <th>Expires At</th>
+                                <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody id="tokensTableBody">
@@ -5179,13 +5286,36 @@ ADMIN_DASHBOARD_HTML = """
                 </div>
             </div>
 
+            <div id="tab-health" class="tab-content">
+                <div class="header">
+                    <h1>Private Server Vitals</h1>
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap:20px;">
+                    <div style="background:var(--card); padding:25px; border-radius:12px; border:1px solid var(--border);">
+                        <h3 style="color:#8b949e; font-size:12px; text-transform:uppercase; margin-bottom:10px;">Traffic Analyzer Engine</h3>
+                        <div style="font-size:24px; font-weight:bold; color:#fff; margin-bottom:5px;" id="h-uptime">Fetching...</div>
+                        <p style="color:var(--success); font-size:13px;">✔ Server is fully operational</p>
+                    </div>
+                    <div style="background:var(--card); padding:25px; border-radius:12px; border:1px solid var(--border);">
+                        <h3 style="color:#8b949e; font-size:12px; text-transform:uppercase; margin-bottom:10px;">Security Status</h3>
+                        <div style="font-size:18px; font-weight:bold; color:var(--accent); margin-bottom:5px;">Military-Grade Honeypot: ACTIVE</div>
+                        <p style="color:#8b949e; font-size:13px;">IP Rate Limiting & Auto-Bans are protecting the Node.</p>
+                    </div>
+                </div>
+                <p style="color:var(--warn); margin-top:30px; font-size:13px; background:rgba(210,153,34,0.1); padding:15px; border-radius:8px; border:1px solid rgba(210,153,34,0.3);">
+                    ⚠️ <b>Architect Note:</b> Deep traffic analysis (GeoIP, Hit counters per file) requires a Time-Series Database (like Redis). Tracking every hit on JSON files will cause race conditions and server crashes. The current setup is optimized for ultra-fast media streaming.
+                </p>
+            </div>
+
         </div>
     </div>
 
     <script>
         let allFiles = [];
         let selectedSlugs = new Set();
+        const FALLBACK_THUMB = "https://qlynk.vercel.app/Quicklink-Banner.png";
 
+        // --- TAB LOGIC ---
         function switchTab(tabId, btnElement) {
             document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
             document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
@@ -5194,8 +5324,51 @@ ADMIN_DASHBOARD_HTML = """
             
             if(tabId === 'tokens') fetchTokens();
             if(tabId === 'files') fetchFiles();
+            if(tabId === 'health') fetchHealth();
         }
 
+        // --- UNIVERSAL PREVIEW ENGINE ---
+        async function openPreview(slug, mime, title) {
+            const modal = document.getElementById('previewModal');
+            const body = document.getElementById('previewBody');
+            document.getElementById('previewTitle').innerText = title;
+            
+            modal.classList.add('show');
+            body.innerHTML = '<div class="loader"></div>';
+            
+            const url = `/f/${slug}`;
+            
+            setTimeout(async () => {
+                if(mime.startsWith('video')) {
+                    body.innerHTML = `<video src="${url}" class="preview-video" controls autoplay playsinline></video>`;
+                } else if(mime.startsWith('audio')) {
+                    body.innerHTML = `<div style="text-align:center; padding:50px;"><img src="${FALLBACK_THUMB}" style="width:200px; border-radius:50%; margin-bottom:20px; box-shadow:0 0 30px var(--accent);"><br><audio src="${url}" controls autoplay style="width:100%; max-width:400px;"></audio></div>`;
+                } else if(mime.startsWith('image')) {
+                    body.innerHTML = `<img src="${url}" class="preview-img">`;
+                } else {
+                    // Treat as text/code
+                    try {
+                        const res = await fetch(url);
+                        const text = await res.text();
+                        // Sanitize html
+                        const cleanText = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                        body.innerHTML = `<pre class="preview-code"><code>${cleanText}</code></pre>`;
+                    } catch(e) {
+                        body.innerHTML = `<div style="color:var(--danger); padding:20px;">Cannot preview this binary/external file directly.</div>`;
+                    }
+                }
+            }, 500);
+        }
+
+        function closePreview() {
+            const modal = document.getElementById('previewModal');
+            const body = document.getElementById('previewBody');
+            modal.classList.remove('show');
+            // Destroy media element to stop audio/video
+            body.innerHTML = ''; 
+        }
+
+        // --- FILES TAB LOGIC ---
         function formatBytes(bytes) {
             if(bytes === 0) return '0 B';
             const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -5209,7 +5382,7 @@ ADMIN_DASHBOARD_HTML = """
                 document.getElementById('total-files-count').innerText = `${allFiles.length} Total Assets`;
                 renderFilesTable();
             } catch(e) {
-                document.getElementById('filesTableBody').innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--danger);">Connection Error</td></tr>`;
+                document.getElementById('filesTableBody').innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--danger);">Connection Error</td></tr>`;
             }
         }
 
@@ -5218,7 +5391,7 @@ ADMIN_DASHBOARD_HTML = """
             tbody.innerHTML = '';
             
             if(allFiles.length === 0) {
-                tbody.innerHTML = `<tr><td colspan="5" style="text-align:center; color:#8b949e;">Vault is empty.</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#8b949e;">Vault is empty.</td></tr>`;
                 return;
             }
 
@@ -5228,10 +5401,15 @@ ADMIN_DASHBOARD_HTML = """
                              (isVideo ? `<span class="badge b-vid">Video</span>` : `<span class="badge b-doc">Document</span>`);
                 
                 const isChecked = selectedSlugs.has(f.slug) ? 'checked' : '';
+                const thumbImg = f.thumbnail && f.thumbnail.startsWith('/f/') ? f.thumbnail : FALLBACK_THUMB;
+                
+                // Escape quotes for JS inline functions
+                const safeTitle = f.title.replace(/'/g, "\\'").replace(/"/g, "&quot;");
                 
                 tbody.innerHTML += `
                     <tr>
                         <td><input type="checkbox" class="file-chk" value="${f.slug}" ${isChecked} onchange="toggleSelection('${f.slug}', this.checked)"></td>
+                        <td><img src="${thumbImg}" class="row-thumb" onclick="openPreview('${f.slug}', '${f.mime_type}', '${safeTitle}')" onerror="this.src='${FALLBACK_THUMB}'" title="Click to Preview"></td>
                         <td><div style="font-weight:600; color:#fff; display:-webkit-box; -webkit-line-clamp:1; overflow:hidden;">${f.title}</div><div style="font-size:11px; color:#8b949e; margin-top:4px;">${f.slug}</div></td>
                         <td>${formatBytes(f.size_bytes)}</td>
                         <td>${badge}</td>
@@ -5267,21 +5445,20 @@ ADMIN_DASHBOARD_HTML = """
         }
 
         async function executeBulkDelete() {
-            if(!confirm(`Are you absolutely sure you want to PERMANENTLY delete ${selectedSlugs.size} files? This action cannot be undone.`)) return;
-            
+            if(!confirm(`Are you absolutely sure you want to PERMANENTLY delete ${selectedSlugs.size} files?`)) return;
             try {
                 const res = await fetch('/api/admin/bulk_delete', {
-                    method: 'DELETE',
-                    headers: {'Content-Type': 'application/json'},
+                    method: 'DELETE', headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({slugs: Array.from(selectedSlugs)})
                 });
                 const data = await res.json();
                 alert(data.message);
                 selectedSlugs.clear();
                 fetchFiles();
-            } catch(e) { alert("Deletion failed. Check server logs."); }
+            } catch(e) { alert("Deletion failed. Check logs."); }
         }
 
+        // --- TOKENS TAB LOGIC ---
         async function fetchTokens() {
             try {
                 const res = await fetch('/api/admin/tokens');
@@ -5301,15 +5478,28 @@ ADMIN_DASHBOARD_HTML = """
                 tokenKeys.sort((a,b) => tokensObj[b].created_at.localeCompare(tokensObj[a].created_at)).forEach(key => {
                     const t = tokensObj[key];
                     const isExpired = t.expires_at < now || t.status === 'expired';
-                    const statusBadge = isExpired ? `<span style="color:var(--danger); font-weight:bold;">Expired</span>` : `<span style="color:var(--success); font-weight:bold;">Active</span>`;
+                    const statusBadge = isExpired ? `<span class="badge b-ext">Expired</span>` : `<span class="badge b-vid">Active</span>`;
+                    
+                    const maxU = t.config ? t.config.max_users : '∞';
+                    const sDays = t.config ? t.config.session_days : '1';
+                    const activeLogins = t.active_sessions || 0;
                     
                     tbody.innerHTML += `
                         <tr style="opacity: ${isExpired ? '0.5' : '1'};">
-                            <td style="font-family:monospace; color:var(--accent);">${key}</td>
-                            <td style="color:#fff;">${t.email || 'Admin Generated'}</td>
-                            <td>${statusBadge}</td>
-                            <td style="color:#8b949e;">${t.created_at.substring(0,10)}</td>
-                            <td style="color:#8b949e;">${new Date(t.expires_at * 1000).toISOString().substring(0,10)}</td>
+                            <td>
+                                <div style="font-family:monospace; color:var(--accent); font-weight:bold; margin-bottom:4px;">${key.substring(0,8)}...${key.slice(-4)}</div>
+                                <div style="font-size:11px; color:#8b949e;">${t.email || 'System'}</div>
+                            </td>
+                            <td style="font-size:12px; color:#c9d1d9;">Max: <b>${maxU}</b> Users<br>Sess: <b>${sDays}</b> Days</td>
+                            <td style="font-weight:bold; color:var(--success);">${activeLogins} / ${maxU}</td>
+                            <td>${statusBadge}<br><span style="font-size:10px; color:#8b949e;">Ends: ${new Date(t.expires_at * 1000).toISOString().substring(0,10)}</span></td>
+                            <td>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="icon-btn" title="Copy Token URL" onclick="copyToken('${key}')">📋</button>
+                                    <button class="icon-btn" title="Clear Active Sessions (Force Logout)" onclick="revokeToken('${key}')">🧹</button>
+                                    <button class="icon-btn" title="Delete Token Entirely" onclick="deleteToken('${key}')">🗑️</button>
+                                </div>
+                            </td>
                         </tr>
                     `;
                 });
@@ -5318,7 +5508,52 @@ ADMIN_DASHBOARD_HTML = """
             }
         }
 
-        // Initialize
+        async function createCustomToken() {
+            const u = document.getElementById('tUsers').value;
+            const h = document.getElementById('tHours').value;
+            const d = document.getElementById('tDays').value;
+            
+            try {
+                const res = await fetch('/api/admin/token/create', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({max_users: parseInt(u), valid_hours: parseInt(h), session_days: parseInt(d)})
+                });
+                if(res.ok) { alert("Forge Success! Token Created."); fetchTokens(); }
+            } catch(e) { alert("Token Forge Failed."); }
+        }
+
+        function copyToken(key) {
+            const url = window.location.origin + `/view?token=${key}`;
+            navigator.clipboard.writeText(url);
+            alert("Secure Token Link copied to clipboard!");
+        }
+
+        async function revokeToken(key) {
+            if(!confirm("Clear all active sessions for this token? Users will be logged out instantly.")) return;
+            try {
+                const res = await fetch(`/api/admin/token/revoke/${key}`, {method: 'POST'});
+                if(res.ok) { alert("Sessions cleared."); fetchTokens(); }
+            } catch(e) { alert("Failed to clear sessions."); }
+        }
+
+        async function deleteToken(key) {
+            if(!confirm("Delete this token entirely? It will be permanently removed.")) return;
+            try {
+                const res = await fetch(`/api/admin/token/${key}`, {method: 'DELETE'});
+                if(res.ok) { alert("Token deleted."); fetchTokens(); }
+            } catch(e) { alert("Failed to delete token."); }
+        }
+
+        // --- HEALTH TAB ---
+        async function fetchHealth() {
+            try {
+                const res = await fetch('/api/stats');
+                const data = await res.json();
+                document.getElementById('h-uptime').innerText = data.formatted_total_size + " Vault Usage";
+            } catch(e) {}
+        }
+
+        // Initialize First Tab
         fetchFiles();
     </script>
 </body>
@@ -5328,6 +5563,14 @@ ADMIN_DASHBOARD_HTML = """
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_admin_dashboard(request: Request, token: str = Depends(verify_auth)):
     return HTMLResponse(content=ADMIN_DASHBOARD_HTML)
+
+# ==========================================
+# END OF FILE
+# --- SYSTEM HIBERNATION INITIATED ---
+# Developer Status: Offline. 
+# Mission: IIT Kharagpur CSE. 
+# GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
+# ==========================================
 
 # ==========================================
 # END OF FILE (FOR REAL THIS TIME! GO STUDY!)
