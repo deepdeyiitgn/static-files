@@ -6126,7 +6126,7 @@ async def increment_play_count(slug: str, access: dict = Depends(verify_view_acc
 
 @app.get("/api/qlynktify/meta")
 async def get_track_metadata(q: str, access: dict = Depends(verify_view_access)):
-    """iTunes API Bypass + Strict internal Fallback Engine from database"""
+    """Aggressive history.json Fallback + iTunes API"""
     import aiohttp
     meta_db = get_qlynktify_meta_db()
     query_key = q.lower().strip()
@@ -6136,39 +6136,49 @@ async def get_track_metadata(q: str, access: dict = Depends(verify_view_access))
 
     result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": "", "real_title": ""}
     
-    # 1. First, forcefully check our local Vault/History Database
-    db = get_db()
-    for f in db.get("files", []):
-        # If the search query matches the filename or title
-        if query_key in f.get("filename", "").lower() or query_key in f.get("title", "").lower():
-            if f.get("thumbnail"):
-                result["artwork"] = f["thumbnail"] # Get thumbnail from history.json
-                result["album"] = "Vault Asset"
-                # If we found a thumbnail locally, we don't necessarily need to hit iTunes, 
-                # but we will to get the real Artist name.
-                break
-
-    # 2. Hit iTunes API for rich metadata (and artwork if local failed)
+    # 1. PRIMARY CHECK: Sabse pehle history.json (Vault Database) mein check karo
     try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.get(url, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data.get("resultCount", 0) > 0:
-                        track = data["results"][0]
-                        result["artist"] = track.get("artistName", "Unknown Artist")
-                        result["real_title"] = track.get("trackName", "")
-                        # If local db didn't have artwork, use iTunes artwork
-                        if not result["artwork"]:
-                            result["artwork"] = track.get("artworkUrl100", "").replace("100x100bb", "600x600bb")
-                            result["album"] = track.get("collectionName", "Unknown Album")
+        db = get_db()
+        for f in db.get("files", []):
+            file_title = str(f.get("title", "")).lower()
+            file_name = str(f.get("filename", "")).lower()
+            
+            # Agar query ka thoda sa hissa bhi title ya filename mein match hota hai
+            if query_key in file_title or query_key in file_name or file_title in query_key:
+                # Thumbnail, artwork, ya cover jo bhi key ho history.json mein, use utha lo
+                thumb = f.get("thumbnail") or f.get("artwork") or f.get("cover")
+                if thumb:
+                    result["artwork"] = thumb
+                    result["album"] = "Vault Asset"
+                    break # Thumbnail mil gaya, loop roko
     except Exception as e:
-        logger.warning(f"iTunes API Error: {e}")
+        logger.warning(f"History DB Read Error: {e}")
 
+    # 2. SECONDARY CHECK: iTunes API (Sirf tab hit hoga agar artist name chahiye ya artwork local nahi mila)
+    if not result["artwork"] or result["artist"] == "Unknown Artist":
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json"
+            }
+            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get("resultCount", 0) > 0:
+                            track = data["results"][0]
+                            result["artist"] = track.get("artistName", "Unknown Artist")
+                            result["real_title"] = track.get("trackName", "")
+                            
+                            # Agar history.json mein artwork nahi tha, toh hi iTunes ka artwork use karo
+                            if not result["artwork"]:
+                                result["artwork"] = track.get("artworkUrl100", "").replace("100x100bb", "600x600bb")
+                                result["album"] = track.get("collectionName", "Unknown Album")
+        except Exception as e:
+            logger.warning(f"iTunes API Error: {e}")
+
+    # Cache result to prevent repeated searches
     meta_db.setdefault("tracks", {})[query_key] = result
     asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
     return result
@@ -7328,7 +7338,9 @@ QLYNKTIFY_HTML = r"""
 
 @app.get("/qlynk-tify", response_class=HTMLResponse)
 async def serve_qlynktify(request: Request):
-    return HTMLResponse(content=QLYNKTIFY_HTML)
+    # .strip() lagane se end ka saara kachra aur '\n' delete ho jayega
+    clean_html = QLYNKTIFY_HTML.strip()
+    return HTMLResponse(content=clean_html)
 
 # ==========================================
 # END OF QLYNK ARCHITECTURE V6 (TITAN)
