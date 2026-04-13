@@ -152,8 +152,10 @@ app.add_middleware(
 )
 
 # ==========================================
-# 4. UTILITY & DATABASE FUNCTIONS
+# 4. UTILITY & SMART CACHED DATABASE FUNCTIONS
 # ==========================================
+import time
+
 def format_size(size_in_bytes: int) -> str:
     for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
         if size_in_bytes < 1024.0:
@@ -161,14 +163,27 @@ def format_size(size_in_bytes: int) -> str:
         size_in_bytes /= 1024.0
     return f"{size_in_bytes:.2f} PB"
 
+# 🧠 RAM Cache Engine (Prevents 1000+ API calls)
+DB_CACHE = {
+    "history": {"data": None, "last_sync": 0},
+    "tokens": {"data": None, "last_sync": 0},
+    "subtitles": {"data": None, "last_sync": 0}
+}
+CACHE_TTL = 300 # 5 Minutes Sync Timer
+
 def get_db() -> Dict[str, Any]:
-    try:
-        file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Database Read Error: {e}")
-        return {"total_files": 0, "total_size_bytes": 0, "files": []}
+    # Sirf tab API call karega jab Cache khali ho ya 5 minute ho gaye hon
+    if DB_CACHE["history"]["data"] is None or time.time() - DB_CACHE["history"]["last_sync"] > CACHE_TTL:
+        try:
+            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
+            with open(file_path, "r") as f:
+                DB_CACHE["history"]["data"] = json.load(f)
+            DB_CACHE["history"]["last_sync"] = time.time()
+        except Exception as e:
+            logger.error(f"Database Read Error: {e}")
+            if DB_CACHE["history"]["data"] is None:
+                return {"total_files": 0, "total_size_bytes": 0, "files": []}
+    return DB_CACHE["history"]["data"]
 
 def save_db(db_data: Dict[str, Any]):
     db_data["total_files"] = len(db_data.get("files", []))
@@ -178,11 +193,12 @@ def save_db(db_data: Dict[str, Any]):
         json.dump(db_data, f, indent=4)
         
     api.upload_file(
-        path_or_fileobj="history.json", 
-        path_in_repo="history.json", 
-        repo_id=DATASET_REPO, 
-        repo_type="dataset"
+        path_or_fileobj="history.json", path_in_repo="history.json", 
+        repo_id=DATASET_REPO, repo_type="dataset"
     )
+    # ⚡ Update RAM instantly so no API call is needed after saving
+    DB_CACHE["history"]["data"] = db_data
+    DB_CACHE["history"]["last_sync"] = time.time()
 
 def verify_auth(password: str = Header(None), auth_token: str = Cookie(None)):
     token = password or auth_token
@@ -1787,33 +1803,45 @@ from huggingface_hub import hf_hub_download
 # --- 🧠 Persistent Token Store & Subtitle DB Managers ---
 
 # Database loader for Share Tokens
+# --- SHARE TOKENS DATABASE (CACHED) ---
 def get_tokens_db() -> Dict[str, Any]:
-    try:
-        file_path = hf_hub_download(repo_id=DATASET_REPO, filename="share_tokens.json", repo_type="dataset", token=HF_TOKEN)
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except Exception:
-        # Agar pehli baar run ho raha hai, toh empty structure return karo
-        return {"tokens": {}}
+    if DB_CACHE["tokens"]["data"] is None or time.time() - DB_CACHE["tokens"]["last_sync"] > CACHE_TTL:
+        try:
+            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="share_tokens.json", repo_type="dataset", token=HF_TOKEN)
+            with open(file_path, "r") as f:
+                DB_CACHE["tokens"]["data"] = json.load(f)
+            DB_CACHE["tokens"]["last_sync"] = time.time()
+        except Exception:
+            if DB_CACHE["tokens"]["data"] is None:
+                return {"tokens": {}}
+    return DB_CACHE["tokens"]["data"]
 
-# Database saver for Share Tokens
 def save_tokens_db(db_data: Dict[str, Any]):
     with open("share_tokens.json", "w") as f:
         json.dump(db_data, f, indent=4)
     api.upload_file(path_or_fileobj="share_tokens.json", path_in_repo="share_tokens.json", repo_id=DATASET_REPO, repo_type="dataset")
+    DB_CACHE["tokens"]["data"] = db_data
+    DB_CACHE["tokens"]["last_sync"] = time.time()
 
+# --- SUBTITLE DATABASE (CACHED) ---
 def get_sub_db() -> Dict[str, Any]:
-    try:
-        file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history_subtitle.json", repo_type="dataset", token=HF_TOKEN)
-        with open(file_path, "r") as f:
-            return json.load(f)
-    except:
-        return {"subtitles": []}
+    if DB_CACHE["subtitles"]["data"] is None or time.time() - DB_CACHE["subtitles"]["last_sync"] > CACHE_TTL:
+        try:
+            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history_subtitle.json", repo_type="dataset", token=HF_TOKEN)
+            with open(file_path, "r") as f:
+                DB_CACHE["subtitles"]["data"] = json.load(f)
+            DB_CACHE["subtitles"]["last_sync"] = time.time()
+        except Exception:
+            if DB_CACHE["subtitles"]["data"] is None:
+                return {"subtitles": []}
+    return DB_CACHE["subtitles"]["data"]
 
 def save_sub_db(db_data: Dict[str, Any]):
     with open("history_subtitle.json", "w") as f:
         json.dump(db_data, f, indent=4)
     api.upload_file(path_or_fileobj="history_subtitle.json", path_in_repo="history_subtitle.json", repo_id=DATASET_REPO, repo_type="dataset")
+    DB_CACHE["subtitles"]["data"] = db_data
+    DB_CACHE["subtitles"]["last_sync"] = time.time()
 
 # --- 🔒 Dual-Auth Verifier (Persistent) ---
 def verify_view_access(password: str = Header(None), auth_token: str = Cookie(None), share_token: str = Cookie(None)):
