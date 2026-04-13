@@ -876,21 +876,26 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        # 🔥 CRITICAL 206 BYPASS FIX (V5): The Ultimate 'Referer' Lock
-        referer = request.headers.get("referer", "")
+        # 🔥 CRITICAL 206 BYPASS FIX (V7): The Absolute Force-Route
+        referer = request.headers.get("referer", "").lower()
         
-        # Check karo ki file strictly Video ya Audio hai kya (Images aur PDFs pass ho jayenge)
+        # 1. DUAL-CHECK: Mime type aur File Extension DONO
         mime = file_info.get("mime_type", "").lower() if file_info else ""
-        is_video_or_audio = mime.startswith("video/") or mime.startswith("audio/")
+        filename = file_info.get("name", "").lower() if file_info else ""
         
-        # THE FIX: Jab koi user link directly browser/Incognito mein paste karta hai ya IDM use karta hai, 
-        # toh Referer hamesha EMPTY hota hai. 
-        # Hum sirf un requests ko allow karenge jo tere player ('qlynk' ya 'hf.space') ke andar se aayi hon.
-        is_direct_hit = not referer or ("qlynk" not in referer.lower() and "hf.space" not in referer.lower())
+        is_video_or_audio = (
+            mime.startswith("video/") or 
+            mime.startswith("audio/") or 
+            filename.endswith((".mp4", ".mkv", ".webm", ".avi", ".ts", ".mp3", ".m4a", ".wav", ".flac", ".ogg"))
+        )
         
-        # BLOCK SIRF TAB HOGA: Agar file Video/Audio hai AND user Admin nahi hai AND hit direct hai
-        if is_video_or_audio and not is_admin and is_direct_hit:
-            # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Links
+        # 2. ALLOW ONLY OUR NATIVE PLAYER:
+        # Agar request actual Player UI se aayi hai, tabhi allow karo. Baki har trick/direct hit block!
+        from_our_player = "qlynk" in referer or "hf.space" in referer
+        
+        # 3. THE BLOCK: Agar media hai, Admin nahi hai, aur Player ke bahar se request aayi hai -> ROUTE KARD DO!
+        if is_video_or_audio and not is_admin and not from_our_player:
+            # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Routes
             html_page = f"""
             <!DOCTYPE html>
             <html lang="en">
@@ -939,9 +944,12 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
                     </div>
                     
                     <div class="social-links">
-                        <a href="https://github.com/deepdeyiitgn" target="_blank">GitHub</a>
-                        <a href="https://www.instagram.com/deepdey.official" target="_blank">Instagram</a>
-                        <a href="https://discord.com/invite/t6ZKNw556n" target="_blank">Discord</a>
+                        <a href="/instagram" target="_blank">Instagram</a>
+                        <a href="/github" target="_blank">GitHub</a>
+                        <a href="/discord" target="_blank">Discord</a>
+                        <a href="/youtube" target="_blank">YouTube</a>
+                        <a href="/wiki" target="_blank">Wiki</a>
+                        <a href="/clock" target="_blank">Clock</a>
                     </div>
 
                     <a href="/video?q={slug}" class="redirect-btn">Force Route Now</a>
