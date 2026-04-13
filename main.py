@@ -876,45 +876,76 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        # 🔥 CRITICAL 206 BYPASS FIX: Catch Range headers (IDM/Incognito) & Fetch Destiny
+        # 🔥 CRITICAL 206 BYPASS FIX (Updated): Smart Direct Hit Detection
         has_range = "range" in request.headers
         fetch_dest = request.headers.get("sec-fetch-dest", "")
+        referer = request.headers.get("referer", "")
         
-        # Agar file media hai, YA FIR koi background fetch/Range request maar raha hai bypass ke liye
-        if (is_media or has_range or fetch_dest in ["video", "audio"]) and not is_admin:
-            # STRICT BLOCK: 403 Status + Cinematic 5s Countdown Auto-Redirect
+        # Agar user directly link address bar me daalta hai (document) ya IDM/Bot use karta hai (empty)
+        is_direct_hit = (fetch_dest == "document" or fetch_dest == "")
+        # Agar request kisi aur site se aayi hai (Hotlinking)
+        is_external_request = not referer or "qlynk" not in referer.lower()
+        
+        # Agar file media hai aur user Admin nahi hai, aur direct open karne ki koshish ho rahi hai
+        if is_media and not is_admin and (is_direct_hit or is_external_request):
+            # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Links
             html_page = f"""
             <!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <meta http-equiv="refresh" content="5;url=/video?q={slug}">
-                <title>Secure Vault | Access Denied</title>
+                <meta http-equiv="refresh" content="7;url=/video?q={slug}">
+                <title>Secure Routing | Qlynk Node</title>
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-                    body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; text-align: center; padding: 20px; }}
-                    .box {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px; border-radius: 16px; max-width: 450px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
-                    .icon {{ width: 60px; height: 60px; fill: #da3633; margin-bottom: 20px; }}
-                    h2 {{ color: #da3633; margin: 0 0 10px 0; font-size: 22px; }}
-                    p {{ color: #8b949e; font-size: 14px; margin-bottom: 25px; line-height: 1.5; }}
-                    .timer-box {{ background: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; font-weight: 600; color: #bc8cff; font-size: 16px; }}
-                    .redirect-btn {{ display: inline-block; margin-top: 25px; padding: 10px 20px; background: transparent; border: 1px solid #bc8cff; color: #bc8cff; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; transition: 0.3s; }}
-                    .redirect-btn:hover {{ background: #bc8cff; color: #000; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
+                    body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }}
+                    .container {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px 30px; border-radius: 16px; max-width: 480px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
+                    .logo {{ width: 65px; height: 65px; margin-bottom: 15px; filter: drop-shadow(0 0 10px rgba(188, 140, 255, 0.5)); }}
+                    h2 {{ color: #bc8cff; margin: 0 0 10px 0; font-size: 22px; }}
+                    p {{ color: #8b949e; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }}
+                    .features {{ text-align: left; background: #0d1117; padding: 15px; border-radius: 8px; font-size: 13px; color: #c9d1d9; margin-bottom: 20px; border: 1px solid #30363d; }}
+                    .features strong {{ color: #58a6ff; display: block; margin-bottom: 8px; }}
+                    .features ul {{ margin: 0; padding-left: 20px; }}
+                    .features li {{ margin-bottom: 5px; }}
+                    .timer-box {{ background: #161b22; border: 1px solid #30363d; padding: 12px; border-radius: 8px; font-weight: 600; color: #8b949e; font-size: 15px; margin-bottom: 25px; }}
+                    .timer-box span {{ font-size: 20px; color: #bc8cff; font-weight: 800; }}
+                    .social-links {{ display: flex; justify-content: center; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }}
+                    .social-links a {{ color: #e1e4e8; text-decoration: none; font-size: 13px; background: #21262d; padding: 8px 15px; border-radius: 20px; transition: 0.3s; border: 1px solid #30363d; font-weight: 600; }}
+                    .social-links a:hover {{ background: #bc8cff; color: #000; border-color: #bc8cff; }}
+                    .redirect-btn {{ display: inline-block; padding: 12px 25px; background: #e1e4e8; color: #000; text-decoration: none; border-radius: 8px; font-weight: bold; transition: 0.3s; width: 100%; box-sizing: border-box; }}
+                    .redirect-btn:hover {{ background: #bc8cff; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
                 </style>
             </head>
             <body>
-                <div class="box">
-                    <svg class="icon" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>
-                    <h2>Direct Access Blocked</h2>
-                    <p>Raw media files are protected by the Qlynk Architecture. Direct downloading or hotlinking is strictly prohibited.</p>
-                    <div class="timer-box">
-                        Routing to Secure Player in <span id="time" style="font-size: 20px;">5</span>s...
+                <div class="container">
+                    <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk Logo" class="logo">
+                    <h2>Secure Datacenter Routing</h2>
+                    <p>Direct raw access is blocked to protect bandwidth. You are being securely routed to the <b>Cinematic Player UI</b>.</p>
+                    
+                    <div class="features">
+                        <strong>⚡ Why use the Player?</strong>
+                        <ul>
+                            <li>Hardware Accelerated No-Lag Streaming</li>
+                            <li>Subtitle (CC) & Theater Mode Support</li>
+                            <li>100% Ad-Free & Encrypted Environment</li>
+                        </ul>
                     </div>
+
+                    <div class="timer-box">
+                        Routing to Vault in <span id="time">7</span>s...
+                    </div>
+                    
+                    <div class="social-links">
+                        <a href="https://github.com/deepdeyiitgn" target="_blank">GitHub</a>
+                        <a href="https://www.instagram.com/deepdey.official" target="_blank">Instagram</a>
+                        <a href="https://discord.com/invite/t6ZKNw556n" target="_blank">Discord</a>
+                    </div>
+
                     <a href="/video?q={slug}" class="redirect-btn">Force Route Now</a>
                 </div>
                 <script>
-                    let sec = 5;
+                    let sec = 7;
                     const timerEl = document.getElementById('time');
                     const interval = setInterval(() => {{
                         sec--;
@@ -928,7 +959,6 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
             return HTMLResponse(
                 status_code=403, 
                 content=html_page,
-                # Force browser to never cache this 403 page
                 headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
             )
             
@@ -5126,11 +5156,20 @@ async def dynamic_slug_rotator():
             slug_map = {}
             
             # 1. Generate new 32-char slugs for all files
+            # 1. Generate new 32-char slugs (SKIP IMAGES, ONLY ROTATE VIDEOS/DOCS)
+            # Yahan hum RAM (files list) mein hi sab edit kar rahe hain. 
+            # Baad mein ek hi save_db() se upload ho jayega (Total 2 API calls only).
+            rotated_count = 0
             for f in files:
-                old_slug = f["slug"]
-                new_slug = uuid.uuid4().hex
-                slug_map[old_slug] = new_slug
-                f["slug"] = new_slug
+                mime = str(f.get("mime_type", "")).lower()
+                
+                # Agar image nahi hai, tabhi slug change hoga
+                if not mime.startswith("image/"):
+                    old_slug = f["slug"]
+                    new_slug = uuid.uuid4().hex
+                    slug_map[old_slug] = new_slug
+                    f["slug"] = new_slug
+                    rotated_count += 1
             
             # 2. Fix Internal Thumbnail Links
             for f in files:
@@ -5151,7 +5190,7 @@ async def dynamic_slug_rotator():
             sub_db["subtitles"] = subs
             save_sub_db(sub_db)
             
-            logger.info(f"✅ HIGH SECURITY: Successfully rotated {len(files)} slugs to prevent scraping!")
+            logger.info(f"✅ HIGH SECURITY: Rotated {rotated_count} media/doc slugs. Images skipped to save bandwidth!")
         except Exception as e:
             logger.error(f"❌ Slug Rotator Error: {e}")
 
