@@ -6135,7 +6135,9 @@ async def get_track_metadata(q: str, access: dict = Depends(verify_view_access))
     result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": ""}
     try:
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
-        async with aiohttp.ClientSession() as session:
+        # 🛡️ FIX: Added User-Agent so iTunes doesn't block the request
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(url, timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -6816,6 +6818,10 @@ QLYNKTIFY_HTML = r"""
             else if(document.querySelector('.section-title')) renderHomeView(); 
             else renderQueueView();
 
+            // 🛡️ FIX: Auto-open Right Panel (Lyrics/Visualizer) on first play
+            const rp = document.getElementById('rightPanel');
+            if(!rp.classList.contains('active') && window.innerWidth > 900) { toggleRightPanel(); }
+
             // Buffering State
             document.getElementById('bp-title').innerText = "Buffering Chunk...";
             document.getElementById('rp-title').innerText = track.clean_title;
@@ -7022,8 +7028,26 @@ QLYNKTIFY_HTML = r"""
                         return;
                     }
                 }
-                cont.innerHTML = `<div style="font-size:16px; white-space:pre-wrap; color:var(--text-base); text-align:center;">${data.plain || "Lyrics not found."}</div>`;
-            } catch(e) { cont.innerHTML = `<div style="text-align:center; color:#ff5555; margin-top:50px;">Lyrics unreachable.</div>`; }
+                
+                // 🛡️ FIX: Restored Manual Search Fallback UI
+                let fallbackHtml = `
+                    <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; text-align: center; margin-top: 20px;">
+                        <div style="font-size:14px; margin-bottom:10px; color:var(--text-base);">Synced lyrics not found. Try refining the search.</div>
+                        <input type="text" id="manualLyricQuery" style="width:100%; padding:10px; border-radius:20px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; margin-bottom:10px;" value="${query}">
+                        <button class="btn-solid" style="padding:8px 20px; font-size:12px; width:auto;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Search Again</button>
+                    </div>
+                `;
+                if(data.plain) fallbackHtml += `<div style="font-size:16px; white-space:pre-wrap; color:var(--text-base); text-align:center; margin-top:20px;">${data.plain}</div>`;
+                cont.innerHTML = fallbackHtml;
+                
+            } catch(e) { 
+                cont.innerHTML = `
+                    <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; text-align: center; margin-top: 20px;">
+                        <div style="font-size:14px; margin-bottom:10px; color:#ff5555;">Server Error. Try manual search.</div>
+                        <input type="text" id="manualLyricQuery" style="width:100%; padding:10px; border-radius:20px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; margin-bottom:10px;" value="${query}">
+                        <button class="btn-solid" style="padding:8px 20px; font-size:12px; width:auto;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Retry</button>
+                    </div>`; 
+            }
         }
 
         function syncLyrics() {
