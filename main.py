@@ -876,21 +876,20 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        # 🔥 CRITICAL 206 BYPASS FIX (V4): Smart Direct Hit Detection (Videos/Audios ONLY)
-        fetch_dest = request.headers.get("sec-fetch-dest", "")
+        # 🔥 CRITICAL 206 BYPASS FIX (V5): The Ultimate 'Referer' Lock
         referer = request.headers.get("referer", "")
         
-        # NAYA LOGIC: Check karo ki file purely Video ya Audio hai kya (Images/PDFs skip ho jayenge)
+        # Check karo ki file strictly Video ya Audio hai kya (Images aur PDFs pass ho jayenge)
         mime = file_info.get("mime_type", "").lower() if file_info else ""
         is_video_or_audio = mime.startswith("video/") or mime.startswith("audio/")
         
-        # Agar user directly link address bar me daalta hai (document) ya IDM/Bot use karta hai (empty)
-        is_direct_hit = (fetch_dest == "document" or fetch_dest == "")
-        # Agar request kisi aur site se aayi hai (Hotlinking)
-        is_external_request = not referer or "qlynk" not in referer.lower()
+        # THE FIX: Jab koi user link directly browser/Incognito mein paste karta hai ya IDM use karta hai, 
+        # toh Referer hamesha EMPTY hota hai. 
+        # Hum sirf un requests ko allow karenge jo tere player ('qlynk' ya 'hf.space') ke andar se aayi hon.
+        is_direct_hit = not referer or ("qlynk" not in referer.lower() and "hf.space" not in referer.lower())
         
-        # BLOCK SIRF TAB HOGA: Agar file Video/Audio hai AND user Admin nahi hai AND Direct/Hotlink hit hai
-        if is_video_or_audio and not is_admin and (is_direct_hit or is_external_request):
+        # BLOCK SIRF TAB HOGA: Agar file Video/Audio hai AND user Admin nahi hai AND hit direct hai
+        if is_video_or_audio and not is_admin and is_direct_hit:
             # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Links
             html_page = f"""
             <!DOCTYPE html>
@@ -5772,11 +5771,12 @@ GLOBAL_UI_INJECTION = """
     }
     .loader-content { text-align: center; }
     
-    /* Cinematic Text Effects */
+    /* Cinematic Text Effects (FIXED: Perfectly Centered) */
     .cine-text {
         color: #ffffff; font-family: 'Inter', sans-serif;
         opacity: 0; transform: translateY(20px);
         transition: all 1s ease; position: absolute; width: 100%; left: 0;
+        text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;
     }
     .cine-text.active { opacity: 1; transform: translateY(0); }
     .cine-title { font-size: 2.8rem; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; }
