@@ -6436,19 +6436,7 @@ QLYNKTIFY_HTML = r"""
 
     <div id="toast" class="toast">Action Successful</div>
 
-    <div id="auth-shield">
-        <div class="shield-box" style="background: var(--bg-elevated); padding: 50px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); text-align: center; max-width: 450px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
-            <svg style="width:60px; fill:var(--qlynk-accent); margin-bottom:20px;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-            <h2 class="shield-title" id="shield-title" style="font-size:24px; font-weight:900; margin-bottom:15px; color:#fff;">Premium Access Required</h2>
-            <p class="shield-desc" id="shield-desc" style="color:var(--text-base); font-size:15px; margin-bottom:25px; line-height:1.5;">You need an active Qlynk Tube Premium Session to access the Music Vault.</p>
-            
-            <div style="display:flex; gap:10px; justify-content:center;">
-                <button class="shield-btn" style="background:transparent; color:#fff; border:1px solid #333; padding:12px 24px; border-radius:30px; font-weight:bold; cursor:pointer;" onclick="location.reload()">Retry Login</button>
-                <a href="/checkout" style="background:linear-gradient(135deg, var(--qlynk-accent), #58a6ff); color:#000; padding:12px 24px; border-radius:30px; font-weight:bold; text-decoration:none;">Buy Qlynk Tube</a>
-            </div>
-            <div id="error-log" class="error-log" style="display:none; margin-top:20px; color:#ff5555; font-family:monospace; font-size:12px;"></div>
-        </div>
-    </div>
+    
     <div class="overlay" id="plModal">
         <div class="modal">
             <div class="modal-title">Create Playlist</div>
