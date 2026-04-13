@@ -6126,22 +6126,23 @@ async def increment_play_count(slug: str, access: dict = Depends(verify_view_acc
 
 @app.get("/api/qlynktify/meta")
 async def get_track_metadata(q: str, access: dict = Depends(verify_view_access)):
-    """Silent API Proxy with Internal Database Caching for iTunes Metadata"""
+    """iTunes API Bypass + internal Fallback Engine"""
     import aiohttp
     meta_db = get_qlynktify_meta_db()
     query_key = q.lower().strip()
     
+    # 1. Check if already cached
     if query_key in meta_db.get("tracks", {}):
         return meta_db["tracks"][query_key]
 
     result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": "", "real_title": ""}
+    
     try:
-        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
-        # 🛡️ FIX: Heavy Browser Headers to bypass iTunes API Blocks
+        # 🛡️ Bypass Header: iTunes needs this to not return 403
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(url, timeout=5) as resp:
                 if resp.status == 200:
@@ -6151,12 +6152,23 @@ async def get_track_metadata(q: str, access: dict = Depends(verify_view_access))
                         result = {
                             "artist": track.get("artistName", "Unknown Artist"),
                             "album": track.get("collectionName", "Unknown Album"),
-                            "artwork": track.get("artworkUrl100", "").replace("100x100bb", "600x600bb"), # High Res
-                            "real_title": track.get("trackName", "") # Gets Official Track Name from iTunes
+                            "artwork": track.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
+                            "real_title": track.get("trackName", "")
                         }
     except Exception as e:
-        logger.warning(f"Metadata Proxy Error: {e}")
-        
+        logger.warning(f"iTunes API Error: {e}")
+
+    # 🔄 FALLBACK: Agar iTunes fail hua, history/vault se thumbnail lo
+    if not result["artwork"]:
+        db = get_db()
+        # Find match in database for this query
+        for f in db.get("files", []):
+            if q.lower() in f.get("filename", "").lower() or q.lower() in f.get("title", "").lower():
+                if f.get("thumbnail"):
+                    result["artwork"] = f["thumbnail"]
+                    result["album"] = "Archived Asset"
+                    break
+
     meta_db.setdefault("tracks", {})[query_key] = result
     asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
     return result
@@ -6270,7 +6282,7 @@ QLYNKTIFY_HTML = r"""
     <link rel="icon" type="image/png" href="https://qlynk.vercel.app/quicklink-logo.png">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
 
-    <style>
+<style>
         /* === CORE VARIABLES === */
         @import url('https://fonts.googleapis.com/css2?family=Circular+Std:wght@400;700;900&display=swap');
         :root {
@@ -6296,15 +6308,15 @@ QLYNKTIFY_HTML = r"""
         
         .input-base { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; font-size: 14px; margin-bottom: 15px;}
         .input-base:focus { border-color: var(--qlynk-accent); }
-        .btn-solid { background: var(--text-bright); color: #000; font-weight: 700; padding: 12px 24px; border-radius: 24px; border: none; cursor: pointer; transition: var(--trans); width: 100%;}
+        .btn-solid { background: var(--text-bright); color: #000; font-weight: 700; padding: 12px 24px; border-radius: 24px; border: none; cursor: pointer; transition: var(--trans); width: 100%; display:flex; justify-content:center; align-items:center; text-decoration:none;}
         .btn-solid:hover { transform: scale(1.02); }
 
         /* === MODALS & TOASTS === */
-        .overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 999; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px);}
+        .overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 99999; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px);}
         .modal { background: var(--bg-elevated); padding: 30px; border-radius: 12px; width: 350px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
         .modal-title { font-size: 20px; font-weight: 900; margin-bottom: 20px; }
         
-        .toast { position: fixed; bottom: -50px; left: 50%; transform: translateX(-50%); background: var(--qlynk-accent); color: #000; padding: 12px 24px; border-radius: 30px; font-weight: 900; font-size: 14px; z-index: 1000; transition: bottom 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(188, 140, 255, 0.3);}
+        .toast { position: fixed; bottom: -50px; left: 50%; transform: translateX(-50%); background: var(--qlynk-accent); color: #000; padding: 12px 24px; border-radius: 30px; font-weight: 900; font-size: 14px; z-index: 100000; transition: bottom 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(188, 140, 255, 0.3);}
         .toast.show { bottom: 120px; }
 
         /* === APP CONTEXT MENU === */
@@ -6318,7 +6330,7 @@ QLYNKTIFY_HTML = r"""
         .app-wrapper { display: flex; flex: 1; overflow: hidden; padding: 8px; gap: 8px; }
         
         /* === SIDEBAR === */
-        .sidebar { width: 280px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+        .sidebar { width: 280px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; height: calc(100vh - 100px); /* Leave room for player */ }
         .sidebar-box { background: var(--bg-highlight); border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
         .nav-link { color: var(--text-base); text-decoration: none; font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: var(--trans); }
         .nav-link:hover, .nav-link.active { color: var(--text-bright); }
@@ -6329,14 +6341,17 @@ QLYNKTIFY_HTML = r"""
         .lib-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--text-base); transition: var(--trans); display: flex; align-items: center; gap: 12px; justify-content: space-between;}
         .lib-item:hover { background: rgba(255,255,255,0.05); color: #fff;}
         .lib-item.active { background: rgba(255,255,255,0.1); color: var(--accent);}
+        
         .item-icon-box { display:flex; align-items:center; gap:12px; overflow:hidden;}
-        .item-icon-box svg { width: 16px; flex-shrink:0;}
-        .item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+        .item-icon-wrap { width: 32px; height: 32px; border-radius: 4px; overflow: hidden; display:flex; justify-content:center; align-items:center; background:#282828; flex-shrink:0;}
+        .item-icon-wrap img { width:100%; height:100%; object-fit:cover;}
+        .item-icon-wrap svg { width: 16px; fill: #fff;}
+        .item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1;}
         
         /* === MAIN VIEW === */
         .main-view { flex: 1; background: linear-gradient(180deg, var(--dom-color) 0%, var(--bg-highlight) 40%, var(--bg-base) 100%); border-radius: 8px; overflow-y: auto; position: relative; transition: background 1s ease; display: flex; flex-direction: column;}
         .main-header { position: sticky; top: 0; padding: 12px 24px; background: rgba(0,0,0,0.5); backdrop-filter: blur(20px); z-index: 10; display: flex; justify-content: space-between; align-items: center;}
-        .content-padding { padding: 24px; padding-bottom: 100px; flex: 1;}
+        .content-padding { padding: 24px; padding-bottom: 120px; flex: 1;}
         
         .hero-banner { display:flex; align-items:flex-end; gap:24px; margin-bottom:30px; padding-top:20px;}
         .hero-img { width: 180px; height: 180px; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); object-fit: cover;}
@@ -6350,7 +6365,7 @@ QLYNKTIFY_HTML = r"""
         .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 20px;}
         .music-card { background: var(--bg-elevated); padding: 16px; border-radius: 8px; cursor: pointer; transition: var(--trans); position: relative;}
         .music-card:hover { background: var(--bg-hover); }
-        .mc-img-wrap { width: 100%; aspect-ratio: 1; border-radius: 6px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); position: relative;}
+        .mc-img-wrap { width: 100%; aspect-ratio: 1; border-radius: 6px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); position: relative; background:#282828; display:flex; justify-content:center; align-items:center;}
         .mc-img { width: 100%; height: 100%; object-fit: cover; }
         .mc-play-btn { position: absolute; bottom: 8px; right: 8px; width: 44px; height: 44px; background: var(--accent); border-radius: 50%; display: flex; justify-content: center; align-items: center; color: #000; opacity: 0; transform: translateY(10px); transition: all 0.3s; box-shadow: 0 8px 15px rgba(0,0,0,0.3);}
         .music-card:hover .mc-play-btn { opacity: 1; transform: translateY(0); }
@@ -6393,26 +6408,51 @@ QLYNKTIFY_HTML = r"""
         .lyric-line:hover { color: rgba(255,255,255,0.8); }
         .lyric-line.active { color: var(--text-bright); transform: scale(1.05); text-shadow: 0 0 15px rgba(255,255,255,0.2); }
         
-        .visualizer-container { flex: 1; display: none; justify-content: center; align-items: center; background: radial-gradient(circle, var(--dom-color-dim) 0%, transparent 80%); border-radius: 8px;}
+        /* 🔥 Visualizer Glow Update */
+        .visualizer-container { 
+            flex: 1; 
+            display: none; 
+            justify-content: center; 
+            align-items: center; 
+            background: radial-gradient(circle, var(--dom-color-dim) 0%, transparent 80%); 
+            border-radius: 8px;
+            box-shadow: inset 0 0 50px var(--dom-color-dim);
+            border: 1px solid rgba(255,255,255,0.05);
+            transition: all 1s ease;
+        }
         #canvasVisualizer { width: 100%; height: 100%; filter: drop-shadow(0 0 15px var(--dom-color)); }
 
         /* === BOTTOM PLAYER BAR === */
-        .player-bar { height: 90px; background: #000000; border-top: 1px solid #282828; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; z-index: 100; position: relative;}
+        .player-bar { 
+            height: 95px; 
+            background: #000000; 
+            border-top: 1px solid #282828; 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            padding: 0 20px; 
+            z-index: 9999 !important; /* Force to top */
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+        }
         .p-left, .p-right { width: 30%; min-width: 200px; display: flex; align-items: center; }
         .p-center { width: 40%; max-width: 722px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
         
         .np-img { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.5);}
         .np-info { margin-left: 14px; display: flex; flex-direction: column; justify-content: center; overflow:hidden;}
-        .np-title { font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; text-overflow: ellipsis; overflow:hidden;}
+        .np-title { font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; text-overflow: ellipsis; overflow:hidden; display:flex; align-items:center; gap:8px;}
         .np-artist { font-size: 12px; color: var(--text-base); margin-top: 4px; white-space: nowrap;}
         
-        .p-controls { display: flex; align-items: center; gap: 20px; }
-        .c-btn { background: transparent; border: none; color: var(--text-base); cursor: pointer; transition: 0.2s; position: relative;}
+        .p-controls { display: flex; align-items: center; gap: 20px; visibility: visible !important; }
+        .c-btn { background: transparent; border: none; color: var(--text-base); cursor: pointer; transition: 0.2s; position: relative; display:flex; align-items:center; justify-content:center;}
+        .c-btn svg { width: 16px; height: 16px; fill: currentColor; }
         .c-btn:hover { color: var(--text-bright); transform: scale(1.1);}
         .c-btn.active { color: var(--accent); }
         .c-btn.active::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; background: var(--accent); border-radius: 50%;}
         
-        .c-btn-play { background: var(--text-bright); color: #000; border-radius: 50%; width: 34px; height: 34px; display:flex; align-items:center; justify-content:center;}
+        .c-btn-play { background: var(--text-bright); color: #000; border-radius: 50%; width: 34px; height: 34px;}
+        .c-btn-play svg { fill: #000; }
         .c-btn-play:hover { transform: scale(1.05); background: #fff; }
         
         .indicator-badge { position: absolute; top: -5px; right: -5px; background: var(--accent); color: #000; font-size: 8px; font-weight: 900; padding: 2px 4px; border-radius: 10px; display: none;}
@@ -7094,29 +7134,42 @@ QLYNKTIFY_HTML = r"""
                 if(!audioCtx) {
                     const AudioContext = window.AudioContext || window.webkitAudioContext;
                     audioCtx = new AudioContext();
-                    analyser = audioCtx.createAnalyser(); analyser.fftSize = 128;
+                    analyser = audioCtx.createAnalyser();
+                    analyser.fftSize = 256; // High Detail
                     const source = audioCtx.createMediaElementSource(audioEl);
-                    source.connect(analyser); analyser.connect(audioCtx.destination);
+                    source.connect(analyser);
+                    analyser.connect(audioCtx.destination);
                     dataArray = new Uint8Array(analyser.frequencyBinCount);
                 }
                 if(audioCtx.state === 'suspended') audioCtx.resume();
-            } catch(e) { return; }
+            } catch(e) { console.log("Visualizer Error:", e); return; }
             
-            const canvas = document.getElementById('canvasVisualizer'); const ctx = canvas.getContext('2d');
+            const canvas = document.getElementById('canvasVisualizer');
+            const ctx = canvas.getContext('2d');
+            
             function draw() {
                 visualizerAnimId = requestAnimationFrame(draw);
-                canvas.width = canvas.parentElement.clientWidth; canvas.height = canvas.parentElement.clientHeight;
+                // 🛡️ Ensure canvas matches its container perfectly
+                canvas.width = canvas.parentElement.clientWidth;
+                canvas.height = canvas.parentElement.clientHeight;
+                
                 analyser.getByteFrequencyData(dataArray);
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
-                const barWidth = (canvas.width / dataArray.length) * 1.5; const centerY = canvas.height / 2;
-                let x = (canvas.width - (barWidth + 2) * dataArray.length) / 2;
+                
+                const barWidth = (canvas.width / dataArray.length) * 2;
+                const centerY = canvas.height / 2;
+                let x = 0;
                 
                 for(let i = 0; i < dataArray.length; i++) {
-                    const barHeight = (dataArray[i] / 255) * (canvas.height / 2) * 0.8;
-                    const domColor = getComputedStyle(document.documentElement).getPropertyValue('--dom-color').trim() || '#1ed760';
-                    ctx.fillStyle = domColor; ctx.beginPath();
-                    ctx.roundRect(x, centerY - barHeight, barWidth, barHeight, 2); ctx.roundRect(x, centerY, barWidth, barHeight, 2);
-                    ctx.fill(); x += barWidth + 2;
+                    const barHeight = (dataArray[i] / 255) * (canvas.height / 2) * 0.9;
+                    // 🔥 COLOR MATCH: Using the dominant color variable
+                    const domColor = getComputedStyle(document.documentElement).getPropertyValue('--dom-color').trim() || '#bc8cff';
+                    
+                    ctx.fillStyle = domColor;
+                    // Draw Bars (Mirror effect)
+                    ctx.fillRect(x, centerY - barHeight, barWidth - 1, barHeight); 
+                    ctx.fillRect(x, centerY, barWidth - 1, barHeight); 
+                    x += barWidth;
                 }
             }
             draw();
