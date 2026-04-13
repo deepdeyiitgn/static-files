@@ -876,18 +876,21 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        # 🔥 CRITICAL 206 BYPASS FIX (Updated): Smart Direct Hit Detection
-        has_range = "range" in request.headers
+        # 🔥 CRITICAL 206 BYPASS FIX (V4): Smart Direct Hit Detection (Videos/Audios ONLY)
         fetch_dest = request.headers.get("sec-fetch-dest", "")
         referer = request.headers.get("referer", "")
+        
+        # NAYA LOGIC: Check karo ki file purely Video ya Audio hai kya (Images/PDFs skip ho jayenge)
+        mime = file_info.get("mime_type", "").lower() if file_info else ""
+        is_video_or_audio = mime.startswith("video/") or mime.startswith("audio/")
         
         # Agar user directly link address bar me daalta hai (document) ya IDM/Bot use karta hai (empty)
         is_direct_hit = (fetch_dest == "document" or fetch_dest == "")
         # Agar request kisi aur site se aayi hai (Hotlinking)
         is_external_request = not referer or "qlynk" not in referer.lower()
         
-        # Agar file media hai aur user Admin nahi hai, aur direct open karne ki koshish ho rahi hai
-        if is_media and not is_admin and (is_direct_hit or is_external_request):
+        # BLOCK SIRF TAB HOGA: Agar file Video/Audio hai AND user Admin nahi hai AND Direct/Hotlink hit hai
+        if is_video_or_audio and not is_admin and (is_direct_hit or is_external_request):
             # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Links
             html_page = f"""
             <!DOCTYPE html>
@@ -5159,12 +5162,14 @@ async def dynamic_slug_rotator():
             # 1. Generate new 32-char slugs (SKIP IMAGES, ONLY ROTATE VIDEOS/DOCS)
             # Yahan hum RAM (files list) mein hi sab edit kar rahe hain. 
             # Baad mein ek hi save_db() se upload ho jayega (Total 2 API calls only).
+            # 1. Generate new 32-char slugs (STRICT: ONLY ROTATE VIDEOS & AUDIOS)
+            # Yahan hum RAM (files list) mein hi sab edit kar rahe hain.
             rotated_count = 0
             for f in files:
                 mime = str(f.get("mime_type", "")).lower()
                 
-                # Agar image nahi hai, tabhi slug change hoga
-                if not mime.startswith("image/"):
+                # Sirf aur Sirf Video aur Audio ka slug change hoga (Images & Docs skipped)
+                if mime.startswith("video/") or mime.startswith("audio/"):
                     old_slug = f["slug"]
                     new_slug = uuid.uuid4().hex
                     slug_map[old_slug] = new_slug
@@ -5190,7 +5195,7 @@ async def dynamic_slug_rotator():
             sub_db["subtitles"] = subs
             save_sub_db(sub_db)
             
-            logger.info(f"✅ HIGH SECURITY: Rotated {rotated_count} media/doc slugs. Images skipped to save bandwidth!")
+            logger.info(f"✅ HIGH SECURITY: Rotated {rotated_count} media slugs. Images and Docs skipped to keep links stable!")
         except Exception as e:
             logger.error(f"❌ Slug Rotator Error: {e}")
 
@@ -5749,142 +5754,146 @@ async def serve_admin_dashboard(request: Request, token: str = Depends(verify_au
 
 
 # ==========================================
-# 19. CINEMATIC SESSION INTRO (AUTO-INJECTION MIDDLEWARE)
+# 19. GLOBAL LOADER & REFINED CINEMATIC INTRO
 # ==========================================
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 
-CINEMATIC_INTRO_HTML = """
+# Visual Styles and Core Animation Logic
+GLOBAL_UI_INJECTION = """
 <style>
-    #qlynk-cinematic-intro {
+    /* Fullscreen Overlay */
+    #qlynk-global-loader {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: #000000; z-index: 2147483647; /* Maximum priority */
+        background: #000000; z-index: 2147483647;
         display: flex; flex-direction: column; justify-content: center; align-items: center;
-        color: #ffffff; font-family: 'Inter', ui-monospace, sans-serif;
-        opacity: 1; transition: opacity 1s ease-in-out;
+        opacity: 1; transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    .cinematic-scene {
-        position: absolute; text-align: center;
-        opacity: 0; transform: scale(0.95);
-        transition: all 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-    }
-    .cinematic-scene.active {
-        opacity: 1; transform: scale(1);
-    }
-    .cine-title {
-        font-size: 3rem; font-weight: 800; letter-spacing: 4px; margin-bottom: 10px;
-        text-transform: uppercase; text-shadow: 0 0 20px rgba(0, 255, 255, 0.25); 
-    }
-    .cine-subtitle {
-        font-size: 1.2rem; font-weight: 400; letter-spacing: 2px; color: #00ffff;
-        text-transform: uppercase; opacity: 0.8;
-    }
-    .cine-loader-wrapper {
-        opacity: 0; transition: opacity 1s ease;
-        display: flex; flex-direction: column; align-items: center; gap: 15px;
-    }
-    .cine-loader-wrapper.active { opacity: 1; }
-    .cine-spinner {
-        width: 45px; height: 45px; border: 3px solid rgba(0, 255, 255, 0.1);
-        border-top-color: #00ffff; border-radius: 50%;
-        animation: cine-spin 1s linear infinite; box-shadow: 0 0 15px rgba(0,255,255,0.2);
-    }
-    @keyframes cine-spin { to { transform: rotate(360deg); } }
-    body.intro-locked { overflow: hidden !important; }
+    .loader-content { text-align: center; }
     
-    @media(max-width: 768px) {
-        .cine-title { font-size: 1.8rem; letter-spacing: 2px; }
-        .cine-subtitle { font-size: 0.9rem; }
+    /* Cinematic Text Effects */
+    .cine-text {
+        color: #ffffff; font-family: 'Inter', sans-serif;
+        opacity: 0; transform: translateY(20px);
+        transition: all 1s ease; position: absolute; width: 100%; left: 0;
     }
+    .cine-text.active { opacity: 1; transform: translateY(0); }
+    .cine-title { font-size: 2.8rem; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; }
+    .cine-sub { font-size: 1.1rem; color: #00ffff; margin-top: 10px; letter-spacing: 3px; opacity: 0.7; }
+
+    /* The Spinner & Messages */
+    .spinner-box { margin-top: 20px; display: none; flex-direction: column; align-items: center; }
+    .spinner-box.visible { display: flex; }
+    .spinner {
+        width: 50px; height: 50px; border: 2px solid rgba(0, 255, 255, 0.1);
+        border-top: 2px solid #00ffff; border-radius: 50%;
+        animation: spin 0.8s linear infinite; box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
+    }
+    #loading-msg { color: #8b949e; font-size: 12px; margin-top: 15px; letter-spacing: 2px; text-transform: uppercase; }
+    
+    @keyframes spin { to { transform: rotate(360deg); } }
+    body.locked { overflow: hidden !important; }
 </style>
 
-<div id="qlynk-cinematic-intro">
-    <div id="scene-1" class="cinematic-scene">
+<div id="qlynk-global-loader">
+    <div id="intro-1" class="cine-text">
         <div class="cine-title">QLYNK Nobe Server</div>
-        <div class="cine-subtitle">an app by Deep</div>
+        <div class="cine-sub">an app by Deep</div>
     </div>
-    <div id="scene-2" class="cinematic-scene">
-        <div class="cine-title">a Deep Dey Creation</div>
-        <div class="cine-subtitle">an Deep Dey Product</div>
+    <div id="intro-2" class="cine-text">
+        <div class="cine-title" style="font-size: 2.2rem;">a Deep Dey Creation</div>
+        <div class="cine-sub">an Deep Dey Product</div>
     </div>
-    <div id="scene-loader" class="cine-loader-wrapper">
-        <div class="cine-spinner"></div>
-        <div class="cine-subtitle" style="font-size: 0.9rem; margin-top: 10px; color:#8b949e;">INITIALIZING DATACENTER...</div>
+
+    <div id="loader-ui" class="spinner-box">
+        <div class="spinner"></div>
+        <div id="loading-msg">INITIALIZING SYSTEM...</div>
     </div>
 </div>
 
 <script>
-    document.addEventListener("DOMContentLoaded", () => {
-        const introEl = document.getElementById("qlynk-cinematic-intro");
-        if (!introEl) return;
-        
-        // Ensure it only runs once per active session
-        if (sessionStorage.getItem("qlynk_cinematic_played")) {
-            introEl.style.display = "none";
-            return;
-        }
-        
-        // Lock background scrolling while intro plays
-        document.body.classList.add("intro-locked");
-        
-        const scene1 = document.getElementById("scene-1");
-        const scene2 = document.getElementById("scene-2");
-        const loader = document.getElementById("scene-loader");
+    const messages = [
+        "Waking up QLYNK Node...",
+        "Syncing with Hugging Face Vault...",
+        "Verifying Encryption Keys...",
+        "Fetching Database History...",
+        "Securing Data Stream...",
+        "Finalizing Handshake..."
+    ];
 
-        // Cinematic Timeline Sequence
-        setTimeout(() => { scene1.classList.add("active"); }, 500);   // Show Scene 1
-        setTimeout(() => { scene1.classList.remove("active"); }, 3500); // Hide Scene 1
+    document.addEventListener("DOMContentLoaded", () => {
+        const overlay = document.getElementById("qlynk-global-loader");
+        const i1 = document.getElementById("intro-1");
+        const i2 = document.getElementById("intro-2");
+        const loaderUI = document.getElementById("loader-ui");
+        const msgEl = document.getElementById("loading-msg");
         
-        setTimeout(() => { scene2.classList.add("active"); }, 4500);  // Show Scene 2
-        setTimeout(() => { scene2.classList.remove("active"); }, 7500); // Hide Scene 2
+        document.body.classList.add("locked");
         
-        setTimeout(() => { loader.classList.add("active"); }, 8500);  // Show Loading Ring
-        
-        // End Intro & Reveal Website seamlessly
-        setTimeout(() => {
-            introEl.style.opacity = "0";
+        // Check if we should play the full cinema or just the loader
+        const path = window.location.pathname;
+        const played = sessionStorage.getItem("intro_played");
+        const showCinema = (path === "/" || path === "/dashboard" || path === "/view") && !played;
+
+        let delay = 3500; // Base loading time
+
+        if (showCinema) {
+            delay = 10000; // Longer for cinema
+            setTimeout(() => i1.classList.add("active"), 500);
+            setTimeout(() => i1.classList.remove("active"), 3500);
+            setTimeout(() => i2.classList.add("active"), 4500);
+            setTimeout(() => i2.classList.remove("active"), 7500);
             setTimeout(() => {
-                introEl.style.display = "none";
-                document.body.classList.remove("intro-locked");
-                sessionStorage.setItem("qlynk_cinematic_played", "true");
-            }, 1000); // Wait for fade-out transition
-        }, 11000);
+                loaderUI.classList.add("visible");
+                sessionStorage.setItem("intro_played", "true");
+            }, 8000);
+        } else {
+            // Just show the loader for 3-5s
+            loaderUI.classList.add("visible");
+            let msgIdx = 0;
+            const msgInterval = setInterval(() => {
+                msgIdx = (msgIdx + 1) % messages.length;
+                msgEl.innerText = messages[msgIdx];
+            }, 800);
+            setTimeout(() => clearInterval(msgInterval), 4000);
+        }
+
+        // Final Reveal
+        setTimeout(() => {
+            overlay.style.opacity = "0";
+            setTimeout(() => {
+                overlay.style.display = "none";
+                document.body.classList.remove("locked");
+            }, 800);
+        }, delay);
     });
 </script>
 """
 
-class CinematicIntroMiddleware(BaseHTTPMiddleware):
+class GlobalLoaderMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        
-        # Trigger intro only on primary UI routes
-        target_paths = ["/", "/dashboard", "/view", "/21", "/video"]
-        
-        # Ensure we only inject into HTML responses (ignoring APIs/JSON)
-        if request.url.path in target_paths and response.headers.get("content-type", "").startswith("text/html"):
+        # Inject into ALL HTML responses for a consistent brand feel
+        if response.headers.get("content-type", "").startswith("text/html"):
             body_iterator = response.body_iterator
             body_bytes = [section async for section in body_iterator]
             body_bytes = b"".join(body_bytes)
             html_content = body_bytes.decode("utf-8")
             
-            # Safely inject the cinematic HTML just before the closing body tag
             if "</body>" in html_content:
-                html_content = html_content.replace("</body>", CINEMATIC_INTRO_HTML + "\\n</body>")
+                html_content = html_content.replace("</body>", GLOBAL_UI_INJECTION + "\\n</body>")
             else:
-                html_content += CINEMATIC_INTRO_HTML
+                html_content += GLOBAL_UI_INJECTION
                 
-            # Clear old content-length and return the modified response
             headers = dict(response.headers)
             if "content-length" in headers:
                 del headers["content-length"] 
                 
             return HTMLResponse(content=html_content, status_code=response.status_code, headers=headers)
-            
         return response
 
-# Attach the master interceptor to the app architecture
-app.add_middleware(CinematicIntroMiddleware)
+app.add_middleware(GlobalLoaderMiddleware)
 
 # ==========================================
 # 20. ENTERPRISE GARBAGE COLLECTION (TEMP SWEEPER)
