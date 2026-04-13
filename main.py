@@ -876,12 +876,10 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        # 🔥 CRITICAL 206 BYPASS FIX (V7): The Absolute Force-Route
-        referer = request.headers.get("referer", "").lower()
-        
-        # 1. DUAL-CHECK: Mime type aur File Extension DONO
-        mime = file_info.get("mime_type", "").lower() if file_info else ""
-        filename = file_info.get("name", "").lower() if file_info else ""
+        # 🔥 CRITICAL 206 BYPASS FIX (V8): The "No-Mercy" Firewall
+        # 1. Check if the file is Video or Audio
+        mime = str(file_info.get("mime_type", "")).lower() if file_info else ""
+        filename = str(file_info.get("name", "")).lower() if file_info else ""
         
         is_video_or_audio = (
             mime.startswith("video/") or 
@@ -889,12 +887,11 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
             filename.endswith((".mp4", ".mkv", ".webm", ".avi", ".ts", ".mp3", ".m4a", ".wav", ".flac", ".ogg"))
         )
         
-        # 2. ALLOW ONLY OUR NATIVE PLAYER:
-        # Agar request actual Player UI se aayi hai, tabhi allow karo. Baki har trick/direct hit block!
-        from_our_player = "qlynk" in referer or "hf.space" in referer
-        
-        # 3. THE BLOCK: Agar media hai, Admin nahi hai, aur Player ke bahar se request aayi hai -> ROUTE KARD DO!
-        if is_video_or_audio and not is_admin and not from_our_player:
+        # 2. THE ULTIMATE BLOCK:
+        # Tera native player video chalane ke liye /stream/media/{token} use karta hai, /f/{slug} nahi!
+        # Toh agar koi bhi (jo Admin nahi hai) is /f/ share link pe aayega, usko 100% Timer UI dikhega.
+        # IDM ho, Incognito ho, ya direct paste — sab block honge!
+        if is_video_or_audio and not is_admin:
             # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Routes
             html_page = f"""
             <!DOCTYPE html>
