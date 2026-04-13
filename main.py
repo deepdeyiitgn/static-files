@@ -6126,17 +6126,22 @@ async def increment_play_count(slug: str, access: dict = Depends(verify_view_acc
 
 @app.get("/api/qlynktify/meta")
 async def get_track_metadata(q: str, access: dict = Depends(verify_view_access)):
+    """Silent API Proxy with Internal Database Caching for iTunes Metadata"""
+    import aiohttp
     meta_db = get_qlynktify_meta_db()
     query_key = q.lower().strip()
     
     if query_key in meta_db.get("tracks", {}):
         return meta_db["tracks"][query_key]
 
-    result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": ""}
+    result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": "", "real_title": ""}
     try:
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
-        # 🛡️ FIX: Added User-Agent so iTunes doesn't block the request
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        # 🛡️ FIX: Heavy Browser Headers to bypass iTunes API Blocks
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
         async with aiohttp.ClientSession(headers=headers) as session:
             async with session.get(url, timeout=5) as resp:
                 if resp.status == 200:
@@ -6146,10 +6151,11 @@ async def get_track_metadata(q: str, access: dict = Depends(verify_view_access))
                         result = {
                             "artist": track.get("artistName", "Unknown Artist"),
                             "album": track.get("collectionName", "Unknown Album"),
-                            "artwork": track.get("artworkUrl100", "").replace("100x100bb", "600x600bb")
+                            "artwork": track.get("artworkUrl100", "").replace("100x100bb", "600x600bb"), # High Res
+                            "real_title": track.get("trackName", "") # Gets Official Track Name from iTunes
                         }
     except Exception as e:
-        pass
+        logger.warning(f"Metadata Proxy Error: {e}")
         
     meta_db.setdefault("tracks", {})[query_key] = result
     asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
@@ -6430,10 +6436,24 @@ QLYNKTIFY_HTML = r"""
 
     <div id="toast" class="toast">Action Successful</div>
 
+    <div id="auth-shield">
+        <div class="shield-box" style="background: var(--bg-elevated); padding: 50px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.1); text-align: center; max-width: 450px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);">
+            <svg style="width:60px; fill:var(--qlynk-accent); margin-bottom:20px;" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            <h2 class="shield-title" id="shield-title" style="font-size:24px; font-weight:900; margin-bottom:15px; color:#fff;">Premium Access Required</h2>
+            <p class="shield-desc" id="shield-desc" style="color:var(--text-base); font-size:15px; margin-bottom:25px; line-height:1.5;">You need an active Qlynk Tube Premium Session to access the Music Vault.</p>
+            
+            <div style="display:flex; gap:10px; justify-content:center;">
+                <button class="shield-btn" style="background:transparent; color:#fff; border:1px solid #333; padding:12px 24px; border-radius:30px; font-weight:bold; cursor:pointer;" onclick="location.reload()">Retry Login</button>
+                <a href="/checkout" style="background:linear-gradient(135deg, var(--qlynk-accent), #58a6ff); color:#000; padding:12px 24px; border-radius:30px; font-weight:bold; text-decoration:none;">Buy Qlynk Tube</a>
+            </div>
+            <div id="error-log" class="error-log" style="display:none; margin-top:20px; color:#ff5555; font-family:monospace; font-size:12px;"></div>
+        </div>
+    </div>
     <div class="overlay" id="plModal">
         <div class="modal">
             <div class="modal-title">Create Playlist</div>
             <input type="text" id="plNameInput" class="input-base" placeholder="My Awesome Playlist">
+            
             <div style="display:flex; gap:10px;">
                 <button class="btn-solid" style="background:transparent; color:#fff; border:1px solid #333;" onclick="document.getElementById('plModal').style.display='none'">Cancel</button>
                 <button class="btn-solid" onclick="createPlaylistAction()">Create</button>
@@ -6819,12 +6839,17 @@ QLYNKTIFY_HTML = r"""
             else renderQueueView();
 
             // 🛡️ FIX: Auto-open Right Panel (Lyrics/Visualizer) on first play
+            // Add this below the render Queue/Home view line
+            
+            // Auto-open Right Panel for Lyrics and Visualizer!
             const rp = document.getElementById('rightPanel');
             if(!rp.classList.contains('active') && window.innerWidth > 900) { toggleRightPanel(); }
 
-            // Buffering State
+            // Use the real title from iTunes if available, else fallback to clean title
+            const displayTitle = track.meta && track.meta.real_title ? track.meta.real_title : track.clean_title;
+            
             document.getElementById('bp-title').innerText = "Buffering Chunk...";
-            document.getElementById('rp-title').innerText = track.clean_title;
+            document.getElementById('rp-title').innerText = displayTitle;
             document.getElementById('blob-loader').style.display = 'inline-block';
             
             if(track.meta) updatePlayerMeta(track.meta);
@@ -7005,48 +7030,55 @@ QLYNKTIFY_HTML = r"""
             });
         }
 
-        // === DUAL ENGINE: LYRICS ===
+       // === DUAL ENGINE: LYRICS ===
         async function fetchLyrics(query) {
-            const cont = document.getElementById('lyricsContainer');
-            cont.innerHTML = `<div style="text-align:center; color:var(--text-dim); margin-top:50px;">Scanning Datacenter...</div>`;
+            const container = document.getElementById('lyricsContainer');
+            container.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.3); margin-top:50px;">Scanning Datacenter...</div>';
             parsedLyrics = [];
+            
             try {
                 const res = await fetch(`/api/qlynktify/lyrics?q=${encodeURIComponent(query)}`);
-                if(!res.ok) throw new Error("API");
+                if(!res.ok) throw new Error("Lyrics API Error");
                 const data = await res.json();
                 
                 if(data.synced) {
-                    data.synced.split('\n').forEach(line => {
-                        const m = line.match(/\[(\d{2}):(\d{2}\.\d{2})\](.*)/);
-                        if(m) {
-                            const time = parseInt(m[1])*60 + parseFloat(m[2]); const text = m[3].trim();
-                            if(text) parsedLyrics.push({time, text});
+                    const lines = data.synced.split('\n');
+                    lines.forEach(line => {
+                        const match = line.match(/\[(\d{2}):(\d{2}\.\d{2})\](.*)/);
+                        if(match) {
+                            const time = parseInt(match[1]) * 60 + parseFloat(match[2]);
+                            const text = match[3].trim();
+                            if(text) parsedLyrics.push({time: time, text: text});
                         }
                     });
+                    
                     if(parsedLyrics.length > 0) {
-                        cont.innerHTML = parsedLyrics.map((l, i) => `<div class="lyric-line" id="lyr-${i}" onclick="audioEl.currentTime=${l.time}">${l.text}</div>`).join('');
+                        container.innerHTML = parsedLyrics.map((l, i) => `<div class="lyric-line" id="lyr-${i}" onclick="audioEl.currentTime=${l.time}">${l.text}</div>`).join('');
                         return;
                     }
                 }
                 
-                // 🛡️ FIX: Restored Manual Search Fallback UI
+                // Fallback UI with Custom Search
                 let fallbackHtml = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; text-align: center; margin-top: 20px;">
-                        <div style="font-size:14px; margin-bottom:10px; color:var(--text-base);">Synced lyrics not found. Try refining the search.</div>
-                        <input type="text" id="manualLyricQuery" style="width:100%; padding:10px; border-radius:20px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; margin-bottom:10px;" value="${query}">
-                        <button class="btn-solid" style="padding:8px 20px; font-size:12px; width:auto;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Search Again</button>
+                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; text-align: center; margin-top: 20px;">
+                        <div style="font-size:14px; margin-bottom:15px; color:var(--text-base); font-weight:bold;">Synced lyrics not found. Refine your search query:</div>
+                        <input type="text" id="manualLyricQuery" style="width:100%; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; font-size:14px; margin-bottom:15px; outline:none;" value="${query}">
+                        <button style="background:var(--text-bright); color:#000; font-weight:bold; padding:10px 24px; border-radius:24px; border:none; cursor:pointer;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Search Datacenter</button>
                     </div>
                 `;
-                if(data.plain) fallbackHtml += `<div style="font-size:16px; white-space:pre-wrap; color:var(--text-base); text-align:center; margin-top:20px;">${data.plain}</div>`;
-                cont.innerHTML = fallbackHtml;
                 
-            } catch(e) { 
-                cont.innerHTML = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 8px; text-align: center; margin-top: 20px;">
-                        <div style="font-size:14px; margin-bottom:10px; color:#ff5555;">Server Error. Try manual search.</div>
-                        <input type="text" id="manualLyricQuery" style="width:100%; padding:10px; border-radius:20px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; margin-bottom:10px;" value="${query}">
-                        <button class="btn-solid" style="padding:8px 20px; font-size:12px; width:auto;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Retry</button>
-                    </div>`; 
+                if(data.plain) {
+                    fallbackHtml += `<div style="font-size:18px; white-space:pre-wrap; color:var(--text-base); text-align:center; line-height:1.6; margin-top:30px;">${data.plain}</div>`;
+                }
+                container.innerHTML = fallbackHtml;
+                
+            } catch(e) {
+                container.innerHTML = `
+                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; text-align: center; margin-top: 20px;">
+                        <div style="font-size:14px; margin-bottom:15px; color:#ff5555; font-weight:bold;">Server error connecting to Lyrics Datacenter.</div>
+                        <input type="text" id="manualLyricQuery" style="width:100%; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; font-size:14px; margin-bottom:15px; outline:none;" value="${query}">
+                        <button style="background:var(--text-bright); color:#000; font-weight:bold; padding:10px 24px; border-radius:24px; border:none; cursor:pointer;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Retry Request</button>
+                    </div>`;
             }
         }
 
