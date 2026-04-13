@@ -6126,19 +6126,30 @@ async def increment_play_count(slug: str, access: dict = Depends(verify_view_acc
 
 @app.get("/api/qlynktify/meta")
 async def get_track_metadata(q: str, access: dict = Depends(verify_view_access)):
-    """iTunes API Bypass + internal Fallback Engine"""
+    """iTunes API Bypass + Strict internal Fallback Engine from database"""
     import aiohttp
     meta_db = get_qlynktify_meta_db()
     query_key = q.lower().strip()
     
-    # 1. Check if already cached
     if query_key in meta_db.get("tracks", {}):
         return meta_db["tracks"][query_key]
 
     result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": "", "real_title": ""}
     
+    # 1. First, forcefully check our local Vault/History Database
+    db = get_db()
+    for f in db.get("files", []):
+        # If the search query matches the filename or title
+        if query_key in f.get("filename", "").lower() or query_key in f.get("title", "").lower():
+            if f.get("thumbnail"):
+                result["artwork"] = f["thumbnail"] # Get thumbnail from history.json
+                result["album"] = "Vault Asset"
+                # If we found a thumbnail locally, we don't necessarily need to hit iTunes, 
+                # but we will to get the real Artist name.
+                break
+
+    # 2. Hit iTunes API for rich metadata (and artwork if local failed)
     try:
-        # 🛡️ Bypass Header: iTunes needs this to not return 403
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
@@ -6149,30 +6160,19 @@ async def get_track_metadata(q: str, access: dict = Depends(verify_view_access))
                     data = await resp.json()
                     if data.get("resultCount", 0) > 0:
                         track = data["results"][0]
-                        result = {
-                            "artist": track.get("artistName", "Unknown Artist"),
-                            "album": track.get("collectionName", "Unknown Album"),
-                            "artwork": track.get("artworkUrl100", "").replace("100x100bb", "600x600bb"),
-                            "real_title": track.get("trackName", "")
-                        }
+                        result["artist"] = track.get("artistName", "Unknown Artist")
+                        result["real_title"] = track.get("trackName", "")
+                        # If local db didn't have artwork, use iTunes artwork
+                        if not result["artwork"]:
+                            result["artwork"] = track.get("artworkUrl100", "").replace("100x100bb", "600x600bb")
+                            result["album"] = track.get("collectionName", "Unknown Album")
     except Exception as e:
         logger.warning(f"iTunes API Error: {e}")
-
-    # 🔄 FALLBACK: Agar iTunes fail hua, history/vault se thumbnail lo
-    if not result["artwork"]:
-        db = get_db()
-        # Find match in database for this query
-        for f in db.get("files", []):
-            if q.lower() in f.get("filename", "").lower() or q.lower() in f.get("title", "").lower():
-                if f.get("thumbnail"):
-                    result["artwork"] = f["thumbnail"]
-                    result["album"] = "Archived Asset"
-                    break
 
     meta_db.setdefault("tracks", {})[query_key] = result
     asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
     return result
-
+    
 @app.get("/api/qlynktify/lyrics")
 async def get_track_lyrics(q: str, access: dict = Depends(verify_view_access)):
     import aiohttp
@@ -6346,7 +6346,8 @@ QLYNKTIFY_HTML = r"""
         .item-icon-wrap { width: 32px; height: 32px; border-radius: 4px; overflow: hidden; display:flex; justify-content:center; align-items:center; background:#282828; flex-shrink:0;}
         .item-icon-wrap img { width:100%; height:100%; object-fit:cover;}
         .item-icon-wrap svg { width: 16px; fill: #fff;}
-        .item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1;}
+        /* 🛡️ FIX: Added specific display and color to ensure sidebar text is visible */
+        .item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1; display: inline-block; color: #ffffff !important; font-weight: 600;}
         
         /* === MAIN VIEW === */
         .main-view { flex: 1; background: linear-gradient(180deg, var(--dom-color) 0%, var(--bg-highlight) 40%, var(--bg-base) 100%); border-radius: 8px; overflow-y: auto; position: relative; transition: background 1s ease; display: flex; flex-direction: column;}
@@ -6444,9 +6445,10 @@ QLYNKTIFY_HTML = r"""
         .np-title { font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; text-overflow: ellipsis; overflow:hidden; display:flex; align-items:center; gap:8px;}
         .np-artist { font-size: 12px; color: var(--text-base); margin-top: 4px; white-space: nowrap;}
         
-        .p-controls { display: flex; align-items: center; gap: 20px; visibility: visible !important; }
-        .c-btn { background: transparent; border: none; color: var(--text-base); cursor: pointer; transition: 0.2s; position: relative; display:flex; align-items:center; justify-content:center;}
-        .c-btn svg { width: 16px; height: 16px; fill: currentColor; }
+        /* 🛡️ FIX: Enforced flex display and size for player buttons */
+        .p-controls { display: flex !important; align-items: center; gap: 20px; z-index: 10000; }
+        .c-btn { background: transparent; border: none; color: var(--text-base); cursor: pointer; transition: 0.2s; position: relative; display:flex !important; align-items:center; justify-content:center; padding: 5px; min-width: 24px; min-height: 24px;}
+        .c-btn svg { width: 16px; height: 16px; fill: currentColor; display: block; }
         .c-btn:hover { color: var(--text-bright); transform: scale(1.1);}
         .c-btn.active { color: var(--accent); }
         .c-btn.active::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; background: var(--accent); border-radius: 50%;}
@@ -6577,7 +6579,12 @@ QLYNKTIFY_HTML = r"""
                     <span id="bp-title" title="No Track Selected">No Track Selected</span>
                     <div class="loader-micro" id="blob-loader" style="display:none;"></div>
                 </div>
-                <div class="np-artist" id="bp-artist">Qlynk Node</div>
+                <div style="display: flex; align-items: center; gap: 10px; margin-top: 4px;">
+                    <div class="np-artist" id="bp-artist" style="margin-top:0;">Qlynk Node</div>
+                    <button class="btn-icon" style="padding:0; width:16px; height:16px;" onclick="addTrackToPl('Liked Songs')" title="Add to Liked Songs">
+                        <svg viewBox="0 0 24 24" style="width:14px; fill:var(--text-base);"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+                    </button>
+                </div>
             </div>
         </div>
         
@@ -7135,7 +7142,7 @@ QLYNKTIFY_HTML = r"""
                     const AudioContext = window.AudioContext || window.webkitAudioContext;
                     audioCtx = new AudioContext();
                     analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 256; // High Detail
+                    analyser.fftSize = 256; 
                     const source = audioCtx.createMediaElementSource(audioEl);
                     source.connect(analyser);
                     analyser.connect(audioCtx.destination);
@@ -7149,24 +7156,25 @@ QLYNKTIFY_HTML = r"""
             
             function draw() {
                 visualizerAnimId = requestAnimationFrame(draw);
-                // 🛡️ Ensure canvas matches its container perfectly
-                canvas.width = canvas.parentElement.clientWidth;
-                canvas.height = canvas.parentElement.clientHeight;
+                
+                // 🛡️ FIX: Force canvas dimensions dynamically to prevent rendering collapse
+                const container = canvas.parentElement;
+                if(canvas.width !== container.clientWidth) canvas.width = container.clientWidth;
+                if(canvas.height !== container.clientHeight) canvas.height = container.clientHeight;
                 
                 analyser.getByteFrequencyData(dataArray);
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 
-                const barWidth = (canvas.width / dataArray.length) * 2;
+                const barWidth = (canvas.width / dataArray.length) * 2.5; // Wider bars
                 const centerY = canvas.height / 2;
                 let x = 0;
                 
                 for(let i = 0; i < dataArray.length; i++) {
                     const barHeight = (dataArray[i] / 255) * (canvas.height / 2) * 0.9;
-                    // 🔥 COLOR MATCH: Using the dominant color variable
                     const domColor = getComputedStyle(document.documentElement).getPropertyValue('--dom-color').trim() || '#bc8cff';
                     
                     ctx.fillStyle = domColor;
-                    // Draw Bars (Mirror effect)
+                    // Mirror draw
                     ctx.fillRect(x, centerY - barHeight, barWidth - 1, barHeight); 
                     ctx.fillRect(x, centerY, barWidth - 1, barHeight); 
                     x += barWidth;
@@ -7335,7 +7343,7 @@ async def serve_qlynktify(request: Request):
 # --- SYSTEM HIBERNATION INITIATED ---
 # Developer Status: Offline. 
 # Mission: IIT Kharagpur CSE. 
-# Last Update: 19:20-28pm || 13 April 2026 IST || 20:02-18 pm
+# Last Update: 19:20-28pm || 13 April 2026 IST || 20:02-18--32 pm
 # ==========================================
 # ==========================================
 # END OF QLYNK ARCHITECTURE V2
