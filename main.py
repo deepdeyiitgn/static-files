@@ -1027,7 +1027,7 @@ async def generate_sitemap(request: Request):
         """)
         
         # 2. Social & Redirects (Priority 0.7)
-        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/status", "/clock", "/terms", "/privacy", "/refund"]
+        social_links = ["/instagram", "/github", "/discord", "/youtube", "/wiki", "/status", "/clock", "/terms", "/privacy", "/refund", "/21"]
         for link in social_links:
             urls.append(f"""
             <url>
@@ -5679,6 +5679,256 @@ ADMIN_DASHBOARD_HTML = """
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_admin_dashboard(request: Request, token: str = Depends(verify_auth)):
     return HTMLResponse(content=ADMIN_DASHBOARD_HTML)
+
+
+# ==========================================
+# 19. CINEMATIC SESSION INTRO (AUTO-INJECTION MIDDLEWARE)
+# ==========================================
+from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi import Request
+
+CINEMATIC_INTRO_HTML = """
+<style>
+    #qlynk-cinematic-intro {
+        position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+        background: #000000; z-index: 2147483647; /* Maximum priority */
+        display: flex; flex-direction: column; justify-content: center; align-items: center;
+        color: #ffffff; font-family: 'Inter', ui-monospace, sans-serif;
+        opacity: 1; transition: opacity 1s ease-in-out;
+    }
+    .cinematic-scene {
+        position: absolute; text-align: center;
+        opacity: 0; transform: scale(0.95);
+        transition: all 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    .cinematic-scene.active {
+        opacity: 1; transform: scale(1);
+    }
+    .cine-title {
+        font-size: 3rem; font-weight: 800; letter-spacing: 4px; margin-bottom: 10px;
+        text-transform: uppercase; text-shadow: 0 0 20px rgba(0, 255, 255, 0.25); 
+    }
+    .cine-subtitle {
+        font-size: 1.2rem; font-weight: 400; letter-spacing: 2px; color: #00ffff;
+        text-transform: uppercase; opacity: 0.8;
+    }
+    .cine-loader-wrapper {
+        opacity: 0; transition: opacity 1s ease;
+        display: flex; flex-direction: column; align-items: center; gap: 15px;
+    }
+    .cine-loader-wrapper.active { opacity: 1; }
+    .cine-spinner {
+        width: 45px; height: 45px; border: 3px solid rgba(0, 255, 255, 0.1);
+        border-top-color: #00ffff; border-radius: 50%;
+        animation: cine-spin 1s linear infinite; box-shadow: 0 0 15px rgba(0,255,255,0.2);
+    }
+    @keyframes cine-spin { to { transform: rotate(360deg); } }
+    body.intro-locked { overflow: hidden !important; }
+    
+    @media(max-width: 768px) {
+        .cine-title { font-size: 1.8rem; letter-spacing: 2px; }
+        .cine-subtitle { font-size: 0.9rem; }
+    }
+</style>
+
+<div id="qlynk-cinematic-intro">
+    <div id="scene-1" class="cinematic-scene">
+        <div class="cine-title">QLYNK Nobe Server</div>
+        <div class="cine-subtitle">an app by Deep</div>
+    </div>
+    <div id="scene-2" class="cinematic-scene">
+        <div class="cine-title">a Deep Dey Creation</div>
+        <div class="cine-subtitle">an Deep Dey Product</div>
+    </div>
+    <div id="scene-loader" class="cine-loader-wrapper">
+        <div class="cine-spinner"></div>
+        <div class="cine-subtitle" style="font-size: 0.9rem; margin-top: 10px; color:#8b949e;">INITIALIZING DATACENTER...</div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", () => {
+        const introEl = document.getElementById("qlynk-cinematic-intro");
+        if (!introEl) return;
+        
+        // Ensure it only runs once per active session
+        if (sessionStorage.getItem("qlynk_cinematic_played")) {
+            introEl.style.display = "none";
+            return;
+        }
+        
+        // Lock background scrolling while intro plays
+        document.body.classList.add("intro-locked");
+        
+        const scene1 = document.getElementById("scene-1");
+        const scene2 = document.getElementById("scene-2");
+        const loader = document.getElementById("scene-loader");
+
+        // Cinematic Timeline Sequence
+        setTimeout(() => { scene1.classList.add("active"); }, 500);   // Show Scene 1
+        setTimeout(() => { scene1.classList.remove("active"); }, 3500); // Hide Scene 1
+        
+        setTimeout(() => { scene2.classList.add("active"); }, 4500);  // Show Scene 2
+        setTimeout(() => { scene2.classList.remove("active"); }, 7500); // Hide Scene 2
+        
+        setTimeout(() => { loader.classList.add("active"); }, 8500);  // Show Loading Ring
+        
+        // End Intro & Reveal Website seamlessly
+        setTimeout(() => {
+            introEl.style.opacity = "0";
+            setTimeout(() => {
+                introEl.style.display = "none";
+                document.body.classList.remove("intro-locked");
+                sessionStorage.setItem("qlynk_cinematic_played", "true");
+            }, 1000); // Wait for fade-out transition
+        }, 11000);
+    });
+</script>
+"""
+
+class CinematicIntroMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        
+        # Trigger intro only on primary UI routes
+        target_paths = ["/", "/dashboard", "/view", "/21", "/video"]
+        
+        # Ensure we only inject into HTML responses (ignoring APIs/JSON)
+        if request.url.path in target_paths and response.headers.get("content-type", "").startswith("text/html"):
+            body_iterator = response.body_iterator
+            body_bytes = [section async for section in body_iterator]
+            body_bytes = b"".join(body_bytes)
+            html_content = body_bytes.decode("utf-8")
+            
+            # Safely inject the cinematic HTML just before the closing body tag
+            if "</body>" in html_content:
+                html_content = html_content.replace("</body>", CINEMATIC_INTRO_HTML + "\\n</body>")
+            else:
+                html_content += CINEMATIC_INTRO_HTML
+                
+            # Clear old content-length and return the modified response
+            headers = dict(response.headers)
+            if "content-length" in headers:
+                del headers["content-length"] 
+                
+            return HTMLResponse(content=html_content, status_code=response.status_code, headers=headers)
+            
+        return response
+
+# Attach the master interceptor to the app architecture
+app.add_middleware(CinematicIntroMiddleware)
+
+# ==========================================
+# 20. ENTERPRISE GARBAGE COLLECTION (TEMP SWEEPER)
+# ==========================================
+import time as time_module
+
+async def auto_garbage_collector():
+    """Background loop to clean /tmp folder and free up RAM/Disk"""
+    logger.info("🧹 Garbage Collector Initiated. Sweeping every 6 hours.")
+    await asyncio.sleep(300) # Wait 5 mins on boot before first sweep
+    
+    while True:
+        try:
+            tmp_dir = "/tmp"
+            if os.path.exists(tmp_dir):
+                current_time = time_module.time()
+                deleted_count = 0
+                
+                for filename in os.listdir(tmp_dir):
+                    file_path = os.path.join(tmp_dir, filename)
+                    # Delete files older than 6 hours
+                    if os.path.isfile(file_path) and (current_time - os.path.getmtime(file_path)) > 21600:
+                        try:
+                            os.remove(file_path)
+                            deleted_count += 1
+                        except:
+                            pass
+                
+                if deleted_count > 0:
+                    logger.info(f"🧹 Garbage Collection complete: {deleted_count} ghost files deleted from /tmp")
+        except Exception as e:
+            logger.error(f"Garbage Collector Error: {e}")
+            
+        await asyncio.sleep(21600) # Sleep for 6 hours
+
+# Add background task dynamically using startup event
+@app.on_event("startup")
+async def start_garbage_collector():
+    asyncio.create_task(auto_garbage_collector())
+
+
+# ==========================================
+# 21. THE "LUCKY 21" SECRET TERMINAL (ARCHITECT EASTER EGG)
+# ==========================================
+@app.get("/21", response_class=HTMLResponse)
+async def lucky_21_easter_egg():
+    """The Secret Route: Deep Dey's Matrix Terminal"""
+    lucky_html = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Terminal 21 - Deep Dey</title>
+        <style>
+            body { 
+                background-color: #000; color: #0f0; 
+                font-family: 'Courier New', Courier, monospace; 
+                padding: 40px; margin: 0; overflow: hidden;
+            }
+            .glow { text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
+            #cursor { animation: blink 1s step-end infinite; }
+            @keyframes blink { 50% { opacity: 0; } }
+            .matrix-text { white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+        </style>
+    </head>
+    <body>
+        <div id="console" class="matrix-text glow"></div>
+        <span id="cursor">█</span>
+
+        <script>
+            const text = `
+SYSTEM BOOT SEQUENCE INITIATED...
+[OK] Core Node Mounted.
+[OK] Cryptographic Shields Online.
+[OK] Routing via Hugging Face Vault.
+
+>>> IDENTIFYING CREATOR...
+>>> MATCH FOUND: DEEP DEY (The Architect)
+
+Congratulations. You found Route 21.
+This node is operating at maximum capacity.
+No limits. No boundaries. Just pure logic.
+
+"I can only show you the door, you're the one that has to walk through it."
+
+>>> Connection Secure. Node is Alive.
+            `;
+            
+            let i = 0;
+            const speed = 30; // Typing speed in ms
+            const consoleEl = document.getElementById("console");
+            
+            function typeWriter() {
+                if (i < text.length) {
+                    consoleEl.innerHTML += text.charAt(i);
+                    i++;
+                    setTimeout(typeWriter, speed);
+                }
+            }
+            
+            setTimeout(typeWriter, 1000);
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=lucky_html)
+
+# ==========================================
+# END OF QLYNK ARCHITECTURE V2
+# ==========================================
 
 # ==========================================
 # END OF FILE
