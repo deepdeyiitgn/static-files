@@ -6740,7 +6740,7 @@ async def qlynktify_v7_entry(request: Request):
 async def spotify_login(request: Request):
     _qlynktify_enabled_or_404()
     if not _qlynktify_is_authorized(request):
-        return _forbidden_api_response()
+        return RedirectResponse(QLYNKTIFY_CHECKOUT_URL, status_code=307)
     if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
         raise HTTPException(status_code=500, detail="Spotify credentials not configured")
 
@@ -6821,6 +6821,23 @@ async def spotify_token(request: Request):
         return _forbidden_api_response()
     token = await _spotify_access_token_valid()
     return {"access_token": token}
+
+
+@app.get("/api/spotify/me")
+async def spotify_me(request: Request):
+    data = await spotify_call("/me", request)
+    return {
+        "id": data.get("id", ""),
+        "display_name": data.get("display_name", ""),
+        "country": data.get("country", ""),
+        "product": data.get("product", "")
+    }
+
+
+@app.get("/api/spotify/devices")
+async def spotify_devices(request: Request):
+    data = await spotify_call("/me/player/devices", request)
+    return {"devices": data.get("devices", [])}
 
 
 @app.get("/api/spotify/search")
@@ -6911,6 +6928,20 @@ async def spotify_player_play(request: Request, device_id: str = "", uri: str = 
 async def spotify_player_pause(request: Request, device_id: str = ""):
     params = {"device_id": device_id} if device_id else None
     await spotify_call("/me/player/pause", request, params=params, method="PUT")
+    return {"status": "ok"}
+
+
+@app.post("/api/spotify/player/next")
+async def spotify_player_next(request: Request, device_id: str = ""):
+    params = {"device_id": device_id} if device_id else None
+    await spotify_call("/me/player/next", request, params=params, method="POST")
+    return {"status": "ok"}
+
+
+@app.post("/api/spotify/player/previous")
+async def spotify_player_previous(request: Request, device_id: str = ""):
+    params = {"device_id": device_id} if device_id else None
+    await spotify_call("/me/player/previous", request, params=params, method="POST")
     return {"status": "ok"}
 
 
