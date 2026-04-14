@@ -1141,6 +1141,22 @@ response = requests.post(
                         <strong>Failure to provide proper credit constitutes Intellectual Property Theft and will result in an immediate DMCA Takedown Notice sent to your hosting provider (Cloudflare, Vercel, HF, etc.).</strong> Do not test this policy.
                     </p>
                 </div>
+
+                <div class="card" style="margin-top: 2.5rem; border: 1px solid rgba(0,112,243,0.35); background: linear-gradient(135deg, rgba(0,112,243,0.12), rgba(0,212,255,0.08)); box-shadow: 0 18px 50px rgba(0, 112, 243, 0.16);">
+                    <div style="display:flex; flex-wrap:wrap; justify-content:space-between; gap: 18px; align-items:center;">
+                        <div style="max-width: 700px;">
+                            <div style="text-transform: uppercase; letter-spacing: .22em; font-size: 12px; color: #8ab4ff; margin-bottom: 10px; font-weight: 800;">Community Cloud</div>
+                            <h3 style="margin: 0 0 10px; font-size: 2rem;">Want your own private Qlynk Node? Deploy in 1-minute.</h3>
+                            <p style="margin: 0; color: var(--text-muted); font-size: 1.05rem; max-width: 60ch;">
+                                Clone the Trinity stack into your Hugging Face account, provision your vault dataset, and bootstrap your personal cloud node with a guided onboarding wizard.
+                            </p>
+                        </div>
+                        <div style="display:flex; flex-direction:column; gap: 12px; align-items:flex-end; min-width: 220px;">
+                            <div style="font-size: 1rem; color: #eaf2ff; font-weight: 700;">🚀 <span id="community-deploy-count">0</span> Nodes Deployed Globally</div>
+                            <a href="/try-now" class="btn btn-accent splash-btn" style="border-radius: 999px; padding: 1rem 1.6rem; box-shadow: 0 0 28px rgba(0, 112, 243, 0.35);">Try Now</a>
+                        </div>
+                    </div>
+                </div>
                 
                 <footer style="text-align: center; margin-top: 5rem; padding-top: 2rem; border-top: 1px solid var(--border-light);">
                     <div style="font-size: 2rem; margin-bottom: 0.5rem; color: var(--border-hover);">
@@ -1209,6 +1225,15 @@ response = requests.post(
 
   
   <script>
+        (async () => {
+            try {
+                const res = await fetch('/api/deploy/stats');
+                const data = await res.json();
+                const count = Number(data.total_deployments || 0).toLocaleString();
+                const nodeCount = document.getElementById('community-deploy-count');
+                if (nodeCount) nodeCount.textContent = count;
+            } catch (e) {}
+        })();
 
     // ==========================================
         // 🚀 THE DELAYED SPLASH (RIPPLE) ENGINE

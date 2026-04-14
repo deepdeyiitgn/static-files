@@ -45,6 +45,7 @@ I am an aspiring software engineer and full-stack developer based in Tripura, In
 - **📊 God-Mode Telemetry:** Real-time WebSockets-powered dashboard (`/status`) showing core-by-core CPU usage, RAM pool, Network I/O, API latencies, and HF Cloud Quota.
 - **♾️ 24/7 Self-Sustaining:** An automated anti-sleep background ping system keeps the HF container alive infinitely.
 - **💳 SaaS Checkout Engine:** Built-in Razorpay payment gateway to sell premium streaming tokens. Features anti-spam rate limiting and automatic PDF invoice generation with SVG logos.
+- **🚀 Trinity 1-Click Auto-Deployer:** A guided `/try-now` onboarding wizard that clones the stack into a user-owned Hugging Face Space, provisions the vault dataset, and publishes a live deployment summary.
 - **🎧 AI Helpdesk & Support System:** An isolated ticketing system running via Telegram. Users can raise tickets, talk to an automated AI bot (FAQ matching), or request human admin support directly through the dashboard.
 - **⏳ Dual-Auth & Token Vault:** Advanced time-limited share tokens (Basic, Pro, Ultra) with cryptographic signature verification. Generates auto-expiring secure links.
 - **🖥️ Virtual Master OS (Admin Dashboard):** A desktop-enforced, highly secured GUI panel to manage the entire datacenter. Includes bulk file wiping, custom token forging (with precise user/session limits), session killing, and live server vitals.
@@ -63,6 +64,7 @@ This architecture is fortified with advanced cybersecurity protocols designed to
 - **⏳ Cryptographic Token Vault:** Original Hugging Face repository paths are permanently hidden. The system generates secure, time-bound access tokens (Basic, Pro, Ultra) with cryptographic signatures. These tokens have a "Rolling Expiry" (e.g., 4 hours) and strict anti-IDM (Internet Download Manager) headers to completely block piracy and direct downloading.
 * **🛡️ Smart Cookie Firewall (Anti-IDOR):** Raw CDN file routes are cryptographically shielded. Public scrapers or Download Managers attempting direct access are instantly intercepted and 302-redirected to the secure cinematic player, ensuring 100% piracy protection.
 * **🔑 Dual-Auth Tokenized Streaming:** The streaming API seamlessly supports both Admin Master Cookies and rolling Guest Share Tokens, ensuring premium customers get uninterrupted access while public access is firmly denied (HTTP 401).
+- **🧱 Direct File Gate:** Browser, phone, and script hits to `/f/*` are blocked with a dedicated 403 HTML page for protected media unless the owner is verified, while public images and PDFs stay directly viewable inline.
 
 ---
 ---
@@ -319,6 +321,21 @@ If an IP hits the honeypot 20+ times, they are shadow-banned using an exponentia
 The system is self-healing. The moment the penalized IP successfully accesses a valid, real URL, their penalty strikes are instantly reset to zero.
 </blockquote>
 </details>
+
+<details>
+<summary><b>16. Why does /f/* sometimes show a 403 page?</b></summary>
+<blockquote>
+That route is intentionally protected for direct media playback. Images and PDFs are still served publicly inline, but protected audio/video and other direct assets require the owner’s verified session before the original file is exposed.
+</blockquote>
+</details>
+
+## 📞 Support & Contact
+
+If you need help deploying your own node, use the built-in `/try-now` wizard first, then reach out through the existing dashboard or Telegram support flow.
+
+- **Deployment Help:** Start at `/try-now` and follow the guided Space cloning wizard.
+- **Security Questions:** Check the Security section above for `/f/*` access rules and token behavior.
+- **Live Support:** Use the AI helpdesk or human support path inside the dashboard for account-specific issues.
 
 <details>
 <summary><b>16. How is the Master Dashboard secured?</b></summary>

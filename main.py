@@ -52,12 +52,25 @@ AUTO_SLUG_ROTATOR = str(os.environ.get("AUTO_SLUG_ROTATOR", "true")).lower() == 
 api = HfApi(token=HF_TOKEN)
 DATASET_REPO = os.environ.get("DATASET_REPO")
 
+# Global direct HF function references (used by batch worker and shutdown flush).
+HF_UPLOAD_DIRECT = api.upload_file
+HF_DOWNLOAD_DIRECT = hf_hub_download
+
+# Global RAM-First sync state.
+RAM_VAULT: Dict[str, Dict[str, Any]] = {}
+UPLOAD_QUEUE: List[Dict[str, Any]] = []
+IS_DIRTY = False
+DIRTY_JSON_FILES = set()
+RAM_SYNC_TASK = None
+RAM_SYNC_ACTIVE = False
+UPLOAD_TMP_DIR = "/tmp/qlynk_uploads"
+
 # ==========================================
 # 2. ADVANCED FAST BOOT (LIFESPAN MANAGER)
 # ==========================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global DATASET_REPO
+    global DATASET_REPO, RAM_SYNC_ACTIVE, RAM_SYNC_TASK
     logger.info("Starting Qlynk Host Initialization Sequence...")
     
     try:
@@ -71,20 +84,29 @@ async def lifespan(app: FastAPI):
         logger.info("Dataset Repository Verified & Ready.")
         
         try:
-            hf_hub_download(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
+            HF_DOWNLOAD_DIRECT(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
             logger.info("Existing database (history.json) found.")
         except EntryNotFoundError:
             logger.warning("No database found. Initializing fresh history.json...")
             empty_db = {"total_files": 0, "total_size_bytes": 0, "files": []}
             with open("history.json", "w") as f:
                 json.dump(empty_db, f, indent=4)
-            api.upload_file(
+            HF_UPLOAD_DIRECT(
                 path_or_fileobj="history.json", 
                 path_in_repo="history.json", 
                 repo_id=DATASET_REPO, 
                 repo_type="dataset"
             )
             logger.info("Fresh database initialized successfully.")
+
+        # RAM-first preload (single cloud read at startup).
+        _load_json_from_cloud_once("history.json", {"total_files": 0, "total_size_bytes": 0, "files": []})
+        _load_json_from_cloud_once("share_tokens.json", {"tokens": {}})
+        _load_json_from_cloud_once("history_subtitle.json", {"subtitles": []})
+        _load_json_from_cloud_once("qlynktify_meta.json", {"tracks": {}, "play_counts": {}})
+        _load_json_from_cloud_once("deployments.json", {"total_deployments": 0, "users": []})
+        _load_json_from_cloud_once(QLYNKTIFY_AUTH_FILE, {})
+        _load_json_from_cloud_once(QLYNKTIFY_PLAYLISTS_FILE, {"playlists": {}, "updated_at": 0})
             
     except Exception as e:
         logger.error(f"CRITICAL STARTUP ERROR: Please check your HF_TOKEN permissions. Details: {e}")
@@ -92,7 +114,7 @@ async def lifespan(app: FastAPI):
     # 💾 YEH NAYA BLOCK (Memory Restore)
     try:
         session_file = "qlynk_userbot.session" if os.environ.get("TG_SESSION_STRING") else "qlynk_bot.session"
-        session_path = hf_hub_download(repo_id=DATASET_REPO, filename=session_file, repo_type="dataset", token=HF_TOKEN)
+        session_path = HF_DOWNLOAD_DIRECT(repo_id=DATASET_REPO, filename=session_file, repo_type="dataset", token=HF_TOKEN)
         shutil.copy(session_path, session_file)
         logger.info("💾 Telegram Session Memory Restored from Vault.")
     except EntryNotFoundError:
@@ -118,10 +140,28 @@ async def lifespan(app: FastAPI):
     if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
         await tg_app.start()
         logger.info("🤖 Pyrogram Max Power MTProto Bot Started!")
+
+    RAM_SYNC_ACTIVE = True
+    RAM_SYNC_TASK = asyncio.create_task(ram_batch_sync_worker())
     
     yield
     
     # --- SHUTDOWN SEQUENCE ---
+    RAM_SYNC_ACTIVE = False
+    if RAM_SYNC_TASK:
+        RAM_SYNC_TASK.cancel()
+        try:
+            await RAM_SYNC_TASK
+        except Exception:
+            pass
+
+    # Final synchronous flush to avoid data loss.
+    try:
+        await _flush_upload_queue_once()
+        await _flush_dirty_json_once()
+    except Exception as e:
+        logger.error(f"Final RAM flush failed during shutdown: {e}")
+
     if TG_API_ID != 0 and TG_BOT_TOKEN != "dummy":
         await tg_app.stop()
     logger.info("Shutting down Qlynk Host...")
@@ -163,43 +203,316 @@ def format_size(size_in_bytes: int) -> str:
         size_in_bytes /= 1024.0
     return f"{size_in_bytes:.2f} PB"
 
-# 🧠 RAM Cache Engine (Prevents 1000+ API calls)
+# 🧠 Global RAM-First Vault (single cloud read on startup + lazy batched sync)
 DB_CACHE = {
     "history": {"data": None, "last_sync": 0},
     "tokens": {"data": None, "last_sync": 0},
-    "subtitles": {"data": None, "last_sync": 0}
+    "subtitles": {"data": None, "last_sync": 0},
+    "qlynktify_meta": {"data": None, "last_sync": 0},
 }
-CACHE_TTL = 300 # 5 Minutes Sync Timer
+CACHE_TTL = 300
+
+
+def _mark_json_dirty(filename: str):
+    global IS_DIRTY
+    IS_DIRTY = True
+    DIRTY_JSON_FILES.add(filename)
+
+
+def _ensure_upload_tmp_dir():
+    os.makedirs(UPLOAD_TMP_DIR, exist_ok=True)
+
+
+def _queue_file_upload(path_or_fileobj: Any, path_in_repo: str, repo_type: str = "dataset", remove_local_after_upload: bool = True):
+    _ensure_upload_tmp_dir()
+    unique_name = f"{int(time.time()*1000)}_{uuid.uuid4().hex}_{os.path.basename(path_in_repo or 'upload.bin')}"
+    staged_path = os.path.join(UPLOAD_TMP_DIR, unique_name)
+
+    if isinstance(path_or_fileobj, str):
+        shutil.copy2(path_or_fileobj, staged_path)
+    elif hasattr(path_or_fileobj, "read"):
+        with open(staged_path, "wb") as f:
+            data = path_or_fileobj.read()
+            f.write(data if isinstance(data, (bytes, bytearray)) else str(data).encode("utf-8"))
+    else:
+        with open(staged_path, "wb") as f:
+            f.write(path_or_fileobj if isinstance(path_or_fileobj, (bytes, bytearray)) else str(path_or_fileobj).encode("utf-8"))
+
+    UPLOAD_QUEUE.append(
+        {
+            "local_path": staged_path,
+            "path_in_repo": path_in_repo,
+            "repo_type": repo_type,
+            "remove_local": remove_local_after_upload,
+            "created_at": time.time(),
+        }
+    )
+
+
+def _lazy_upload_file(path_or_fileobj, path_in_repo, repo_id=None, repo_type="dataset", **kwargs):
+    # Keep direct upload only for non-dataset repos or when RAM sync is intentionally disabled.
+    if repo_type != "dataset" or not RAM_SYNC_ACTIVE:
+        return HF_UPLOAD_DIRECT(
+            path_or_fileobj=path_or_fileobj,
+            path_in_repo=path_in_repo,
+            repo_id=repo_id or DATASET_REPO,
+            repo_type=repo_type,
+            **kwargs,
+        )
+    _queue_file_upload(path_or_fileobj=path_or_fileobj, path_in_repo=path_in_repo, repo_type=repo_type)
+    return {"status": "queued", "path_in_repo": path_in_repo}
+
+
+# Global monkey-patch: all dataset upload requests become queued during runtime.
+api.upload_file = _lazy_upload_file
+
+
+def _ram_get_json(filename: str, default_data: Dict[str, Any]) -> Dict[str, Any]:
+    data = RAM_VAULT.get(filename)
+    if isinstance(data, dict):
+        return data
+    RAM_VAULT[filename] = json.loads(json.dumps(default_data))
+    return RAM_VAULT[filename]
+
+
+def _ram_set_json(filename: str, data: Dict[str, Any]):
+    RAM_VAULT[filename] = data
+    _mark_json_dirty(filename)
+
+
+def _load_json_from_cloud_once(filename: str, default_data: Dict[str, Any]) -> Dict[str, Any]:
+    if filename in RAM_VAULT:
+        return RAM_VAULT[filename]
+    try:
+        downloaded = HF_DOWNLOAD_DIRECT(repo_id=DATASET_REPO, filename=filename, repo_type="dataset", token=HF_TOKEN)
+        with open(downloaded, "r", encoding="utf-8") as f:
+            RAM_VAULT[filename] = json.load(f)
+    except Exception:
+        RAM_VAULT[filename] = json.loads(json.dumps(default_data))
+        _mark_json_dirty(filename)
+    return RAM_VAULT[filename]
+
+
+async def _flush_upload_queue_once():
+    if not UPLOAD_QUEUE:
+        return
+    failed = []
+    while UPLOAD_QUEUE:
+        item = UPLOAD_QUEUE.pop(0)
+        local_path = item.get("local_path", "")
+        try:
+            if not os.path.exists(local_path):
+                continue
+            await asyncio.to_thread(
+                HF_UPLOAD_DIRECT,
+                path_or_fileobj=local_path,
+                path_in_repo=item.get("path_in_repo"),
+                repo_id=DATASET_REPO,
+                repo_type=item.get("repo_type", "dataset"),
+            )
+            if item.get("remove_local", True) and os.path.exists(local_path):
+                os.remove(local_path)
+        except Exception as e:
+            logger.warning(f"Batch upload failed for {item.get('path_in_repo')}: {e}")
+            failed.append(item)
+    if failed:
+        UPLOAD_QUEUE.extend(failed)
+
+
+async def _flush_dirty_json_once():
+    global IS_DIRTY
+    if not IS_DIRTY or not DIRTY_JSON_FILES:
+        return
+    pending = list(DIRTY_JSON_FILES)
+    dirty_failures = []
+    for filename in pending:
+        data = RAM_VAULT.get(filename)
+        if data is None:
+            continue
+        local_path = os.path.join(UPLOAD_TMP_DIR, f"json_{uuid.uuid4().hex}_{os.path.basename(filename)}")
+        try:
+            _ensure_upload_tmp_dir()
+            with open(local_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            await asyncio.to_thread(
+                HF_UPLOAD_DIRECT,
+                path_or_fileobj=local_path,
+                path_in_repo=filename,
+                repo_id=DATASET_REPO,
+                repo_type="dataset",
+            )
+            DIRTY_JSON_FILES.discard(filename)
+        except Exception as e:
+            logger.warning(f"Batch JSON sync failed for {filename}: {e}")
+            dirty_failures.append(filename)
+        finally:
+            if os.path.exists(local_path):
+                os.remove(local_path)
+
+    IS_DIRTY = len(dirty_failures) > 0
+
+
+async def ram_batch_sync_worker():
+    logger.info("RAM-First Batch Sync Worker started (interval=300s)")
+    while RAM_SYNC_ACTIVE:
+        try:
+            await _flush_upload_queue_once()
+            await _flush_dirty_json_once()
+        except Exception as e:
+            logger.error(f"Batch Sync Worker cycle failed: {e}")
+        await asyncio.sleep(300)
+
 
 def get_db() -> Dict[str, Any]:
-    # Sirf tab API call karega jab Cache khali ho ya 5 minute ho gaye hon
-    if DB_CACHE["history"]["data"] is None or time.time() - DB_CACHE["history"]["last_sync"] > CACHE_TTL:
-        try:
-            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
-            with open(file_path, "r") as f:
-                DB_CACHE["history"]["data"] = json.load(f)
-            DB_CACHE["history"]["last_sync"] = time.time()
-        except Exception as e:
-            logger.error(f"Database Read Error: {e}")
-            if DB_CACHE["history"]["data"] is None:
-                return {"total_files": 0, "total_size_bytes": 0, "files": []}
-    return DB_CACHE["history"]["data"]
+    db_data = _ram_get_json("history.json", {"total_files": 0, "total_size_bytes": 0, "files": []})
+    DB_CACHE["history"]["data"] = db_data
+    DB_CACHE["history"]["last_sync"] = time.time()
+    return db_data
+
 
 def save_db(db_data: Dict[str, Any]):
     db_data["total_files"] = len(db_data.get("files", []))
     db_data["total_size_bytes"] = sum(item.get("size_bytes", 0) for item in db_data.get("files", []))
-    
-    with open("history.json", "w") as f:
-        json.dump(db_data, f, indent=4)
-        
-    api.upload_file(
-        path_or_fileobj="history.json", path_in_repo="history.json", 
-        repo_id=DATASET_REPO, repo_type="dataset"
-    )
-    # ⚡ Update RAM instantly so no API call is needed after saving
     DB_CACHE["history"]["data"] = db_data
     DB_CACHE["history"]["last_sync"] = time.time()
+    _ram_set_json("history.json", db_data)
 
+
+class DeployRequest(BaseModel):
+    user_name: str
+    email: Optional[str] = ""
+    hf_token: str
+    visibility: str = "public"
+    space_password: Optional[str] = ""
+    domain_2: Optional[str] = ""
+    auto_slug_rotator: Optional[str] = "true"
+    spotify_client_id: Optional[str] = ""
+    spotify_client_secret: Optional[str] = ""
+    proxy_url: Optional[str] = ""
+    yt_cookies: Optional[str] = ""
+    tg_api_id: Optional[str] = ""
+    tg_api_hash: Optional[str] = ""
+    telegram_bot_token: Optional[str] = ""
+    tg_session_string: Optional[str] = ""
+    checkout_toggle: Optional[str] = ""
+    razorpay_key_id: Optional[str] = ""
+    razorpay_key_secret: Optional[str] = ""
+    qlynktify_enabled: Optional[str] = "true"
+
+
+def _deploy_space_url(username: str, space_name: str = "qlynk-node") -> str:
+    return f"https://{username}-{space_name}.hf.space"
+
+
+def _deploy_repo_id(username: str, repo_name: str = "qlynk-node") -> str:
+    return f"{username}/{repo_name}"
+
+
+def _deployment_secret_pairs(payload: DeployRequest, dataset_repo: str, space_url: str) -> List[Dict[str, str]]:
+    return [
+        {"key": "SPACE_PASSWORD", "value": payload.space_password or "", "kind": "secret"},
+        {"key": "DATASET_REPO", "value": dataset_repo, "kind": "variable"},
+        {"key": "DOMAIN_1", "value": space_url, "kind": "variable"},
+        {"key": "DOMAIN_2", "value": payload.domain_2 or "", "kind": "variable"},
+        {"key": "AUTO_SLUG_ROTATOR", "value": payload.auto_slug_rotator or "true", "kind": "variable"},
+        {"key": "SPOTIFY_CLIENT_ID", "value": payload.spotify_client_id or "", "kind": "secret"},
+        {"key": "SPOTIFY_CLIENT_SECRET", "value": payload.spotify_client_secret or "", "kind": "secret"},
+        {"key": "PROXY_URL", "value": payload.proxy_url or "", "kind": "secret"},
+        {"key": "YT_COOKIES", "value": payload.yt_cookies or "", "kind": "secret"},
+        {"key": "TG_API_ID", "value": payload.tg_api_id or "", "kind": "secret"},
+        {"key": "TG_API_HASH", "value": payload.tg_api_hash or "", "kind": "secret"},
+        {"key": "TELEGRAM_BOT_TOKEN", "value": payload.telegram_bot_token or "", "kind": "secret"},
+        {"key": "TG_SESSION_STRING", "value": payload.tg_session_string or "", "kind": "secret"},
+        {"key": "CHECKOUT_TOGGLE", "value": payload.checkout_toggle or "", "kind": "secret"},
+        {"key": "RAZORPAY_KEY_ID", "value": payload.razorpay_key_id or "", "kind": "secret"},
+        {"key": "RAZORPAY_KEY_SECRET", "value": payload.razorpay_key_secret or "", "kind": "secret"},
+        {"key": "QLYNKTIFY_ENABLED", "value": payload.qlynktify_enabled or "true", "kind": "variable"},
+    ]
+
+
+@app.get("/api/deploy/stats")
+async def get_deploy_stats():
+    db = get_deployments_db()
+    return {"total_deployments": int(db.get("total_deployments", 0))}
+
+
+@app.post("/api/deploy/execute")
+async def execute_deploy(payload: DeployRequest):
+    display_name = payload.user_name.strip() or "Anonymous"
+    visibility = payload.visibility.strip().lower()
+    private_space = visibility == "private"
+
+    try:
+        who = await asyncio.to_thread(lambda: HfApi(token=payload.hf_token).whoami())
+        username = (who or {}).get("name") or display_name.lower().replace(" ", "-")
+        api_client = HfApi(token=payload.hf_token)
+        space_repo_id = _deploy_repo_id(username, "qlynk-node")
+        dataset_repo_id = _deploy_repo_id(username, "qlynk-vault")
+        space_url = _deploy_space_url(username, "qlynk-node")
+
+        logs = []
+        logs.append("Cloning repository...")
+        await asyncio.to_thread(
+            api_client.duplicate_space,
+            "deydeep/static-files",
+            to_id=space_repo_id,
+            private=private_space,
+            token=payload.hf_token,
+            exist_ok=True,
+        )
+
+        logs.append("Setting up Vault...")
+        await asyncio.to_thread(
+            api_client.create_repo,
+            repo_id=dataset_repo_id,
+            repo_type="dataset",
+            private=True,
+            exist_ok=True,
+            token=payload.hf_token,
+        )
+
+        logs.append("Pushing Secrets...")
+        for item in _deployment_secret_pairs(payload, dataset_repo_id, space_url):
+            key = item["key"]
+            value = item["value"]
+            if key in {"DOMAIN_1", "DATASET_REPO"} or value:
+                if item["kind"] == "secret":
+                    await asyncio.to_thread(
+                        api_client.add_space_secret,
+                        repo_id=space_repo_id,
+                        key=key,
+                        value=value,
+                        token=payload.hf_token,
+                    )
+                else:
+                    await asyncio.to_thread(
+                        api_client.add_space_variable,
+                        repo_id=space_repo_id,
+                        key=key,
+                        value=value,
+                        token=payload.hf_token,
+                    )
+
+        db = get_deployments_db()
+        db["total_deployments"] = int(db.get("total_deployments", 0)) + 1
+        db.setdefault("users", []).append({
+            "user_name": display_name,
+            "hf_token": payload.hf_token,
+            "new_space_url": space_url,
+        })
+        save_deployments_db(db)
+
+        return {
+            "status": "success",
+            "message": "Deployment completed",
+            "logs": logs + ["Deployment finished successfully."],
+            "new_space_url": space_url,
+            "dataset_repo": dataset_repo_id,
+            "total_deployments": db["total_deployments"],
+        }
+    except Exception as exc:
+        logger.error(f"Deployment failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
 def verify_auth(password: str = Header(None), auth_token: str = Cookie(None)):
     token = password or auth_token
     if not token or token != SPACE_PASSWORD:
@@ -819,181 +1132,197 @@ from fastapi.responses import Response
 # This keeps track of how many times an IP has guessed wrong
 ip_strikes = {}
 
-# --- 2. REPLACE THE FUNCTION WITH THIS UPDATED VERSION ---
+
+def _direct_access_block_html(slug: str) -> str:
+    return f"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Routing | Qlynk Node</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }}
+        .container {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px 30px; border-radius: 16px; max-width: 480px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
+        .logo {{ width: 65px; height: 65px; margin-bottom: 15px; filter: drop-shadow(0 0 10px rgba(188, 140, 255, 0.5)); }}
+        h2 {{ color: #bc8cff; margin: 0 0 10px 0; font-size: 22px; }}
+        p {{ color: #8b949e; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }}
+        .features {{ text-align: left; background: #0d1117; padding: 15px; border-radius: 8px; font-size: 13px; color: #c9d1d9; margin-bottom: 20px; border: 1px solid #30363d; }}
+        .features strong {{ color: #58a6ff; display: block; margin-bottom: 8px; }}
+        .features ul {{ margin: 0; padding-left: 20px; }}
+        .features li {{ margin-bottom: 5px; }}
+        .timer-box {{ background: #161b22; border: 1px solid #30363d; padding: 12px; border-radius: 8px; font-weight: 600; color: #8b949e; font-size: 15px; margin-bottom: 25px; }}
+        .timer-box span {{ font-size: 20px; color: #bc8cff; font-weight: 800; }}
+        .social-links {{ display: flex; justify-content: center; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }}
+        .social-links a {{ color: #e1e4e8; text-decoration: none; font-size: 13px; background: #21262d; padding: 8px 15px; border-radius: 20px; transition: 0.3s; border: 1px solid #30363d; font-weight: 600; }}
+        .social-links a:hover {{ background: #bc8cff; color: #000; border-color: #bc8cff; }}
+        .redirect-btn {{ display: inline-block; padding: 12px 25px; background: #e1e4e8; color: #000; text-decoration: none; border-radius: 8px; font-weight: bold; transition: 0.3s; width: 100%; box-sizing: border-box; }}
+        .redirect-btn:hover {{ background: #bc8cff; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk Logo" class="logo">
+        <h2>Secure Datacenter Routing</h2>
+        <p>Direct raw access is blocked to protect bandwidth. You are being securely routed to the <b>Cinematic Player UI</b>.</p>
+        
+        <div class="features">
+            <strong>⚡ Why use the Player?</strong>
+            <ul>
+                <li>Hardware Accelerated No-Lag Streaming</li>
+                <li>Subtitle (CC) & Theater Mode Support</li>
+                <li>100% Ad-Free & Encrypted Environment</li>
+            </ul>
+        </div>
+
+        <div class="timer-box">
+            Routing to Vault in <span id="time">7</span>s...
+        </div>
+        
+        <div class="social-links">
+            <a href="/instagram" target="_blank">Instagram</a>
+            <a href="/github" target="_blank">GitHub</a>
+            <a href="/discord" target="_blank">Discord</a>
+            <a href="/youtube" target="_blank">YouTube</a>
+            <a href="/wiki" target="_blank">Wiki</a>
+            <a href="/clock" target="_blank">Clock</a>
+        </div>
+
+        <a href="/video?q={slug}" class="redirect-btn">Force Route Now</a>
+    </div>
+    <script>
+        let sec = 7;
+        const timerEl = document.getElementById('time');
+        const interval = setInterval(() => {{
+            sec--;
+            if(sec > 0) timerEl.innerText = sec;
+            else clearInterval(interval);
+        }}, 1000);
+    </script>
+</body>
+</html>
+"""
+
+
+def _is_owner_verified(request: Request) -> bool:
+    if not SPACE_PASSWORD:
+        return False
+    auth_cookie = request.cookies.get("auth_token", "")
+    password_header = request.headers.get("password", "")
+    return auth_cookie == SPACE_PASSWORD or password_header == SPACE_PASSWORD
+
+
+def _is_inline_public_preview(file_record: Dict[str, Any]) -> bool:
+    mime = str(file_record.get("mime_type") or "").lower()
+    filename = str(file_record.get("filename") or "").lower()
+    return mime.startswith("image/") or mime == "application/pdf" or filename.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf"))
+
+
+def _is_audio_video(file_record: Dict[str, Any]) -> bool:
+    mime = str(file_record.get("mime_type") or "").lower()
+    filename = str(file_record.get("filename") or "").lower()
+    return mime.startswith(("video/", "audio/")) or filename.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".ts", ".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"))
+
+
+# START: Direct file security gateway (/f/*)
+# What: Handles direct file requests with anti-bruteforce behavior, preview-safe public rendering,
+# and owner-only access for protected media.
+# Why: Enforces secure delivery while keeping images/PDF previews usable.
+# Without: Protected media can be scraped more easily and direct-link abuse risk increases.
 @app.get("/f/{slug:path}")
-async def serve_file_publicly(slug: str, request: Request): # Notice 'request: Request' is added here!
-    client_ip = request.client.host
-    
-    # [THE BLACK HOLE] 
-    # If this IP has failed more than 20 times, they are a scanner.
+async def serve_file_publicly(slug: str, request: Request):
+    client_ip = request.client.host if request.client else "0.0.0.0"
+
     if ip_strikes.get(client_ip, 0) > 20:
-        # Hold their connection open for 5 minutes to crash their script's RAM
-        await asyncio.sleep(300) 
+        await asyncio.sleep(300)
         return Response(status_code=403, content="Blocked by Omniscient Engine.")
 
     db = get_db()
-    file_record = next((item for item in db.get("files", []) if item["slug"] == slug), None)
-    
-    # [ADAPTIVE TARPIT & HONEYPOT] - Fake File Logic
+    file_record = next((item for item in db.get("files", []) if item.get("slug") == slug), None)
     if not file_record:
-        # Add a strike to this IP
         ip_strikes[client_ip] = ip_strikes.get(client_ip, 0) + 1
-        current_strikes = ip_strikes[client_ip]
-        
-        # Exponential sleep: 1st strike = 2s, 5th strike = 10s, 10th strike = 20s
-        penalty_time = float(current_strikes * 2.0)
-        await asyncio.sleep(penalty_time)
-        
-        # Generate Fake File
-        fake_size = random.randint(10240, 102400)
-        fake_bytes = os.urandom(fake_size)
-        fake_types = ["image/jpeg", "video/mp4", "application/zip", "application/pdf", "audio/mpeg"]
-        
+        await asyncio.sleep(float(ip_strikes[client_ip] * 2.0))
+        fake_size = random.randint(512, 4096)
         return Response(
-            content=fake_bytes, 
-            media_type=random.choice(fake_types), 
+            content=os.urandom(fake_size),
+            media_type=random.choice(["image/jpeg", "video/mp4", "application/zip", "application/pdf", "audio/mpeg"]),
             status_code=200,
-            headers={"Cache-Control": "public, max-age=86400"} # Matches real files (Phase 2 Fix)
+            headers={"Cache-Control": "public, max-age=86400", "Content-Disposition": "inline"}
         )
-        
-    # [LEGITIMATE USER LOGIC]
-        # If they successfully requested a real file, reset their strikes to 0
-        if client_ip in ip_strikes:
-            ip_strikes[client_ip] = 0
 
-        # Handle external redirects (Social links)
-        # Handle external redirects (Social links)
-        # Handle external redirects (Social links)
-        if file_record.get("is_external") and file_record.get("external_url"):
-            return RedirectResponse(url=file_record["external_url"], status_code=308)
-            
-        # 🛡️ THE IDEA 1.5 SMART COOKIE FIREWALL (Ultimate Edition) 🛡️
-        auth_cookie = request.cookies.get("auth_token", "")
-        is_admin = (auth_cookie == os.environ.get("SPACE_PASSWORD")) and bool(os.environ.get("SPACE_PASSWORD"))
-        
-        # FIX: Bulletproof string conversion to prevent 'NoneType' silent crashes (The 206 Bypass)
-        mime = str(file_record.get("mime_type") or "").lower()
-        fname = str(file_record.get("filename") or "").lower()
-        is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
-        
-        # 🔥 CRITICAL 206 BYPASS FIX (V8): The "No-Mercy" Firewall
-        # 1. Check if the file is Video or Audio
-        mime = str(file_info.get("mime_type", "")).lower() if file_info else ""
-        filename = str(file_info.get("name", "")).lower() if file_info else ""
-        
-        is_video_or_audio = (
-            mime.startswith("video/") or 
-            mime.startswith("audio/") or 
-            filename.endswith((".mp4", ".mkv", ".webm", ".avi", ".ts", ".mp3", ".m4a", ".wav", ".flac", ".ogg"))
-        )
-        
-        # 2. THE ULTIMATE BLOCK:
-        # Tera native player video chalane ke liye /stream/media/{token} use karta hai, /f/{slug} nahi!
-        # Toh agar koi bhi (jo Admin nahi hai) is /f/ share link pe aayega, usko 100% Timer UI dikhega.
-        # IDM ho, Incognito ho, ya direct paste — sab block honge!
-        if is_video_or_audio and not is_admin:
-            # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Routes
-            html_page = f"""
-            <!DOCTYPE html>
-            <html lang="en">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <meta http-equiv="refresh" content="7;url=/video?q={slug}">
-                <title>Secure Routing | Qlynk Node</title>
-                <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-                    body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }}
-                    .container {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px 30px; border-radius: 16px; max-width: 480px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
-                    .logo {{ width: 65px; height: 65px; margin-bottom: 15px; filter: drop-shadow(0 0 10px rgba(188, 140, 255, 0.5)); }}
-                    h2 {{ color: #bc8cff; margin: 0 0 10px 0; font-size: 22px; }}
-                    p {{ color: #8b949e; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }}
-                    .features {{ text-align: left; background: #0d1117; padding: 15px; border-radius: 8px; font-size: 13px; color: #c9d1d9; margin-bottom: 20px; border: 1px solid #30363d; }}
-                    .features strong {{ color: #58a6ff; display: block; margin-bottom: 8px; }}
-                    .features ul {{ margin: 0; padding-left: 20px; }}
-                    .features li {{ margin-bottom: 5px; }}
-                    .timer-box {{ background: #161b22; border: 1px solid #30363d; padding: 12px; border-radius: 8px; font-weight: 600; color: #8b949e; font-size: 15px; margin-bottom: 25px; }}
-                    .timer-box span {{ font-size: 20px; color: #bc8cff; font-weight: 800; }}
-                    .social-links {{ display: flex; justify-content: center; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }}
-                    .social-links a {{ color: #e1e4e8; text-decoration: none; font-size: 13px; background: #21262d; padding: 8px 15px; border-radius: 20px; transition: 0.3s; border: 1px solid #30363d; font-weight: 600; }}
-                    .social-links a:hover {{ background: #bc8cff; color: #000; border-color: #bc8cff; }}
-                    .redirect-btn {{ display: inline-block; padding: 12px 25px; background: #e1e4e8; color: #000; text-decoration: none; border-radius: 8px; font-weight: bold; transition: 0.3s; width: 100%; box-sizing: border-box; }}
-                    .redirect-btn:hover {{ background: #bc8cff; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
-                </style>
-            </head>
-            <body>
-                <div class="container">
-                    <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk Logo" class="logo">
-                    <h2>Secure Datacenter Routing</h2>
-                    <p>Direct raw access is blocked to protect bandwidth. You are being securely routed to the <b>Cinematic Player UI</b>.</p>
-                    
-                    <div class="features">
-                        <strong>⚡ Why use the Player?</strong>
-                        <ul>
-                            <li>Hardware Accelerated No-Lag Streaming</li>
-                            <li>Subtitle (CC) & Theater Mode Support</li>
-                            <li>100% Ad-Free & Encrypted Environment</li>
-                        </ul>
-                    </div>
+    ip_strikes[client_ip] = 0
 
-                    <div class="timer-box">
-                        Routing to Vault in <span id="time">7</span>s...
-                    </div>
-                    
-                    <div class="social-links">
-                        <a href="/instagram" target="_blank">Instagram</a>
-                        <a href="/github" target="_blank">GitHub</a>
-                        <a href="/discord" target="_blank">Discord</a>
-                        <a href="/youtube" target="_blank">YouTube</a>
-                        <a href="/wiki" target="_blank">Wiki</a>
-                        <a href="/clock" target="_blank">Clock</a>
-                    </div>
+    if file_record.get("is_external") and file_record.get("external_url"):
+        return RedirectResponse(url=file_record["external_url"], status_code=308)
 
-                    <a href="/video?q={slug}" class="redirect-btn">Force Route Now</a>
-                </div>
-                <script>
-                    let sec = 7;
-                    const timerEl = document.getElementById('time');
-                    const interval = setInterval(() => {{
-                        sec--;
-                        if(sec > 0) timerEl.innerText = sec;
-                        else clearInterval(interval);
-                    }}, 1000);
-                </script>
-            </body>
-            </html>
-            """
-            return HTMLResponse(
-                status_code=403, 
-                content=html_page,
-                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    mime = str(file_record.get("mime_type") or "").lower()
+    filename = str(file_record.get("filename") or "")
+    is_previewable = _is_inline_public_preview(file_record)
+    is_media = _is_audio_video(file_record)
+    owner_verified = _is_owner_verified(request)
+
+    if is_previewable:
+        try:
+            file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
+            serve_mime = file_record.get("mime_type", "application/octet-stream")
+            fname_lower = filename.lower()
+            if fname_lower.endswith(".webp"):
+                serve_mime = "image/webp"
+            elif fname_lower.endswith(".svg"):
+                serve_mime = "image/svg+xml"
+            elif fname_lower.endswith(".gif"):
+                serve_mime = "image/gif"
+            elif fname_lower.endswith(".pdf"):
+                serve_mime = "application/pdf"
+            return FileResponse(
+                path=file_path,
+                filename=file_record["filename"],
+                media_type=serve_mime,
+                content_disposition_type="inline",
+                headers={"Cache-Control": "public, max-age=86400"}
             )
-            
-        # [REAL FILE DELIVERY]
-    try:
-        file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
-        
-        # 🛡️ FIX: Force correct mime-type for browser rendering (Fixes even old uploaded files)
-        serve_mime = file_record.get("mime_type", "application/octet-stream")
-        fname_lower = file_record["filename"].lower()
-        if fname_lower.endswith('.webp'): serve_mime = "image/webp"
-        elif fname_lower.endswith('.svg'): serve_mime = "image/svg+xml"
-        elif fname_lower.endswith('.gif'): serve_mime = "image/gif"
-        
-        return FileResponse(
-            path=file_path, filename=file_record["filename"],
-            media_type=serve_mime, content_disposition_type="inline",
-            headers={"Cache-Control": "public, max-age=86400"} 
+        except Exception as e:
+            logger.error(f"Error serving preview file '{slug}': {e}")
+            return Response(content="Preview unavailable", status_code=500)
+
+    if is_media and not owner_verified:
+        return HTMLResponse(
+            status_code=403,
+            content=_direct_access_block_html(slug),
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
         )
-    except Exception as e:
-        logger.error(f"Error serving file '{slug}': {e}")
-        await asyncio.sleep(random.uniform(1.0, 3.0))
-        return Response(
-            content=os.urandom(10240), 
-            media_type="application/octet-stream", 
-            status_code=200,
-            headers={"Cache-Control": "public, max-age=86400"}
-        )
+
+    if owner_verified:
+        try:
+            file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
+            serve_mime = file_record.get("mime_type", "application/octet-stream")
+            fname_lower = filename.lower()
+            if fname_lower.endswith(".webp"):
+                serve_mime = "image/webp"
+            elif fname_lower.endswith(".svg"):
+                serve_mime = "image/svg+xml"
+            elif fname_lower.endswith(".gif"):
+                serve_mime = "image/gif"
+            elif fname_lower.endswith(".pdf"):
+                serve_mime = "application/pdf"
+            return FileResponse(
+                path=file_path,
+                filename=file_record["filename"],
+                media_type=serve_mime,
+                content_disposition_type="inline",
+                headers={"Cache-Control": "public, max-age=86400"}
+            )
+        except Exception as e:
+            logger.error(f"Error serving verified file '{slug}': {e}")
+            return Response(content=os.urandom(10240), media_type="application/octet-stream", status_code=500)
+
+    return HTMLResponse(
+        status_code=403,
+        content=_direct_access_block_html(slug),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+    )
+# END: Direct file security gateway (/f/*)
 
 # ==========================================
 # 7. THE MASSIVE HTML / JS DASHBOARD
@@ -1403,9 +1732,9 @@ STATUS_DASHBOARD_HTML = """
             <!-- Client & Route Analytics -->
             <div class="card">
                 <h2>🌍 Link Identity & Route Analytics</h2>
-                <div class="stat-row"><span class="stat-label">Datacenter Region</span><span class="stat-val" id="net-loc">Loading...</span></div>
-                <div class="stat-row"><span class="stat-label">Server IPv4</span><span class="stat-val" id="net-server-ip">Loading...</span></div>
-                <div class="stat-row" style="margin-top:10px;"><span class="stat-label">Your Client IP</span><span class="stat-val" id="net-client-ip" style="color:var(--accent-purple);">Loading...</span></div>
+                      <button class="icon-btn" id="prev" aria-label="Previous"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M6 6h2v12H6zm3 6l9 6V6z"/></svg></button>
+                      <button class="icon-btn play" id="play" aria-label="Play / Pause"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M8 5v14l11-7z"/></svg></button>
+                      <button class="icon-btn" id="next" aria-label="Next"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M16 6h2v12h-2zm-9 6l9 6V6z"/></svg></button>
                 
                 <div class="stat-row" style="margin-top:10px; border-top:1px dashed #30363d; padding-top:10px;">
                     <span class="stat-label" style="color:var(--accent-blue);">Client D/L Throughput</span>
@@ -1842,41 +2171,25 @@ from huggingface_hub import hf_hub_download
 # Database loader for Share Tokens
 # --- SHARE TOKENS DATABASE (CACHED) ---
 def get_tokens_db() -> Dict[str, Any]:
-    if DB_CACHE["tokens"]["data"] is None or time.time() - DB_CACHE["tokens"]["last_sync"] > CACHE_TTL:
-        try:
-            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="share_tokens.json", repo_type="dataset", token=HF_TOKEN)
-            with open(file_path, "r") as f:
-                DB_CACHE["tokens"]["data"] = json.load(f)
-            DB_CACHE["tokens"]["last_sync"] = time.time()
-        except Exception:
-            if DB_CACHE["tokens"]["data"] is None:
-                return {"tokens": {}}
-    return DB_CACHE["tokens"]["data"]
+    db_data = _ram_get_json("share_tokens.json", {"tokens": {}})
+    DB_CACHE["tokens"]["data"] = db_data
+    DB_CACHE["tokens"]["last_sync"] = time.time()
+    return db_data
 
 def save_tokens_db(db_data: Dict[str, Any]):
-    with open("share_tokens.json", "w") as f:
-        json.dump(db_data, f, indent=4)
-    api.upload_file(path_or_fileobj="share_tokens.json", path_in_repo="share_tokens.json", repo_id=DATASET_REPO, repo_type="dataset")
+    _ram_set_json("share_tokens.json", db_data)
     DB_CACHE["tokens"]["data"] = db_data
     DB_CACHE["tokens"]["last_sync"] = time.time()
 
 # --- SUBTITLE DATABASE (CACHED) ---
 def get_sub_db() -> Dict[str, Any]:
-    if DB_CACHE["subtitles"]["data"] is None or time.time() - DB_CACHE["subtitles"]["last_sync"] > CACHE_TTL:
-        try:
-            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="history_subtitle.json", repo_type="dataset", token=HF_TOKEN)
-            with open(file_path, "r") as f:
-                DB_CACHE["subtitles"]["data"] = json.load(f)
-            DB_CACHE["subtitles"]["last_sync"] = time.time()
-        except Exception:
-            if DB_CACHE["subtitles"]["data"] is None:
-                return {"subtitles": []}
-    return DB_CACHE["subtitles"]["data"]
+    db_data = _ram_get_json("history_subtitle.json", {"subtitles": []})
+    DB_CACHE["subtitles"]["data"] = db_data
+    DB_CACHE["subtitles"]["last_sync"] = time.time()
+    return db_data
 
 def save_sub_db(db_data: Dict[str, Any]):
-    with open("history_subtitle.json", "w") as f:
-        json.dump(db_data, f, indent=4)
-    api.upload_file(path_or_fileobj="history_subtitle.json", path_in_repo="history_subtitle.json", repo_id=DATASET_REPO, repo_type="dataset")
+    _ram_set_json("history_subtitle.json", db_data)
     DB_CACHE["subtitles"]["data"] = db_data
     DB_CACHE["subtitles"]["last_sync"] = time.time()
 
@@ -2009,6 +2322,10 @@ async def serve_subtitle_file(sub_slug: str):
         raise HTTPException(status_code=500, detail="Error loading subtitle file.")
 
 # --- Massive HTML/JS Payload (Universal Cinematic Media Tube) ---
+# START: Qlynk Tube media player frontend payload (HTML/CSS/JS)
+# What: Full cinematic player UI markup and client-side playback controls.
+# Why: Delivers the watch experience, keyboard controls, captions, and media overlays in one payload.
+# Without: `/video` style playback pages lose interactive controls and fail to provide the intended UX.
 MEDIA_TUBE_HTML = """
 <!DOCTYPE html>
 <html lang="en">
@@ -2516,7 +2833,22 @@ MEDIA_TUBE_HTML = """
             `;
         }
 
-        // --- RENDER LOCAL WATCH PAGE ---
+        function svgWrap(path, viewBox = '0 0 24 24') {
+            return `<svg viewBox="${viewBox}" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;">${path}</svg>`;
+        }
+        function svgPlayIcon() { return svgWrap('<path d="M8 5v14l11-7z"/>'); }
+        function svgPauseIcon() { return svgWrap('<path d="M7 5h4v14H7zm6 0h4v14h-4z"/>'); }
+        function svgVolumeHighIcon() { return svgWrap('<path d="M4 10v4h4l5 4V6L8 10H4zm13.5 2a4.5 4.5 0 0 0-2.5-4.03v8.06A4.5 4.5 0 0 0 17.5 12zm-2.5-8.5v2.06A8 8 0 0 1 19.5 12a8 8 0 0 1-4.5 7.44v2.06A10 10 0 0 0 21.5 12a10 10 0 0 0-6.5-8.5z"/>'); }
+        function svgVolumeMutedIcon() { return svgWrap('<path d="M4 10v4h4l5 4V6L8 10H4zm12.59-3L15.17 8.42 13.76 7l-1.06 1.06 1.41 1.42-1.41 1.41 1.06 1.06 1.41-1.41 1.41 1.41 1.06-1.06-1.41-1.41 1.41-1.42L16.59 8.2 15.17 6.8z"/>'); }
+        function setPlayButton(playing) {
+            const btn = document.getElementById('pPlay');
+            if (btn) btn.innerHTML = playing ? svgPauseIcon() : svgPlayIcon();
+        }
+        function setMuteButton(muted) {
+            const btn = document.getElementById('pMute');
+            if (btn) btn.innerHTML = muted ? svgVolumeMutedIcon() : svgVolumeHighIcon();
+        }
+
         // --- RENDER LOCAL WATCH PAGE ---
         async function renderWatchPage(slug) {
             document.getElementById('homeView').classList.add('hidden');
@@ -2599,8 +2931,7 @@ MEDIA_TUBE_HTML = """
 
             if(subs.length > 0) {
                 document.getElementById('subsList').innerText = `CC Available: ${subs.map(s=>s.language).join(', ')}`;
-                updateCCSize(); 
-                // Fix: Video load hone ke baad hi CC on hoga
+                updateCCSize();
                 const mediaCheck = document.getElementById('mainMedia');
                 if(mediaCheck) {
                     mediaCheck.addEventListener('loadedmetadata', () => setCC(0), {once: true});
@@ -2609,10 +2940,9 @@ MEDIA_TUBE_HTML = """
                 document.getElementById('subsList').innerText = `No Subtitles (CC) linked.`;
                 setCC(-1);
             }
-            
+
             const mediaEl = document.getElementById('mainMedia');
             if(mediaEl) {
-                // Video Loading Spinner Logic
                 const loader = document.getElementById('loaderSpinner');
                 mediaEl.addEventListener('waiting', () => { if(loader) loader.style.display = 'block'; });
                 mediaEl.addEventListener('playing', () => { if(loader) loader.style.display = 'none'; });
@@ -2620,7 +2950,6 @@ MEDIA_TUBE_HTML = """
 
                 activePlayer = {
                     play: () => {
-                        // 🌊 THE ULTIMATE FIX: Har jagah se Audio Context Resume hoga!
                         if (typeof currentAudioCtx !== 'undefined' && currentAudioCtx && currentAudioCtx.state === 'suspended') {
                             currentAudioCtx.resume();
                         }
@@ -2639,16 +2968,16 @@ MEDIA_TUBE_HTML = """
                     getBuffered: () => mediaEl.buffered.length > 0 ? mediaEl.buffered.end(mediaEl.buffered.length - 1) : 0
                 };
 
-                mediaEl.play().catch(e => console.log("Autoplay blocked."));
+                mediaEl.play().catch(() => null);
                 mediaEl.addEventListener('ended', handleMediaEnded);
                 mediaEl.ontimeupdate = updateProgressUI;
                 mediaEl.onplay = () => {
-                    document.getElementById('pPlay').innerText = '⏸';
+                    setPlayButton(true);
                     const disc = document.getElementById('audioDisc');
                     if(disc) disc.classList.add('playing');
                 };
                 mediaEl.onpause = () => {
-                    document.getElementById('pPlay').innerText = '▶';
+                    setPlayButton(false);
                     const disc = document.getElementById('audioDisc');
                     if(disc) disc.classList.remove('playing');
                 };
@@ -2735,8 +3064,8 @@ MEDIA_TUBE_HTML = """
                 else loader.style.display = 'none';
             }
             
-            if (event.data == YT.PlayerState.PLAYING) pPlay.innerText = '⏸';
-            else if (event.data == YT.PlayerState.PAUSED) pPlay.innerText = '▶';
+                if (event.data == YT.PlayerState.PLAYING) setPlayButton(true);
+                else if (event.data == YT.PlayerState.PAUSED) setPlayButton(false);
             else if (event.data == YT.PlayerState.ENDED) handleMediaEnded();
         }
 
@@ -2846,12 +3175,12 @@ MEDIA_TUBE_HTML = """
 
             pVol.oninput = (e) => { 
                 activePlayer.setVolume(e.target.value); 
-                pMute.innerText = e.target.value > 0 ? '🔊' : '🔇'; 
+                setMuteButton(e.target.value <= 0);
             };
             
             pMute.onclick = () => { 
                 activePlayer.toggleMute(); 
-                pMute.innerText = activePlayer.isMuted() ? '🔇' : '🔊'; 
+                setMuteButton(activePlayer.isMuted()); 
                 pVol.value = activePlayer.isMuted() ? 0 : activePlayer.getVolume();
             };
             
@@ -2865,6 +3194,10 @@ MEDIA_TUBE_HTML = """
             document.getElementById('pSetBtn').onclick = (e) => { e.stopPropagation(); document.getElementById('pSettings').classList.toggle('show'); };
             document.getElementById('pSpeedRange').oninput = (e) => { setSpeed(e.target.value); };
 
+            // START: Player interaction layer
+            // What: Handles auto-hide behavior for controls and pointer while media is playing.
+            // Why: Keeps the playback view clean and cinematic during active playback.
+            // Without: Controls/pointer stay visible and degrade fullscreen/watch experience.
             // 🖱️ FIX: YouTube-style Auto Hide (Controls + Mouse Pointer)
             pw.onmousemove = () => {
                 pControls.classList.add('active');
@@ -2880,7 +3213,6 @@ MEDIA_TUBE_HTML = """
                 }, 2500); // 2.5 second idle time
             };
 
-            // Agar mouse player ke bahar chala jaye toh turant hide kar do
             pw.onmouseleave = () => {
                 if (activePlayer && !activePlayer.isPaused()) {
                     pControls.classList.remove('active');
@@ -2892,7 +3224,7 @@ MEDIA_TUBE_HTML = """
                 if(e.detail === 1) { 
                     clickTimer = setTimeout(() => {
                         activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
-                        showActionIcon(activePlayer.isPaused() ? '⏸ Pause' : '▶ Play');
+                        showActionIcon(activePlayer.isPaused() ? 'Pause' : 'Play');
                     }, 200); 
                 }
             };
@@ -3041,11 +3373,12 @@ MEDIA_TUBE_HTML = """
                 } else if(spacePressTime > 0 && (Date.now() - spacePressTime < 250)) {
                     if(activePlayer) {
                         activePlayer.isPaused() ? activePlayer.play() : activePlayer.pause();
-                        showActionIcon(activePlayer.isPaused() ? '⏸ Pause' : '▶ Play');
+                            showActionIcon(activePlayer.isPaused() ? 'Pause' : 'Play');
                     }
                 }
                 spacePressTime = 0;
             }
+            // END: Player interaction layer
         });
 
         document.addEventListener('contextmenu', (e) => {
@@ -3264,6 +3597,7 @@ MEDIA_TUBE_HTML = """
 </body>
 </html>
 """
+# END: Qlynk Tube media player frontend payload (HTML/CSS/JS)
 
 @app.get("/view", response_class=HTMLResponse)
 @app.get("/video", response_class=HTMLResponse)
@@ -3316,6 +3650,10 @@ async def media_optimizer_loop():
             # STEP 2: SCAN & FIX
             for f in all_files:
                 # Target only videos that are NOT external and NOT yet optimized
+                if f.get("ffmpeg_fixed") is True:
+                    logger.info(f"Skipping FFmpeg: File already optimized ({f.get('slug')})")
+                    continue
+
                 if f.get("mime_type", "").startswith("video/") and not f.get("is_external") and f["slug"] not in new_optimized_slugs:
                     slug = f["slug"]
                     repo_path = f["path"]
@@ -3344,6 +3682,8 @@ async def media_optimizer_loop():
                             # 4. Mark as completed in JSON
                             opt_db["optimized_slugs"].append(slug)
                             save_optimizer_db(opt_db)
+                            f["ffmpeg_fixed"] = True
+                            save_db(main_db)
                             new_optimized_slugs.append(slug)
                             logger.info(f"Successfully Optimized & Synced: {slug}")
                             
@@ -4034,6 +4374,7 @@ async def media_handler(client, message):
 
             # 3. MKV / Unsupported Video Optimizer (MP4/AAC Force Convert)
             is_video = mime_type.startswith("video/") or ext in ['.mkv', '.avi', '.mov', '.flv', '.wmv']
+            was_ffmpeg_fixed = False
             
             if is_video and ext != '.mp4':
                 await msg.edit_text("🛠️ Optimizing Video Engine (MKV to MP4 & AAC Audio Fix)...\nThis may take a few minutes for heavy files.")
@@ -4046,6 +4387,7 @@ async def media_handler(client, message):
                 await process.communicate()
                 
                 if os.path.exists(final_path) and os.path.getsize(final_path) > 0:
+                    was_ffmpeg_fixed = True
                     os.remove(temp_path) 
                 else:
                     final_path = temp_path 
@@ -4076,7 +4418,8 @@ async def media_handler(client, message):
                 "size_bytes": file_size_disk,
                 "uploaded_at": upload_timestamp,
                 "is_external": False,
-                "external_url": ""
+                "external_url": "",
+                "ffmpeg_fixed": was_ffmpeg_fixed
             }
             files_list.append(file_record)
             save_db(db)
@@ -6007,1340 +6350,3380 @@ No limits. No boundaries. Just pure logic.
     """
     return HTMLResponse(content=lucky_html)
 # ==========================================
-# 22. QLYNK-TIFY (ENTERPRISE HYBRID MUSIC ENGINE) - V6 TITAN
+# 22. QLYNK-TIFY V7 (TRINITY ENGINE)
 # ==========================================
-import urllib.parse
-from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse, Response
+# START: Qlynk-tify V7 Trinity engine backend
+# What: Provides auth guards, Spotify bridge, vault search/library APIs, stream token generation,
+# and persistence endpoints for playlists/presence.
+# Why: This is the server-side control plane for the Qlynk-tify experience.
+# Without: The frontend cannot authenticate, fetch content, or control playback services.
+import base64
+import hashlib
+import secrets
+from pathlib import Path
+from urllib.parse import urlencode
+
+import aiohttp
 from fastapi import Request, Depends, HTTPException
-import io
-import re
-import asyncio
-import uuid
-import time
-import json
-import os
-import random
-from typing import Dict, Any
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 
-# --- 1. Qlynktify Aggressive Metadata Cleaners ---
-def clean_music_title(raw_filename: str) -> dict:
-    """Aggressive Regex Engine to purify pirated/messy audio filenames"""
-    name = os.path.splitext(raw_filename)[0]
-    
-    garbage_patterns = [
-        r"\(official.*?\)", r"\[.*?\]", r"\(lyric.*?\)", r"official video", 
-        r"audio", r"128kbps", r"320kbps", r"64kbps", r"music video", r"hq", r"hd", r"4k",
-        r"-?\s*pagalworld(\.com|\.nl|\.io)?\s*-?", r"-?\s*mrjatt(\.com)?\s*-?", 
-        r"-?\s*djpunjab(\.com)?\s*-?", r"-?\s*pendujatt\s*-?", r"-?\s*djmaza\s*-?",
-        r"song download", r"mp3 download", r"free download", r"djmaza", r"wapking",
-        r"\(.*?\)", r"\[.*?\]", r"www\..*?\.com", r"-\s*Copy"
-    ]
-    for pattern in garbage_patterns:
-        name = re.sub(pattern, "", name, flags=re.IGNORECASE)
-        
-    name = name.replace("_", " ").strip()
-    name = re.sub(r'\s+', ' ', name)
-    name = re.sub(r'^-\s*|\s*-$', '', name).strip()
-    
-    parts = name.split(" - ", 1)
-    if len(parts) == 2:
-        return {"artist": parts[0].strip(), "title": parts[1].strip(), "clean_full": f"{parts[0].strip()} {parts[1].strip()}"}
-    return {"artist": "Unknown Artist", "title": name, "clean_full": name}
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+QLYNKTIFY_ENABLED = str(os.environ.get("QLYNKTIFY_ENABLED", "false")).lower() == "true"
 
-# --- 2. Advanced Cache & Batch Managers (Zero API Spam) ---
-# We maintain RAM states and sync to Hugging Face only every few minutes.
-def get_qlynktify_meta_db() -> Dict[str, Any]:
-    if DB_CACHE.get("qlynktify_meta", {}).get("data") is None:
-        try:
-            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="qlynktify_meta.json", repo_type="dataset", token=HF_TOKEN)
-            with open(file_path, "r") as f:
-                data = json.load(f)
-            DB_CACHE.setdefault("qlynktify_meta", {})["data"] = data
-            DB_CACHE["qlynktify_meta"]["last_sync"] = time.time()
-        except Exception:
-            empty_db = {"tracks": {}, "play_counts": {}}
-            DB_CACHE.setdefault("qlynktify_meta", {})["data"] = empty_db
-            return empty_db
-    return DB_CACHE["qlynktify_meta"]["data"]
+QLYNKTIFY_CHECKOUT_URL = "/checkout"
+QLYNKTIFY_AUTH_FILE = "qlynktify_spotify_auth.json"
+QLYNKTIFY_PLAYLISTS_FILE = "qlynktify_custom_playlists.json"
+QLYNKTIFY_PRESENCE_FILE = "qlynktify_presence.json"
+SPOTIFY_STATE_CACHE = {}
+SPOTIFY_API_BASE = "https://api.spotify.com/v1"
 
-def sync_qlynktify_meta_to_cloud():
-    """Background task to sync metadata and play counts without blocking UI"""
-    db_data = DB_CACHE.get("qlynktify_meta", {}).get("data")
-    if not db_data: return
-    
-    # Only sync if it's been more than 5 mins to prevent API limits
-    if time.time() - DB_CACHE.get("qlynktify_meta", {}).get("last_sync", 0) < 300:
-        return 
-        
-    with open("qlynktify_meta.json", "w") as f:
-        json.dump(db_data, f, indent=4)
-    try:
-        api.upload_file(path_or_fileobj="qlynktify_meta.json", path_in_repo="qlynktify_meta.json", repo_id=DATASET_REPO, repo_type="dataset")
-        DB_CACHE["qlynktify_meta"]["last_sync"] = time.time()
-        logger.info("Qlynktify Cloud Sync Complete.")
-    except Exception as e:
-        logger.warning(f"Cloud Sync failed: {e}")
 
-# --- 3. Dynamic RAM Stream Tokens ---
-qlynktify_stream_tokens = {}
-
-# --- 4. FastAPI Endpoints (The Core Engine) ---
-@app.get("/api/qlynktify/library")
-async def fetch_qlynktify_library(access: dict = Depends(verify_view_access)):
-    try:
-        db = get_db()
-        meta_db = get_qlynktify_meta_db()
-        music_files = []
-        
-        play_counts = meta_db.get("play_counts", {})
-        
-        for f in db.get("files", []):
-            if str(f.get("mime_type", "")).startswith("audio/"):
-                cleaned_data = clean_music_title(f.get("filename", ""))
-                f["clean_title"] = cleaned_data["title"]
-                f["artist_guess"] = cleaned_data["artist"]
-                f["search_query"] = cleaned_data["clean_full"]
-                f["track_id"] = f.get("slug")
-                f["play_count"] = play_counts.get(f.get("slug"), 0)
-                music_files.append(f)
-                
-        sorted_tracks = sorted(music_files, key=lambda x: x.get("uploaded_at", ""), reverse=True)
-        return {"status": "success", "tracks": sorted_tracks}
-    except Exception as e:
-        logger.error(f"Library Fetch Error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to load Vault Database")
-
-@app.post("/api/qlynktify/increment_play/{slug}")
-async def increment_play_count(slug: str, access: dict = Depends(verify_view_access)):
-    """Increments the play count of a track locally, queues cloud sync"""
-    meta_db = get_qlynktify_meta_db()
-    if "play_counts" not in meta_db:
-        meta_db["play_counts"] = {}
-        
-    current_count = meta_db["play_counts"].get(slug, 0)
-    meta_db["play_counts"][slug] = current_count + 1
-    
-    # Trigger background sync (won't actually upload unless 5 mins passed)
-    asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
-    return {"status": "success", "new_count": meta_db["play_counts"][slug]}
-
-@app.get("/api/qlynktify/meta")
-async def get_track_metadata(q: str, access: dict = Depends(verify_view_access)):
-    """Aggressive history.json Fallback + iTunes API"""
-    import aiohttp
-    meta_db = get_qlynktify_meta_db()
-    query_key = q.lower().strip()
-    
-    if query_key in meta_db.get("tracks", {}):
-        return meta_db["tracks"][query_key]
-
-    result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": "", "real_title": ""}
-    
-    # 1. PRIMARY CHECK: Sabse pehle history.json (Vault Database) mein check karo
-    try:
-        db = get_db()
-        for f in db.get("files", []):
-            file_title = str(f.get("title", "")).lower()
-            file_name = str(f.get("filename", "")).lower()
-            
-            # Agar query ka thoda sa hissa bhi title ya filename mein match hota hai
-            if query_key in file_title or query_key in file_name or file_title in query_key:
-                # Thumbnail, artwork, ya cover jo bhi key ho history.json mein, use utha lo
-                thumb = f.get("thumbnail") or f.get("artwork") or f.get("cover")
-                if thumb:
-                    result["artwork"] = thumb
-                    result["album"] = "Vault Asset"
-                    break # Thumbnail mil gaya, loop roko
-    except Exception as e:
-        logger.warning(f"History DB Read Error: {e}")
-
-    # 2. SECONDARY CHECK: iTunes API (Sirf tab hit hoga agar artist name chahiye ya artwork local nahi mila)
-    if not result["artwork"] or result["artist"] == "Unknown Artist":
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json"
-            }
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("resultCount", 0) > 0:
-                            track = data["results"][0]
-                            result["artist"] = track.get("artistName", "Unknown Artist")
-                            result["real_title"] = track.get("trackName", "")
-                            
-                            # Agar history.json mein artwork nahi tha, toh hi iTunes ka artwork use karo
-                            if not result["artwork"]:
-                                result["artwork"] = track.get("artworkUrl100", "").replace("100x100bb", "600x600bb")
-                                result["album"] = track.get("collectionName", "Unknown Album")
-        except Exception as e:
-            logger.warning(f"iTunes API Error: {e}")
-
-    # Cache result to prevent repeated searches
-    meta_db.setdefault("tracks", {})[query_key] = result
-    asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
-    return result
-    
-@app.get("/api/qlynktify/lyrics")
-async def get_track_lyrics(q: str, access: dict = Depends(verify_view_access)):
-    import aiohttp
-    try:
-        url = f"https://lrclib.net/api/search?track_name={urllib.parse.quote(q)}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if len(data) > 0:
-                        return {"synced": data[0].get("syncedLyrics"), "plain": data[0].get("plainLyrics")}
-    except Exception:
-        pass
-    return {"synced": None, "plain": None}
-
-@app.get("/api/qlynktify/generate_stream/{slug}")
-async def generate_music_stream(slug: str, access: dict = Depends(verify_view_access)):
-    # 5 MINUTE TOKEN EXPIRY
-    stream_token = uuid.uuid4().hex
-    qlynktify_stream_tokens[stream_token] = {
-        "slug": slug,
-        "expires": time.time() + 300 
-    }
-    return {"stream_token": stream_token}
-
-@app.get("/stream/audio/qlynktify/{token}")
-async def ram_buffered_audio_stream(token: str, request: Request):
-    """The Ultimate 30-Sec Chunk Engine & Anti-Piracy Shield"""
-    
-    # 🛡️ THE SHIELD: Block Direct URL hits from Network Tab
-    fetch_dest = request.headers.get("sec-fetch-dest", "")
-    if fetch_dest == "document" or not fetch_dest:
-        return Response(content=b"405 Method Not Allowed - Piracy Shield Active.", status_code=405)
-
-    session = qlynktify_stream_tokens.get(token)
-    if not session or time.time() > session["expires"]:
-        return Response(content=b"TOKEN_EXPIRED_OR_INVALID", status_code=403)
-        
-    db = get_db()
-    file_record = next((f for f in db.get("files", []) if f["slug"] == session["slug"]), None)
-    if not file_record:
-        raise HTTPException(status_code=404, detail="Track not found.")
-
-    try:
-        file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
-    except Exception as e:
-        return Response(content=b"INTERNAL_VAULT_ERROR", status_code=500)
-    
-    range_header = request.headers.get("Range", 0)
-    file_size = os.path.getsize(file_path)
-    
-    # 🛡️ RAM OPTIMIZATION: Max chunk size 512KB (approx 30 secs)
-    MAX_CHUNK = 1024 * 512 
-    
-    start = 0
-    end = file_size - 1
-    status_code = 200
-    
-    if range_header:
-        byte_range = range_header.replace("bytes=", "").split("-")
-        start = int(byte_range[0])
-        if len(byte_range) > 1 and byte_range[1]:
-            end = int(byte_range[1])
-        status_code = 206
-        
-    # Cap the requested range to our max 30-second chunk
-    if (end - start + 1) > MAX_CHUNK:
-        end = start + MAX_CHUNK - 1
-        
-    chunk_size = (end - start) + 1
-    
-    def file_chunk_generator():
-        try:
-            with open(file_path, "rb") as f:
-                f.seek(start)
-                bytes_read = 0
-                while bytes_read < chunk_size:
-                    read_size = min(1024 * 128, chunk_size - bytes_read)
-                    chunk = f.read(read_size)
-                    if not chunk: break
-                    bytes_read += len(chunk)
-                    yield chunk
-        except Exception as e:
-            pass
-
-    headers = {
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(chunk_size),
-        "Content-Type": file_record.get("mime_type", "audio/mpeg"),
-        "Cache-Control": "no-store", 
-        "Access-Control-Allow-Origin": "*"
-    }
-    
-    return StreamingResponse(file_chunk_generator(), status_code=status_code, headers=headers)
-
-# ==========================================
-# 5. RAW HTML FRONTEND PAYLOAD
-# ==========================================
-QLYNKTIFY_HTML = r"""
-<!DOCTYPE html>
-<html lang="en">
+def _qlynktify_disabled_page() -> str:
+    return """
+<!doctype html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlynk-tify | App Engine V6</title>
-    <link rel="icon" type="image/png" href="https://qlynk.vercel.app/quicklink-logo.png">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
-
-<style>
-        /* === CORE VARIABLES === */
-        @import url('https://fonts.googleapis.com/css2?family=Circular+Std:wght@400;700;900&display=swap');
-        :root {
-            --bg-base: #000000; --bg-highlight: #121212; --bg-elevated: #1a1a1a; --bg-hover: #2a2a2a;
-            --accent: #1ed760; --accent-hover: #1fdf64; --qlynk-accent: #bc8cff;
-            --text-base: #b3b3b3; --text-bright: #ffffff; --text-dim: #6a6a6a;
-            --font-family: 'Circular Std', -apple-system, sans-serif;
-            --dom-color: #121212; --dom-color-dim: rgba(18,18,18,0.1);
-            --trans: all 0.2s ease;
-        }
-        
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-family); outline: none; }
-        body { background: var(--bg-base); color: var(--text-bright); display: flex; flex-direction: column; height: 100vh; overflow: hidden; user-select: none; -webkit-user-select: none;}
-        
-        /* === UTILS & FORMS === */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,0.2); border-radius: 4px;}
-        ::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.4); }
-        
-        .btn-icon { background: transparent; border: none; color: var(--text-base); cursor: pointer; border-radius: 50%; padding: 6px; display: flex; align-items: center; justify-content: center; transition: var(--trans); }
-        .btn-icon:hover { color: var(--text-bright); background: rgba(255,255,255,0.1); }
-        
-        .input-base { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; font-size: 14px; margin-bottom: 15px;}
-        .input-base:focus { border-color: var(--qlynk-accent); }
-        .btn-solid { background: var(--text-bright); color: #000; font-weight: 700; padding: 12px 24px; border-radius: 24px; border: none; cursor: pointer; transition: var(--trans); width: 100%; display:flex; justify-content:center; align-items:center; text-decoration:none;}
-        .btn-solid:hover { transform: scale(1.02); }
-
-        /* === MODALS & TOASTS === */
-        .overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 99999; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px);}
-        .modal { background: var(--bg-elevated); padding: 30px; border-radius: 12px; width: 350px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
-        .modal-title { font-size: 20px; font-weight: 900; margin-bottom: 20px; }
-        
-        .toast { position: fixed; bottom: -50px; left: 50%; transform: translateX(-50%); background: var(--qlynk-accent); color: #000; padding: 12px 24px; border-radius: 30px; font-weight: 900; font-size: 14px; z-index: 100000; transition: bottom 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(188, 140, 255, 0.3);}
-        .toast.show { bottom: 120px; }
-
-        /* === APP CONTEXT MENU === */
-        .context-menu { position: fixed; background: #282828; border-radius: 6px; box-shadow: 0 16px 24px rgba(0,0,0,0.8); padding: 4px; z-index: 99999; display: none; min-width: 220px; border: 1px solid rgba(255,255,255,0.1);}
-        .context-menu.active { display: block; animation: popIn 0.1s; transform-origin: top left;}
-        .cm-item { padding: 10px 14px; color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 12px; transition: var(--trans);}
-        .cm-item:hover { background: rgba(255,255,255,0.1); color: var(--qlynk-accent);}
-        @keyframes popIn { from {opacity:0; transform:scale(0.95);} to {opacity:1; transform:scale(1);} }
-
-        /* === LAYOUT === */
-        .app-wrapper { display: flex; flex: 1; overflow: hidden; padding: 8px; gap: 8px; }
-        
-        /* === SIDEBAR === */
-        .sidebar { width: 280px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; height: calc(100vh - 100px); /* Leave room for player */ }
-        .sidebar-box { background: var(--bg-highlight); border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
-        .nav-link { color: var(--text-base); text-decoration: none; font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: var(--trans); }
-        .nav-link:hover, .nav-link.active { color: var(--text-bright); }
-        .nav-link svg { width: 24px; height: 24px; fill: currentColor; }
-        
-        .lib-header { display: flex; justify-content: space-between; align-items: center; color: var(--text-base); font-weight: 700; margin-bottom: 5px; font-size: 14px;}
-        .lib-list { display: flex; flex-direction: column; gap: 4px; }
-        .lib-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--text-base); transition: var(--trans); display: flex; align-items: center; gap: 12px; justify-content: space-between;}
-        .lib-item:hover { background: rgba(255,255,255,0.05); color: #fff;}
-        .lib-item.active { background: rgba(255,255,255,0.1); color: var(--accent);}
-        
-        .item-icon-box { display:flex; align-items:center; gap:12px; overflow:hidden;}
-        .item-icon-wrap { width: 32px; height: 32px; border-radius: 4px; overflow: hidden; display:flex; justify-content:center; align-items:center; background:#282828; flex-shrink:0;}
-        .item-icon-wrap img { width:100%; height:100%; object-fit:cover;}
-        .item-icon-wrap svg { width: 16px; fill: #fff;}
-        /* 🛡️ FIX: Added specific display and color to ensure sidebar text is visible */
-        .item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1; display: inline-block; color: #ffffff !important; font-weight: 600;}
-        
-        /* === MAIN VIEW === */
-        .main-view { flex: 1; background: linear-gradient(180deg, var(--dom-color) 0%, var(--bg-highlight) 40%, var(--bg-base) 100%); border-radius: 8px; overflow-y: auto; position: relative; transition: background 1s ease; display: flex; flex-direction: column;}
-        .main-header { position: sticky; top: 0; padding: 12px 24px; background: rgba(0,0,0,0.5); backdrop-filter: blur(20px); z-index: 10; display: flex; justify-content: space-between; align-items: center;}
-        .content-padding { padding: 24px; padding-bottom: 120px; flex: 1;}
-        
-        .hero-banner { display:flex; align-items:flex-end; gap:24px; margin-bottom:30px; padding-top:20px;}
-        .hero-img { width: 180px; height: 180px; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); object-fit: cover;}
-        .hero-info { display:flex; flex-direction:column; gap:8px;}
-        .hero-type { font-size:12px; font-weight:700; text-transform:uppercase;}
-        .hero-title { font-size:64px; font-weight:900; letter-spacing:-2px; line-height:1;}
-        .hero-stats { font-size:14px; color:var(--text-base); font-weight:500;}
-
-        /* === CARDS === */
-        .section-title { font-size: 22px; font-weight: 900; margin: 30px 0 15px 0;}
-        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 20px;}
-        .music-card { background: var(--bg-elevated); padding: 16px; border-radius: 8px; cursor: pointer; transition: var(--trans); position: relative;}
-        .music-card:hover { background: var(--bg-hover); }
-        .mc-img-wrap { width: 100%; aspect-ratio: 1; border-radius: 6px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); position: relative; background:#282828; display:flex; justify-content:center; align-items:center;}
-        .mc-img { width: 100%; height: 100%; object-fit: cover; }
-        .mc-play-btn { position: absolute; bottom: 8px; right: 8px; width: 44px; height: 44px; background: var(--accent); border-radius: 50%; display: flex; justify-content: center; align-items: center; color: #000; opacity: 0; transform: translateY(10px); transition: all 0.3s; box-shadow: 0 8px 15px rgba(0,0,0,0.3);}
-        .music-card:hover .mc-play-btn { opacity: 1; transform: translateY(0); }
-        .mc-play-btn:hover { transform: scale(1.05) !important; background: var(--accent-hover); }
-        .mc-title { font-weight: 700; font-size: 15px; color: #fff; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .mc-desc { font-size: 13px; color: var(--text-base); display:-webkit-box; -webkit-line-clamp:2; overflow:hidden;}
-
-        /* === TRACK LIST TABLE === */
-        .track-list { width: 100%; border-collapse: collapse; text-align: left; }
-        .track-list th { color: var(--text-base); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); font-weight: 400;}
-        .track-row { cursor: pointer; border-radius: 4px; transition: var(--trans); }
-        .track-row:hover { background: rgba(255,255,255,0.1); }
-        .track-row td { padding: 8px 16px; vertical-align: middle; border-bottom: 1px solid transparent;}
-        .track-row.playing { background: rgba(188, 140, 255, 0.15); }
-        .track-row.playing .t-title { color: var(--qlynk-accent); }
-        .t-img { width: 40px; height: 40px; border-radius: 4px; object-fit: cover;}
-        .t-title { font-weight: 700; color: var(--text-bright); font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .t-artist { color: var(--text-base); font-size: 13px;}
-        
-        .badge { font-size: 9px; padding: 2px 6px; border-radius: 12px; font-weight: 900; margin-left: 8px; text-transform: uppercase; vertical-align: middle;}
-        .bg-local { background: var(--qlynk-accent); color: #000; }
-        .bg-offline { background: var(--accent); color: #000; }
-
-        /* === RIGHT PANEL (DUAL ENGINE) === */
-        .right-panel { width: 320px; background: var(--bg-highlight); border-radius: 8px; padding: 20px; display: none; flex-direction: column; flex-shrink: 0; position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); }
-        .right-panel.active { display: flex; animation: slideIn 0.3s ease; }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
-        
-        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; font-weight: 700; font-size: 14px;}
-        .panel-toggle { display: flex; background: rgba(255,255,255,0.1); border-radius: 20px; padding: 2px;}
-        .pt-btn { padding: 6px 14px; font-size: 12px; font-weight: bold; border: none; background: transparent; color: var(--text-base); cursor: pointer; border-radius: 18px; transition: var(--trans);}
-        .pt-btn.active { background: var(--text-bright); color: #000; }
-        
-        .rp-img-wrap { width: 100%; aspect-ratio: 1; border-radius: 8px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 15px 30px rgba(0,0,0,0.5);}
-        .rp-img-wrap img { width: 100%; height: 100%; object-fit: cover;}
-        
-        /* Lyrics & Visualizer */
-        .lyrics-container { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; font-size: 22px; font-weight: 900; line-height: 1.3; scroll-behavior: smooth; padding-right: 10px; padding-bottom: 30px;}
-        .lyric-line { color: rgba(255,255,255,0.3); transition: var(--trans); cursor: pointer; transform-origin: left center;}
-        .lyric-line:hover { color: rgba(255,255,255,0.8); }
-        .lyric-line.active { color: var(--text-bright); transform: scale(1.05); text-shadow: 0 0 15px rgba(255,255,255,0.2); }
-        
-        /* 🔥 Visualizer Glow Update */
-        .visualizer-container { 
-            flex: 1; 
-            display: none; 
-            justify-content: center; 
-            align-items: center; 
-            background: radial-gradient(circle, var(--dom-color-dim) 0%, transparent 80%); 
-            border-radius: 8px;
-            box-shadow: inset 0 0 50px var(--dom-color-dim);
-            border: 1px solid rgba(255,255,255,0.05);
-            transition: all 1s ease;
-        }
-        #canvasVisualizer { width: 100%; height: 100%; filter: drop-shadow(0 0 15px var(--dom-color)); }
-
-        /* === BOTTOM PLAYER BAR === */
-        .player-bar { 
-            height: 95px; 
-            background: #000000; 
-            border-top: 1px solid #282828; 
-            display: flex; 
-            align-items: center; 
-            justify-content: space-between; 
-            padding: 0 20px; 
-            z-index: 9999 !important; /* Force to top */
-            position: fixed;
-            bottom: 0;
-            width: 100%;
-        }
-        .p-left, .p-right { width: 30%; min-width: 200px; display: flex; align-items: center; }
-        .p-center { width: 40%; max-width: 722px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-        
-        .np-img { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.5);}
-        .np-info { margin-left: 14px; display: flex; flex-direction: column; justify-content: center; overflow:hidden;}
-        .np-title { font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; text-overflow: ellipsis; overflow:hidden; display:flex; align-items:center; gap:8px;}
-        .np-artist { font-size: 12px; color: var(--text-base); margin-top: 4px; white-space: nowrap;}
-        
-        /* 🛡️ FIX: Enforced flex display and size for player buttons */
-        .p-controls { display: flex !important; align-items: center; gap: 20px; z-index: 10000; }
-        .c-btn { background: transparent; border: none; color: var(--text-base); cursor: pointer; transition: 0.2s; position: relative; display:flex !important; align-items:center; justify-content:center; padding: 5px; min-width: 24px; min-height: 24px;}
-        .c-btn svg { width: 16px; height: 16px; fill: currentColor; display: block; }
-        .c-btn:hover { color: var(--text-bright); transform: scale(1.1);}
-        .c-btn.active { color: var(--accent); }
-        .c-btn.active::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; background: var(--accent); border-radius: 50%;}
-        
-        .c-btn-play { background: var(--text-bright); color: #000; border-radius: 50%; width: 34px; height: 34px;}
-        .c-btn-play svg { fill: #000; }
-        .c-btn-play:hover { transform: scale(1.05); background: #fff; }
-        
-        .indicator-badge { position: absolute; top: -5px; right: -5px; background: var(--accent); color: #000; font-size: 8px; font-weight: 900; padding: 2px 4px; border-radius: 10px; display: none;}
-        
-        .progress-wrap { width: 100%; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-base); font-weight: 700; font-variant-numeric: tabular-nums;}
-        .prog-bg { flex: 1; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; cursor: pointer; position: relative; display: flex; align-items: center;}
-        .prog-bg:hover .prog-thumb { opacity: 1; transform: scale(1); }
-        .prog-bg:hover .prog-fill { background: var(--accent); }
-        .prog-fill { height: 100%; background: #fff; border-radius: 2px; width: 0%; pointer-events: none;}
-        .prog-thumb { width: 12px; height: 12px; background: #fff; border-radius: 50%; position: absolute; margin-left: -6px; opacity: 0; transform: scale(0); box-shadow: 0 2px 5px rgba(0,0,0,0.5); transition: var(--trans);}
-
-        .vol-bg { width: 90px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; cursor: pointer; position: relative; display: flex; align-items: center;}
-        .vol-bg:hover .prog-fill { background: var(--accent); }
-        .vol-bg:hover .prog-thumb { opacity: 1; transform: scale(1); }
-        
-        .loader-micro { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.2); border-top: 2px solid var(--accent); border-radius: 50%; animation: spin 1s linear infinite; display: inline-block; margin-left:8px; vertical-align:middle;}
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-    </style>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Module Disabled</title>
+  <style>
+    body { margin:0; font-family:system-ui,Segoe UI,Arial,sans-serif; background:#0b0d10; color:#e8e8e8; display:grid; place-items:center; min-height:100vh; }
+    .card { max-width:680px; margin:20px; background:#12161b; border:1px solid #2a3340; border-radius:16px; padding:28px; }
+    h1 { margin:0 0 8px; font-size:30px; }
+    p { margin:0; color:#b9c1cb; }
+  </style>
 </head>
 <body>
-
-    <div id="toast" class="toast">Action Successful</div>
-
-    
-    <div class="overlay" id="plModal">
-        <div class="modal">
-            <div class="modal-title">Create Playlist</div>
-            <input type="text" id="plNameInput" class="input-base" placeholder="My Awesome Playlist">
-            
-            <div style="display:flex; gap:10px;">
-                <button class="btn-solid" style="background:transparent; color:#fff; border:1px solid #333;" onclick="document.getElementById('plModal').style.display='none'">Cancel</button>
-                <button class="btn-solid" onclick="createPlaylistAction()">Create</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="context-menu" id="contextMenu">
-        <div class="cm-item" onclick="queueNext()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M12.7 1a.7.7 0 0 0-.7.7v5.15L2.05 1.107A.7.7 0 0 0 1 1.712v12.575a.7.7 0 0 0 1.05.607L12 9.149V14.3a.7.7 0 0 0 1.4 0V1.7a.7.7 0 0 0-.7-.7z"/></svg> Play Next</div>
-        <div class="cm-item" onclick="addToQueue()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M14 11H2v-2h12v2zm0-4H2V5h12v2zM2 15h8v-2H2v2z"/></svg> Add to Queue</div>
-        <hr style="border:none; border-top:1px solid rgba(255,255,255,0.1); margin:4px 0;">
-        <div class="cm-item" onclick="showAddToPlaylistMenu()"><svg style="width:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z"/></svg> Add to Playlist</div>
-        <div class="cm-item" onclick="saveToOfflineContext()"><svg style="width:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15l-4-4 1.41-1.41L11 14.17V7h2v7.17l2.59-2.59L17 13l-5 5z"/></svg> Save for Offline</div>
-    </div>
-    
-    <div class="context-menu" id="plSubMenu">
-        </div>
-
-    <div class="context-menu" id="genericMenu">
-        <div class="cm-item" onclick="location.reload()"><svg style="width:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Reload Engine</div>
-    </div>
-
-    <div class="app-wrapper">
-        <div class="sidebar">
-            <div class="sidebar-box" style="padding-bottom:10px;">
-                <a class="nav-link active" onclick="renderHomeView()"><svg viewBox="0 0 24 24"><path d="M12 3l10 9h-3v8H5v-8H2l10-9zm-1 12h2v-4h-2v4z"/></svg> Home</a>
-                <a class="nav-link" onclick="renderQueueView()"><svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg> Queue</a>
-            </div>
-            
-            <div class="sidebar-box" style="flex: 1; overflow-y: auto; padding-top:10px;">
-                <div class="lib-header">
-                    <span style="display:flex; align-items:center; gap:8px;"><svg style="width:20px; fill:currentColor;" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm16 16V5H5v14h14zM7 7h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/></svg> Playlists</span>
-                    <button class="btn-icon" title="Create Playlist" onclick="document.getElementById('plModal').style.display='flex'"><svg style="width:18px;" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></button>
-                </div>
-                <div class="lib-list" id="sidebarPlaylists">
-                    </div>
-                
-                <hr style="border:none; border-top:1px solid rgba(255,255,255,0.1); margin:15px 0;">
-                
-                <div class="lib-header">
-                    <span style="display:flex; align-items:center; gap:8px;"><svg style="width:20px; fill:currentColor;" viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> Local Edge</span>
-                    <button class="btn-icon" title="Add Folder" onclick="linkLocalFolder()"><svg style="width:18px;" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></button>
-                </div>
-                <div class="lib-list" id="sidebarLocalFolders">
-                    <div style="font-size:12px; color:var(--text-dim); padding:0 10px;">No folders added.</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="main-view" id="mainView">
-            <div class="main-header">
-                <div style="display:flex; gap:10px;">
-                    <button class="btn-icon" style="background:rgba(0,0,0,0.7); width:32px; height:32px;" onclick="renderHomeView()">❮</button>
-                    <button class="btn-icon" style="background:rgba(0,0,0,0.7); width:32px; height:32px;" onclick="renderQueueView()">❯</button>
-                </div>
-                <div style="width:36px; height:36px; border-radius:50%; background:var(--qlynk-accent); color:#000; display:flex; justify-content:center; align-items:center; font-weight:900;">Q</div>
-            </div>
-
-            <div class="content-padding" id="dynamicContent">
-                <h1 style="font-size:40px; font-weight:900; margin-top:50px;">Initializing Qlynktify V6...</h1>
-            </div>
-        </div>
-
-        <div class="right-panel" id="rightPanel">
-            <div class="panel-header">
-                <span>Now Playing</span>
-                <div class="panel-toggle">
-                    <button class="pt-btn active" onclick="switchRightPanel('lyrics')">Lyrics</button>
-                    <button class="pt-btn" onclick="switchRightPanel('visuals')">Visuals</button>
-                </div>
-                <button class="btn-icon" onclick="toggleRightPanel()">✖</button>
-            </div>
-            
-            <div class="rp-img-wrap"><img id="rp-cover" src="https://qlynk.vercel.app/quicklink-logo.png"></div>
-            <div style="font-size:22px; font-weight:900; margin-bottom:4px;" id="rp-title">Not Playing</div>
-            <div style="font-size:14px; color:var(--text-base); font-weight:700; margin-bottom:20px;" id="rp-artist">Qlynk Architecture</div>
-
-            <div class="lyrics-container" id="lyricsContainer">
-                <div style="text-align:center; color:var(--text-dim); font-size:14px; margin-top:50px;">Lyrics will appear here.</div>
-            </div>
-            
-            <div class="visualizer-container" id="visualsContainer">
-                <canvas id="canvasVisualizer"></canvas>
-            </div>
-        </div>
-    </div>
-
-    <div class="player-bar">
-        <div class="p-left">
-            <img src="https://qlynk.vercel.app/quicklink-logo.png" class="np-img" id="bp-cover" onclick="toggleRightPanel()">
-            <div class="np-info">
-                <div class="np-title">
-                    <span id="bp-title" title="No Track Selected">No Track Selected</span>
-                    <div class="loader-micro" id="blob-loader" style="display:none;"></div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px; margin-top: 4px;">
-                    <div class="np-artist" id="bp-artist" style="margin-top:0;">Qlynk Node</div>
-                    <button class="btn-icon" style="padding:0; width:16px; height:16px;" onclick="addTrackToPl('Liked Songs')" title="Add to Liked Songs">
-                        <svg viewBox="0 0 24 24" style="width:14px; fill:var(--text-base);"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-        
-        <div class="p-center">
-            <div class="p-controls">
-                <button class="c-btn" id="btn-shuffle" onclick="toggleShuffle()">
-                    <svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M13.151.922a.75.75 0 1 0-1.06 1.06L13.109 3H11.16a3.75 3.75 0 0 0-2.873 1.34l-6.173 7.356A2.25 2.25 0 0 1 .39 12.5H0v1.5h.39a3.75 3.75 0 0 0 2.873-1.34l6.173-7.356a2.25 2.25 0 0 1 1.724-.804h1.947l-1.017 1.018a.75.75 0 0 0 1.06 1.06L15.98 4.5l-2.83-3.578zM.39 3.5H0V2h.39a3.75 3.75 0 0 1 2.873 1.34l1.502 1.791-1.146 1.365L2.115 3.34A2.25 2.25 0 0 0 .39 3.5zM11.16 11.5h1.947l-1.017-1.018a.75.75 0 0 1 1.06-1.06L15.98 13l-2.83 3.578a.75.75 0 1 1-1.06-1.06l1.018-1.018H11.16a3.75 3.75 0 0 1-2.873-1.34l-1.502-1.791 1.146-1.365 1.504 1.791a2.25 2.25 0 0 0 1.725.804z"/></svg>
-                    <span class="indicator-badge" id="shuf-badge">S</span>
-                </button>
-                <button class="c-btn" onclick="playPrev()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M3.3 1a.7.7 0 0 1 .7.7v5.15l9.95-5.744a.7.7 0 0 1 1.05.606v12.575a.7.7 0 0 1-1.05.607L4 9.149V14.3a.7.7 0 0 1-1.4 0V1.7a.7.7 0 0 1 .7-.7z"/></svg></button>
-                <button class="c-btn c-btn-play" id="btn-play" onclick="togglePlay()"><svg id="icon-play" style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/></svg></button>
-                <button class="c-btn" onclick="playNext()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M12.7 1a.7.7 0 0 0-.7.7v5.15L2.05 1.107A.7.7 0 0 0 1 1.712v12.575a.7.7 0 0 0 1.05.607L12 9.149V14.3a.7.7 0 0 0 1.4 0V1.7a.7.7 0 0 0-.7-.7z"/></svg></button>
-                <button class="c-btn" id="btn-repeat" onclick="toggleRepeat()">
-                    <svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M0 4.75A3.75 3.75 0 0 1 3.75 1h8.5A3.75 3.75 0 0 1 16 4.75v5a3.75 3.75 0 0 1-3.75 3.75H9.81l1.018 1.018a.75.75 0 1 1-1.06 1.06L6.939 12.75l2.829-2.828a.75.75 0 1 1 1.06 1.06L9.811 12h2.439a2.25 2.25 0 0 0 2.25-2.25v-5a2.25 2.25 0 0 0-2.25-2.25h-8.5A2.25 2.25 0 0 0 1.5 4.75v5A2.25 2.25 0 0 0 3.75 12H5v1.5H3.75A3.75 3.75 0 0 1 0 9.75v-5z"/></svg>
-                    <span class="indicator-badge" id="rep-badge">1</span>
-                </button>
-            </div>
-            
-            <div class="progress-wrap">
-                <span id="time-current">0:00</span>
-                <div class="prog-bg" id="seek-bg" onclick="seekAudio(event)">
-                    <div class="prog-fill" id="seek-fill"></div>
-                    <div class="prog-thumb" id="seek-thumb"></div>
-                </div>
-                <span id="time-total">0:00</span>
-            </div>
-        </div>
-        
-        <div class="p-right" style="justify-content:flex-end; gap:20px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <svg style="width:16px; color:var(--text-base);" viewBox="0 0 16 16"><path fill="currentColor" d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.139 2.139 0 0 0-1.049 1.85 2.14 2.14 0 0 0 1.049 1.85l5.958 3.44V2.71L2.817 6.15z"/></svg>
-                <div class="vol-bg" id="vol-bg" onclick="setVolumeClick(event)">
-                    <div class="prog-fill" id="vol-fill" style="width:100%;"></div>
-                    <div class="prog-thumb" id="vol-thumb" style="left:100%;"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <audio id="mainAudio" crossorigin="anonymous"></audio>
-
-    <script>
-        // ==========================================
-        // JS ENGINE V6: TEMPLATE LITERALS ONLY (NO SYNTAX ERRORS)
-        // ==========================================
-        
-        let globalDatabase = []; 
-        let playbackQueue = [];  
-        let currentTrackIndex = -1;
-        let isPlaying = false;
-        
-        let playlists = JSON.parse(localStorage.getItem('qlynktify_pl') || '{"Top Hits": [], "Liked Songs": []}');
-        let localFolders = []; // Holds directory handles
-        
-        let shuffleMode = 0; 
-        let repeatMode = 0;  
-        let contextTrackObj = null; 
-        let currentBlobUrl = null;  
-        
-        const audioEl = document.getElementById('mainAudio');
-        const defaultCover = "https://qlynk.vercel.app/quicklink-logo.png";
-        
-        let audioCtx, analyser, dataArray, visualizerAnimId, parsedLyrics = [];
-
-        // Restore Volume
-        const savedVol = localStorage.getItem('qlynkVol');
-        if(savedVol !== null) {
-            audioEl.volume = parseFloat(savedVol);
-            document.getElementById('vol-fill').style.width = `${audioEl.volume * 100}%`;
-            document.getElementById('vol-thumb').style.left = `${audioEl.volume * 100}%`;
-        }
-
-        function showToast(msg) {
-            const t = document.getElementById('toast');
-            t.innerText = msg; t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 2500);
-        }
-
-        // === CONTEXT MENU LOGIC ===
-        document.addEventListener('contextmenu', e => {
-            e.preventDefault(); closeAllMenus();
-            const trackEl = e.target.closest('.track-row, .music-card');
-            if(trackEl) openContextMenu(e, trackEl.getAttribute('data-id'), 'contextMenu');
-            else openContextMenu(e, null, 'genericMenu');
-        });
-        document.addEventListener('click', e => { if(!e.target.closest('.context-menu')) closeAllMenus(); });
-
-        function openContextMenu(e, trackId, menuId) {
-            if(trackId) contextTrackObj = globalDatabase.find(t => t.track_id === trackId) || playbackQueue.find(t => t.track_id === trackId);
-            const menu = document.getElementById(menuId);
-            menu.style.display = 'block';
-            let x = e.pageX, y = e.pageY;
-            if(x + 220 > window.innerWidth) x = window.innerWidth - 230;
-            if(y + 150 > window.innerHeight) y = window.innerHeight - 160;
-            menu.style.left = `${x}px`; menu.style.top = `${y}px`;
-            menu.classList.add('active');
-        }
-        function closeAllMenus() { document.querySelectorAll('.context-menu').forEach(m => { m.style.display='none'; m.classList.remove('active'); }); }
-
-        function queueNext() {
-            if(!contextTrackObj) return;
-            if(currentTrackIndex === -1) { playSpecificTrack(contextTrackObj.track_id); return; }
-            playbackQueue.splice(currentTrackIndex + 1, 0, contextTrackObj);
-            showToast("Added to Play Next"); closeAllMenus();
-        }
-        function addToQueue() {
-            if(!contextTrackObj) return;
-            playbackQueue.push(contextTrackObj);
-            showToast("Added to Queue"); closeAllMenus();
-        }
-        function saveToOfflineContext() { if(contextTrackObj) saveToOffline(contextTrackObj); closeAllMenus(); }
-        
-        function showAddToPlaylistMenu() {
-            closeAllMenus();
-            const m = document.getElementById('plSubMenu');
-            m.innerHTML = Object.keys(playlists).map(k => `<div class="cm-item" onclick="addTrackToPl('${k}')">📋 ${k}</div>`).join('');
-            m.style.display = 'block';
-            m.classList.add('active');
-            m.style.left = `${window.innerWidth/2}px`; m.style.top = `${window.innerHeight/2}px`;
-        }
-        function addTrackToPl(plName) {
-            if(!contextTrackObj) return;
-            if(!playlists[plName].find(t => t.track_id === contextTrackObj.track_id)) {
-                playlists[plName].push(contextTrackObj);
-                localStorage.setItem('qlynktify_pl', JSON.stringify(playlists));
-                showToast(`Added to ${plName}`);
-            } else { showToast("Already in playlist"); }
-            closeAllMenus();
-        }
-
-        function createPlaylistAction() {
-            const n = document.getElementById('plNameInput').value.trim();
-            if(n && !playlists[n]) {
-                playlists[n] = [];
-                localStorage.setItem('qlynktify_pl', JSON.stringify(playlists));
-                renderSidebarPlaylists();
-                document.getElementById('plModal').style.display = 'none';
-                document.getElementById('plNameInput').value = '';
-                showToast("Playlist Created");
-            }
-        }
-
-        // === INITIALIZATION ===
-        async function initEngine() {
-            try {
-                const res = await fetch('/api/qlynktify/library');
-                if (!res.ok) throw new Error("Auth Failed");
-                const data = await res.json();
-                globalDatabase = data.tracks.map(t => ({...t, source: 'cloud'}));
-                
-                // Sort Top Hits based on play_count (auto playlist)
-                playlists["Top Hits"] = [...globalDatabase].sort((a,b) => (b.play_count || 0) - (a.play_count || 0)).slice(0, 50);
-                
-                playbackQueue = [...globalDatabase];
-                
-                renderSidebarPlaylists();
-                renderHomeView();
-                setupAudioEvents();
-                setupKeyboardShortcuts();
-                
-                // IndexedDB offline track hydration
-                const offline = await getOfflineTracks();
-                offline.forEach(o => {
-                    const m = globalDatabase.find(t => t.slug === o.slug);
-                    if(m) m.offline = true;
-                });
-                
-            } catch(e) { document.getElementById('auth-shield').style.display = 'flex'; }
-        }
-
-        // === VIEWS RENDERING (TEMPLATE LITERALS) ===
-        function renderSidebarPlaylists() {
-            const list = document.getElementById('sidebarPlaylists');
-            list.innerHTML = Object.keys(playlists).map(k => `
-                <div class="lib-item" onclick="renderPlaylistView('${k}')">
-                    <div class="item-icon-box"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg> <span class="item-text">${k}</span></div>
-                </div>
-            `).join('');
-        }
-        
-        function renderSidebarFolders() {
-            const list = document.getElementById('sidebarLocalFolders');
-            if(localFolders.length === 0) { list.innerHTML = `<div style="font-size:12px; color:var(--text-dim); padding:0 10px;">No folders added.</div>`; return; }
-            list.innerHTML = localFolders.map((f, i) => `
-                <div class="lib-item">
-                    <div class="item-icon-box" onclick="renderFolderView(${i})"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> <span class="item-text">${f.name}</span></div>
-                    <button class="btn-icon" style="padding:2px; color:#ff5555;" onclick="removeFolder(${i})">✖</button>
-                </div>
-            `).join('');
-        }
-
-        function renderHomeView() {
-            const cont = document.getElementById('dynamicContent');
-            const h = new Date().getHours();
-            const gr = h < 12 ? 'Good morning' : (h < 18 ? 'Good afternoon' : 'Good evening');
-            
-            let html = `<h1 style="font-size:36px; font-weight:900; margin-bottom:30px; letter-spacing:-1px;">${gr}</h1>`;
-            
-            // Top Cards
-            html += `<div class="section-title">Your Heavy Rotation</div><div class="card-grid">`;
-            const mix = [...globalDatabase].sort(()=>0.5-Math.random()).slice(0, 6);
-            mix.forEach(t => {
-                const img = (t.meta && t.meta.artwork) ? t.meta.artwork : defaultCover;
-                html += `
-                    <div class="music-card" data-id="${t.track_id}" onclick="playSpecificTrack('${t.track_id}')">
-                        <div class="mc-img-wrap"><img src="${img}" class="mc-img" id="card-img-${t.track_id}">
-                        <div class="mc-play-btn"><svg style="width:24px;" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg></div></div>
-                        <div class="mc-title">${t.clean_title}</div><div class="mc-desc">${t.artist_guess || 'Vault'}</div>
-                    </div>`;
-            });
-            html += `</div>`;
-
-            html += `<div class="section-title">Vault Additions</div>`;
-            html += generateTrackTable(globalDatabase.slice(0, 50));
-            cont.innerHTML = html;
-        }
-
-        function renderQueueView() {
-            const cont = document.getElementById('dynamicContent');
-            let html = `<h1 style="font-size:36px; font-weight:900; margin-bottom:10px;">Play Queue</h1>`;
-            if(playbackQueue.length === 0) { cont.innerHTML = html + `<div style="color:var(--text-base); margin-top:20px;">Queue empty.</div>`; return; }
-            
-            if(currentTrackIndex !== -1) {
-                html += `<h3>Now Playing</h3>${generateTrackTable([playbackQueue[currentTrackIndex]], true)}`;
-                html += `<h3 style="margin-top:30px; margin-bottom:10px;">Next Up</h3>`;
-                const upNext = playbackQueue.slice(currentTrackIndex + 1);
-                if(upNext.length > 0) html += generateTrackTable(upNext);
-            } else { html += generateTrackTable(playbackQueue); }
-            cont.innerHTML = html;
-        }
-
-        function renderPlaylistView(name) {
-            const cont = document.getElementById('dynamicContent');
-            const arr = playlists[name] || [];
-            playbackQueue = [...arr]; // Set queue Context
-            let html = `
-                <div class="hero-banner">
-                    <img src="${arr.length > 0 && arr[0].meta ? arr[0].meta.artwork : defaultCover}" class="hero-img">
-                    <div class="hero-info">
-                        <span class="hero-type">PLAYLIST</span>
-                        <div class="hero-title">${name}</div>
-                        <span class="hero-stats">${arr.length} tracks in this collection.</span>
-                    </div>
-                </div>
-                <button class="btn-solid" style="width:auto; margin-bottom:30px;" onclick="if(playbackQueue.length>0) playSpecificTrack(playbackQueue[0].track_id)">PLAY ALL</button>
-            `;
-            html += generateTrackTable(arr);
-            cont.innerHTML = html;
-        }
-
-        function generateTrackTable(arr, isNowPlayingBlock = false) {
-            if(arr.length === 0) return `<div style="color:var(--text-dim);">No tracks found.</div>`;
-            let html = `<table class="track-list"><thead><tr><th style="width:50px; text-align:center;">#</th><th>Title</th><th>Album</th><th style="text-align:right;">Plays</th></tr></thead><tbody>`;
-            arr.forEach((t, i) => {
-                const img = (t.meta && t.meta.artwork) ? t.meta.artwork : (t.artwork ? t.artwork : defaultCover);
-                const active = (isNowPlayingBlock || (t.track_id === (playbackQueue[currentTrackIndex] || {}).track_id)) ? 'playing' : '';
-                const bdg = t.source === 'local' ? `<span class="badge bg-local">Local</span>` : (t.offline ? `<span class="badge bg-offline">Offline</span>` : '');
-                
-                html += `
-                    <tr class="track-row ${active}" data-id="${t.track_id}" onclick="playSpecificTrack('${t.track_id}')">
-                        <td style="text-align:center; color:var(--text-dim);">${i+1}</td>
-                        <td><div style="display:flex; align-items:center; gap:16px;">
-                        <img src="${img}" class="t-img" id="tbl-img-${t.track_id}">
-                        <div style="overflow:hidden;"><div class="t-title" title="${t.clean_title}">${t.clean_title} ${bdg}</div><div class="t-artist">${t.artist_guess || 'Vault'}</div></div></div></td>
-                        <td style="color:var(--text-base); font-size:13px;">${t.meta ? t.meta.album : 'Qlynk'}</td>
-                        <td style="text-align:right; color:var(--text-dim); font-size:13px;">${t.play_count || 0}</td>
-                    </tr>`;
-            });
-            return html + `</tbody></table>`;
-        }
-
-        // === THE ULTIMATE ANTI-PIRACY BLOB ENGINE ===
-        async function playSpecificTrack(trackId) {
-            let idx = playbackQueue.findIndex(t => t.track_id === trackId);
-            if(idx === -1) {
-                playbackQueue = [...globalDatabase];
-                if(shuffleMode > 0) applyShuffle();
-                idx = playbackQueue.findIndex(t => t.track_id === trackId);
-            }
-            
-            currentTrackIndex = idx;
-            const track = playbackQueue[currentTrackIndex];
-            
-            // Re-render UI
-            if(document.querySelector('.hero-title')) renderPlaylistView(document.querySelector('.hero-title').innerText);
-            else if(document.querySelector('.section-title')) renderHomeView(); 
-            else renderQueueView();
-
-            // 🛡️ FIX: Auto-open Right Panel (Lyrics/Visualizer) on first play
-            // Add this below the render Queue/Home view line
-            
-            // Auto-open Right Panel for Lyrics and Visualizer!
-            const rp = document.getElementById('rightPanel');
-            if(!rp.classList.contains('active') && window.innerWidth > 900) { toggleRightPanel(); }
-
-            // Use the real title from iTunes if available, else fallback to clean title
-            const displayTitle = track.meta && track.meta.real_title ? track.meta.real_title : track.clean_title;
-            
-            document.getElementById('bp-title').innerText = "Buffering Chunk...";
-            document.getElementById('rp-title').innerText = displayTitle;
-            document.getElementById('blob-loader').style.display = 'inline-block';
-            
-            if(track.meta) updatePlayerMeta(track.meta);
-            else if(track.artwork) updatePlayerMeta({artist: track.artist_guess, artwork: track.artwork});
-            else {
-                document.getElementById('bp-artist').innerText = track.artist_guess || "Unknown";
-                document.getElementById('bp-cover').src = defaultCover;
-                document.getElementById('rp-cover').src = defaultCover;
-                document.documentElement.style.setProperty('--dom-color', '#121212');
-                document.documentElement.style.setProperty('--dom-color-dim', 'rgba(18,18,18,0.1)');
-            }
-
-            audioEl.pause(); audioEl.currentTime = 0;
-            if(currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
-            
-            try {
-                if(track.source === 'local') {
-                    const file = await track.handle.getFile();
-                    currentBlobUrl = URL.createObjectURL(file);
-                    audioEl.src = currentBlobUrl;
-                } else if (track.offline) {
-                    const blob = await getOfflineBlob(track.slug);
-                    if(!blob) throw new Error("Offline Corrupt");
-                    currentBlobUrl = URL.createObjectURL(blob);
-                    audioEl.src = currentBlobUrl;
-                } else {
-                    // Fetch 5-Min Token
-                    const tokenRes = await fetch(`/api/qlynktify/generate_stream/${track.slug}`);
-                    if(!tokenRes.ok) throw new Error("Auth Denied");
-                    const tokenData = await tokenRes.json();
-                    
-                    // Assign endpoint to Audio tag. 
-                    // Browser automatically sends Range requests. Backend caps at 512KB (30s).
-                    // Browser fetches next chunk dynamically before ending! RAM saved.
-                    audioEl.src = `/stream/audio/qlynktify/${tokenData.stream_token}`;
-                }
-                
-                audioEl.play().then(() => {
-                    document.getElementById('blob-loader').style.display = 'none';
-                    document.getElementById('bp-title').innerText = track.clean_title;
-                    isPlaying = true; updatePlayIcon();
-                    
-                    // Play Count Increment (Hit API once)
-                    if(track.source === 'cloud') {
-                        setTimeout(() => { fetch(`/api/qlynktify/increment_play/${track.slug}`, {method: 'POST'}); }, 10000);
-                    }
-                }).catch(e => { throw e; });
-                
-                fetchLyrics(track.search_query || track.clean_title);
-                if(document.getElementById('rightPanel').classList.contains('active')) initVisualizer();
-            } catch(e) {
-                console.error("Playback Error:", e);
-                document.getElementById('blob-loader').style.display = 'none';
-                document.getElementById('bp-title').innerText = "Playback Failed";
-                isPlaying = false; updatePlayIcon();
-            }
-        }
-
-        function updatePlayerMeta(meta) {
-            document.getElementById('bp-artist').innerText = meta.artist;
-            document.getElementById('rp-artist').innerText = meta.artist;
-            if(meta.artwork) {
-                document.getElementById('bp-cover').src = meta.artwork;
-                document.getElementById('rp-cover').src = meta.artwork;
-                extractDominantColor(meta.artwork);
-            }
-        }
-
-        // === CONTROLS ===
-        function togglePlay() {
-            if(currentTrackIndex === -1 && playbackQueue.length > 0) { playSpecificTrack(playbackQueue[0].track_id); return; }
-            if(!audioEl.src) return;
-            if(isPlaying) { audioEl.pause(); isPlaying = false; }
-            else { audioEl.play(); isPlaying = true; }
-            updatePlayIcon();
-        }
-
-        function playNext() {
-            if(playbackQueue.length === 0) return;
-            let nextIdx = currentTrackIndex + 1;
-            if(nextIdx >= playbackQueue.length) {
-                if(repeatMode === 1) nextIdx = 0; else return;
-            }
-            playSpecificTrack(playbackQueue[nextIdx].track_id);
-        }
-
-        function playPrev() {
-            if(playbackQueue.length === 0) return;
-            if(audioEl.currentTime > 4) audioEl.currentTime = 0;
-            else {
-                let prevIdx = currentTrackIndex - 1;
-                if(prevIdx < 0) prevIdx = playbackQueue.length - 1;
-                playSpecificTrack(playbackQueue[prevIdx].track_id);
-            }
-        }
-
-        function updatePlayIcon() {
-            const icon = document.getElementById('icon-play');
-            if(isPlaying) icon.innerHTML = '<path fill="currentColor" d="M2.7 1a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7H2.7zm8 0a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7h-2.6z"/>';
-            else icon.innerHTML = '<path fill="currentColor" d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/>';
-        }
-
-        function toggleShuffle() {
-            shuffleMode = (shuffleMode + 1) % 3;
-            const btn = document.getElementById('btn-shuffle');
-            const badge = document.getElementById('shuf-badge');
-            if(shuffleMode === 0) { btn.classList.remove('active'); badge.style.display = 'none'; }
-            if(shuffleMode === 1) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = 'N'; }
-            if(shuffleMode === 2) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = 'S'; }
-            applyShuffle();
-        }
-
-        function applyShuffle() {
-            if(playbackQueue.length <= 1) return;
-            const currentTrack = currentTrackIndex > -1 ? playbackQueue[currentTrackIndex] : null;
-            let pool = playbackQueue.filter(t => t !== currentTrack);
-            if(shuffleMode === 0) playbackQueue = [...globalDatabase];
-            else if(shuffleMode === 1) {
-                for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-                playbackQueue = currentTrack ? [currentTrack, ...pool] : pool;
-            }
-            else if(shuffleMode === 2) {
-                if(currentTrack && currentTrack.artist_guess) {
-                    pool.sort((a,b) => (b.artist_guess === currentTrack.artist_guess ? 1 : 0) - (a.artist_guess === currentTrack.artist_guess ? 1 : 0));
-                }
-                playbackQueue = currentTrack ? [currentTrack, ...pool] : pool;
-            }
-            if(currentTrack) currentTrackIndex = 0; 
-            if(document.querySelector('h1').innerText === 'Play Queue') renderQueueView();
-        }
-
-        function toggleRepeat() {
-            repeatMode = (repeatMode + 1) % 3;
-            const btn = document.getElementById('btn-repeat');
-            const badge = document.getElementById('rep-badge');
-            if(repeatMode === 0) { btn.classList.remove('active'); badge.style.display = 'none'; }
-            if(repeatMode === 1) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = 'Q'; }
-            if(repeatMode === 2) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = '1'; }
-        }
-
-        function setupAudioEvents() {
-            audioEl.addEventListener('timeupdate', () => {
-                if(!audioEl.duration) return;
-                const p = (audioEl.currentTime / audioEl.duration) * 100;
-                document.getElementById('seek-fill').style.width = `${p}%`; document.getElementById('seek-thumb').style.left = `${p}%`;
-                document.getElementById('time-current').innerText = formatTime(audioEl.currentTime); document.getElementById('time-total').innerText = formatTime(audioEl.duration);
-                syncLyrics();
-            });
-            audioEl.addEventListener('ended', () => { if(repeatMode === 2) { audioEl.currentTime = 0; audioEl.play(); } else playNext(); });
-            
-            // Native Buffering Events
-            audioEl.addEventListener('waiting', () => document.getElementById('blob-loader').style.display = 'inline-block');
-            audioEl.addEventListener('playing', () => document.getElementById('blob-loader').style.display = 'none');
-        }
-        
-        function seekAudio(e) {
-            if(!audioEl.duration) return;
-            const bg = document.getElementById('seek-bg');
-            audioEl.currentTime = (e.offsetX / bg.offsetWidth) * audioEl.duration;
-        }
-
-        function setVolumeClick(e) {
-            const bg = document.getElementById('vol-bg');
-            let p = Math.max(0, Math.min(1, e.offsetX / bg.offsetWidth));
-            audioEl.volume = p; localStorage.setItem('qlynkVol', p);
-            document.getElementById('vol-fill').style.width = `${p * 100}%`; document.getElementById('vol-thumb').style.left = `${p * 100}%`;
-        }
-        function formatTime(s) { if(!s || isNaN(s)) return "0:00"; let m = Math.floor(s/60); let sec = Math.floor(s%60); return `${m}:${sec<10?"0":""}${sec}`; }
-
-        function setupKeyboardShortcuts() {
-            document.addEventListener('keydown', e => {
-                if(e.target.tagName === 'INPUT') return;
-                let prevent = false;
-                if(e.code === 'Space') { togglePlay(); prevent = true; showToast(isPlaying ? "Play" : "Pause"); }
-                if(e.code === 'ArrowRight') { if(audioEl.duration) audioEl.currentTime += 5; prevent = true; }
-                if(e.code === 'ArrowLeft') { if(audioEl.duration) audioEl.currentTime -= 5; prevent = true; }
-                if(prevent) e.preventDefault();
-            });
-        }
-
-       // === DUAL ENGINE: LYRICS ===
-        async function fetchLyrics(query) {
-            const container = document.getElementById('lyricsContainer');
-            container.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.3); margin-top:50px;">Scanning Datacenter...</div>';
-            parsedLyrics = [];
-            
-            try {
-                const res = await fetch(`/api/qlynktify/lyrics?q=${encodeURIComponent(query)}`);
-                if(!res.ok) throw new Error("Lyrics API Error");
-                const data = await res.json();
-                
-                if(data.synced) {
-                    const lines = data.synced.split('\n');
-                    lines.forEach(line => {
-                        const match = line.match(/\[(\d{2}):(\d{2}\.\d{2})\](.*)/);
-                        if(match) {
-                            const time = parseInt(match[1]) * 60 + parseFloat(match[2]);
-                            const text = match[3].trim();
-                            if(text) parsedLyrics.push({time: time, text: text});
-                        }
-                    });
-                    
-                    if(parsedLyrics.length > 0) {
-                        container.innerHTML = parsedLyrics.map((l, i) => `<div class="lyric-line" id="lyr-${i}" onclick="audioEl.currentTime=${l.time}">${l.text}</div>`).join('');
-                        return;
-                    }
-                }
-                
-                // Fallback UI with Custom Search
-                let fallbackHtml = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; text-align: center; margin-top: 20px;">
-                        <div style="font-size:14px; margin-bottom:15px; color:var(--text-base); font-weight:bold;">Synced lyrics not found. Refine your search query:</div>
-                        <input type="text" id="manualLyricQuery" style="width:100%; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; font-size:14px; margin-bottom:15px; outline:none;" value="${query}">
-                        <button style="background:var(--text-bright); color:#000; font-weight:bold; padding:10px 24px; border-radius:24px; border:none; cursor:pointer;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Search Datacenter</button>
-                    </div>
-                `;
-                
-                if(data.plain) {
-                    fallbackHtml += `<div style="font-size:18px; white-space:pre-wrap; color:var(--text-base); text-align:center; line-height:1.6; margin-top:30px;">${data.plain}</div>`;
-                }
-                container.innerHTML = fallbackHtml;
-                
-            } catch(e) {
-                container.innerHTML = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; text-align: center; margin-top: 20px;">
-                        <div style="font-size:14px; margin-bottom:15px; color:#ff5555; font-weight:bold;">Server error connecting to Lyrics Datacenter.</div>
-                        <input type="text" id="manualLyricQuery" style="width:100%; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; font-size:14px; margin-bottom:15px; outline:none;" value="${query}">
-                        <button style="background:var(--text-bright); color:#000; font-weight:bold; padding:10px 24px; border-radius:24px; border:none; cursor:pointer;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Retry Request</button>
-                    </div>`;
-            }
-        }
-
-        function syncLyrics() {
-            if(parsedLyrics.length === 0) return;
-            const curTime = audioEl.currentTime;
-            for(let i=0; i<parsedLyrics.length; i++) {
-                if(curTime >= parsedLyrics[i].time && (i === parsedLyrics.length - 1 || curTime < parsedLyrics[i+1].time)) {
-                    const activeEl = document.getElementById(`lyr-${i}`);
-                    if(activeEl && !activeEl.classList.contains('active')) {
-                        document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
-                        activeEl.classList.add('active');
-                        const c = document.getElementById('lyricsContainer');
-                        c.scrollTo({ top: activeEl.offsetTop - c.offsetTop - (c.clientHeight / 2) + 20, behavior: 'smooth' });
-                    }
-                    break;
-                }
-            }
-        }
-
-        // === VISUALIZER & COLOR ENGINE ===
-        function initVisualizer() {
-            if(visualizerAnimId) cancelAnimationFrame(visualizerAnimId);
-            try {
-                if(!audioCtx) {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    audioCtx = new AudioContext();
-                    analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 256; 
-                    const source = audioCtx.createMediaElementSource(audioEl);
-                    source.connect(analyser);
-                    analyser.connect(audioCtx.destination);
-                    dataArray = new Uint8Array(analyser.frequencyBinCount);
-                }
-                if(audioCtx.state === 'suspended') audioCtx.resume();
-            } catch(e) { console.log("Visualizer Error:", e); return; }
-            
-            const canvas = document.getElementById('canvasVisualizer');
-            const ctx = canvas.getContext('2d');
-            
-            function draw() {
-                visualizerAnimId = requestAnimationFrame(draw);
-                
-                // 🛡️ FIX: Force canvas dimensions dynamically to prevent rendering collapse
-                const container = canvas.parentElement;
-                if(canvas.width !== container.clientWidth) canvas.width = container.clientWidth;
-                if(canvas.height !== container.clientHeight) canvas.height = container.clientHeight;
-                
-                analyser.getByteFrequencyData(dataArray);
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                const barWidth = (canvas.width / dataArray.length) * 2.5; // Wider bars
-                const centerY = canvas.height / 2;
-                let x = 0;
-                
-                for(let i = 0; i < dataArray.length; i++) {
-                    const barHeight = (dataArray[i] / 255) * (canvas.height / 2) * 0.9;
-                    const domColor = getComputedStyle(document.documentElement).getPropertyValue('--dom-color').trim() || '#bc8cff';
-                    
-                    ctx.fillStyle = domColor;
-                    // Mirror draw
-                    ctx.fillRect(x, centerY - barHeight, barWidth - 1, barHeight); 
-                    ctx.fillRect(x, centerY, barWidth - 1, barHeight); 
-                    x += barWidth;
-                }
-            }
-            draw();
-        }
-
-        function extractDominantColor(imgSrc) {
-            const img = new Image(); img.crossOrigin = "Anonymous"; img.src = imgSrc;
-            img.onload = () => {
-                const c = document.createElement('canvas'); const ctx = c.getContext('2d');
-                c.width = img.width; c.height = img.height; ctx.drawImage(img, 0, 0);
-                try {
-                    const data = ctx.getImageData(0,0,c.width,c.height).data; let r=0,g=0,b=0, count=0;
-                    for(let i=0; i<data.length; i+=16) { r+=data[i]; g+=data[i+1]; b+=data[i+2]; count++; }
-                    const R = ~~(r/count), G = ~~(g/count), B = ~~(b/count);
-                    document.documentElement.style.setProperty('--dom-color', `rgb(${R},${G},${B})`);
-                    document.documentElement.style.setProperty('--dom-color-dim', `rgba(${R},${G},${B}, 0.25)`);
-                } catch(e) {}
-            };
-        }
-
-        function toggleRightPanel() {
-            const panel = document.getElementById('rightPanel'); panel.classList.toggle('active');
-            if(panel.classList.contains('active')) { if(document.querySelector('.pt-btn:nth-child(2)').classList.contains('active')) initVisualizer(); } 
-            else if(visualizerAnimId) cancelAnimationFrame(visualizerAnimId);
-        }
-
-        function switchRightPanel(mode) {
-            const btnLyr = document.querySelector('.pt-btn:nth-child(1)'); const btnVis = document.querySelector('.pt-btn:nth-child(2)');
-            const lyrC = document.getElementById('lyricsContainer'); const visC = document.getElementById('visualsContainer');
-            if(mode === 'lyrics') {
-                btnLyr.classList.add('active'); btnVis.classList.remove('active');
-                lyrC.style.display = 'flex'; visC.style.display = 'none';
-                if(visualizerAnimId) cancelAnimationFrame(visualizerAnimId);
-            } else {
-                btnVis.classList.add('active'); btnLyr.classList.remove('active');
-                visC.style.display = 'flex'; lyrC.style.display = 'none';
-                initVisualizer();
-            }
-        }
-
-        // === LOCAL EDGE ENGINE WITH ID3 ARTWORK (jsmediatags) ===
-        async function linkLocalFolder() {
-            try {
-                if(!('showDirectoryPicker' in window)) return alert("Use HTTPS.");
-                const dirHandle = await window.showDirectoryPicker();
-                localFolders.push(dirHandle); renderSidebarFolders();
-                showToast("Scanning folder...");
-                
-                let added = 0;
-                for await (const entry of dirHandle.values()) {
-                    if(entry.kind === 'file' && entry.name.match(/\.(mp3|wav|m4a|ogg|flac)$/i)) {
-                        const file = await entry.getFile();
-                        let trackObj = {
-                            track_id: `loc-${Math.random().toString(36).substr(2, 9)}`,
-                            clean_title: entry.name.replace(/\.[^/.]+$/, "").replace(/_/g, " "),
-                            artist_guess: "Local System",
-                            source: 'local', handle: entry, play_count: 0
-                        };
-
-                        if(window.jsmediatags) {
-                            jsmediatags.read(file, {
-                                onSuccess: function(tag) {
-                                    const tags = tag.tags;
-                                    if(tags.title) trackObj.clean_title = tags.title;
-                                    if(tags.artist) trackObj.artist_guess = tags.artist;
-                                    if(tags.picture) {
-                                        let b64 = ""; for (let i = 0; i < tags.picture.data.length; i++) b64 += String.fromCharCode(tags.picture.data[i]);
-                                        trackObj.artwork = `data:${tags.picture.format};base64,${window.btoa(b64)}`;
-                                    }
-                                    globalDatabase.unshift(trackObj); playbackQueue.unshift(trackObj);
-                                    if(document.querySelector('.section-title')) renderHomeView();
-                                },
-                                onError: function() { globalDatabase.unshift(trackObj); playbackQueue.unshift(trackObj); if(document.querySelector('.section-title')) renderHomeView(); }
-                            });
-                        } else { globalDatabase.unshift(trackObj); playbackQueue.unshift(trackObj); if(document.querySelector('.section-title')) renderHomeView(); }
-                        added++;
-                    }
-                }
-                showToast(`Added ${added} local tracks`);
-            } catch(e) {}
-        }
-        
-        function removeFolder(idx) {
-            localFolders.splice(idx, 1);
-            // Remove local tracks from memory (Simplified: removes all local for safety)
-            globalDatabase = globalDatabase.filter(t => t.source !== 'local');
-            playbackQueue = [...globalDatabase];
-            renderSidebarFolders(); renderHomeView();
-            showToast("Local edge disconnected");
-        }
-
-        // === OFFLINE DRM STORAGE ===
-        const dbName = "QlynktifyOfflineDB";
-        let dbPromise = new Promise((resolve, reject) => {
-            const req = indexedDB.open(dbName, 1);
-            req.onupgradeneeded = e => { e.target.result.createObjectStore("tracks", { keyPath: "slug" }); };
-            req.onsuccess = e => resolve(e.target.result);
-            req.onerror = () => reject();
-        });
-
-        async function saveToOffline(track) {
-            if(track.source === 'local' || track.offline) { showToast("Already Offline/Local"); return; }
-            showToast("Downloading to DRM Storage...");
-            try {
-                const tokenRes = await fetch(`/api/qlynktify/generate_stream/${track.slug}`);
-                if(!tokenRes.ok) throw new Error("Auth");
-                const tokenData = await tokenRes.json();
-                
-                const blobRes = await fetch(`/stream/audio/qlynktify/${tokenData.stream_token}`);
-                if(!blobRes.ok) throw new Error("Download");
-                const blob = await blobRes.blob();
-                
-                const db = await dbPromise;
-                const tx = db.transaction("tracks", "readwrite");
-                tx.objectStore("tracks").put({ slug: track.slug, blob: blob });
-                
-                track.offline = true;
-                if(document.querySelector('.section-title')) renderHomeView(); else renderQueueView();
-                showToast("✅ Saved Offline!");
-            } catch(e) { showToast("Download Failed"); }
-        }
-
-        async function getOfflineTracks() {
-            try {
-                const db = await dbPromise;
-                return new Promise(res => {
-                    const req = db.transaction("tracks").objectStore("tracks").getAll();
-                    req.onsuccess = () => res(req.result || []); req.onerror = () => res([]);
-                });
-            } catch(e) { return []; }
-        }
-        async function getOfflineBlob(slug) {
-            try {
-                const db = await dbPromise;
-                return new Promise(res => {
-                    const req = db.transaction("tracks").objectStore("tracks").get(slug);
-                    req.onsuccess = () => res(req.result ? req.result.blob : null); req.onerror = () => res(null);
-                });
-            } catch(e) { return null; }
-        }
-
-        // Boot Engine
-        initEngine();
-    </script>
+  <section class="card">
+    <h1>Module Disabled</h1>
+    <p>Qlynk-tify V7 is currently disabled by server configuration.</p>
+  </section>
 </body>
 </html>
 """
 
+
+def _qlynktify_forbidden_page() -> str:
+    return f"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>403 - Qlynk Pass Required</title>
+  <style>
+    :root {{ --bg:#0a0a0b; --panel:#15161a; --line:#2c2f36; --txt:#eceff4; --muted:#a2a9b5; --acc:#1db954; --acc2:#4ade80; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:radial-gradient(1100px 500px at 20% 0%, #1e293b55, transparent), radial-gradient(1000px 600px at 100% 100%, #16653455, transparent), var(--bg); color:var(--txt); font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }}
+    .panel {{ width:min(820px,92vw); background:linear-gradient(180deg,#181a20,#12141a); border:1px solid var(--line); border-radius:18px; padding:34px; box-shadow:0 16px 80px #0009; }}
+    h1 {{ font-size:40px; line-height:1.1; margin:0 0 10px; }}
+    p {{ color:var(--muted); margin:0 0 22px; font-size:16px; }}
+    .cta {{ display:inline-block; text-decoration:none; font-weight:800; letter-spacing:.3px; color:#06110a; background:linear-gradient(135deg,var(--acc),var(--acc2)); padding:12px 22px; border-radius:999px; border:0; }}
+    .k {{ display:inline-block; border:1px solid #2f3440; border-radius:8px; padding:4px 8px; color:#d7deea; font-size:12px; margin-bottom:14px; }}
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="k">QLYNK-TIFY V7 SECURITY GATE</div>
+    <h1>Access Denied: You need a Qlynk Pass to enter</h1>
+    <p>Your session does not include a valid master cookie or guest pass cookie. Authenticate first, then retry.</p>
+    <a class="cta" href="{QLYNKTIFY_CHECKOUT_URL}">Checkout / Buy Access</a>
+  </main>
+</body>
+</html>
+"""
+
+
+def _qlynktify_enabled_or_404() -> None:
+    if not QLYNKTIFY_ENABLED:
+        raise HTTPException(status_code=404, detail="Module Disabled")
+
+
+def _qlynktify_is_authorized(request: Request) -> bool:
+    master = request.cookies.get("auth_token", "")
+    guest = request.cookies.get("qlynk_tube_guest_mode", "")
+    has_guest = str(guest).strip().lower() in {"1", "true", "yes", "on", "guest"}
+    return (bool(SPACE_PASSWORD) and master == SPACE_PASSWORD) or has_guest
+
+
+async def qlynktify_guard(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        raise HTTPException(status_code=403, detail="Qlynk Pass Required")
+    return True
+
+
+def _spotify_redirect_uri(request: Request) -> str:
+    base = str(request.base_url).rstrip("/")
+    return f"{base}/api/spotify/callback"
+
+
+def _load_local_spotify_auth() -> Dict[str, Any]:
+    return _ram_get_json(QLYNKTIFY_AUTH_FILE, {})
+
+
+def _save_local_spotify_auth(data: Dict[str, Any]) -> None:
+    _ram_set_json(QLYNKTIFY_AUTH_FILE, data)
+
+
+def _load_cloud_spotify_auth() -> Dict[str, Any]:
+    return _ram_get_json(QLYNKTIFY_AUTH_FILE, {})
+
+
+def _save_cloud_spotify_auth() -> None:
+    _mark_json_dirty(QLYNKTIFY_AUTH_FILE)
+
+
+def _load_local_qlynktify_playlists() -> Dict[str, Any]:
+    data = _ram_get_json(QLYNKTIFY_PLAYLISTS_FILE, {"playlists": {}, "updated_at": 0})
+    return data if isinstance(data, dict) else {"playlists": {}, "updated_at": 0}
+
+
+def _save_local_qlynktify_playlists(data: Dict[str, Any]) -> None:
+    payload = data if isinstance(data, dict) else {"playlists": {}, "updated_at": 0}
+    _ram_set_json(QLYNKTIFY_PLAYLISTS_FILE, payload)
+
+
+def _load_cloud_qlynktify_playlists() -> Dict[str, Any]:
+    data = _ram_get_json(QLYNKTIFY_PLAYLISTS_FILE, {"playlists": {}, "updated_at": 0})
+    return data if isinstance(data, dict) else {"playlists": {}, "updated_at": 0}
+
+
+def _save_cloud_qlynktify_playlists() -> None:
+    _mark_json_dirty(QLYNKTIFY_PLAYLISTS_FILE)
+
+
+def get_qlynktify_playlists_state() -> Dict[str, Any]:
+    local = _load_local_qlynktify_playlists()
+    if local:
+        return local
+    cloud = _load_cloud_qlynktify_playlists()
+    if cloud:
+        _save_local_qlynktify_playlists(cloud)
+    return cloud
+
+
+def set_qlynktify_playlists_state(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = data if isinstance(data, dict) else {}
+    payload.setdefault("playlists", {})
+    payload["updated_at"] = time.time()
+    _save_local_qlynktify_playlists(payload)
+    _save_cloud_qlynktify_playlists()
+    return payload
+
+
+def _default_qlynktify_presence_state() -> Dict[str, Any]:
+    now = time.time()
+    return {
+        "profiles": {
+            "Admin": {
+                "user": "Admin",
+                "status": "listening",
+                "online": True,
+                "track": {"title": "Opening the Trinity Engine", "artist": "Qlynk-tify", "source": "vault"},
+                "updated_at": now
+            },
+            "User2": {
+                "user": "User2",
+                "status": "syncing",
+                "online": True,
+                "track": {"title": "Local Edge Discovery", "artist": "Family Network", "source": "local"},
+                "updated_at": now
+            },
+            "User3": {
+                "user": "User3",
+                "status": "idle",
+                "online": False,
+                "track": {"title": "Waiting in the queue", "artist": "Qlynk Node", "source": "vault"},
+                "updated_at": now
+            }
+        },
+        "updated_at": now
+    }
+
+
+def get_qlynktify_presence_state() -> Dict[str, Any]:
+    state = _ram_get_json(QLYNKTIFY_PRESENCE_FILE, {})
+    if not isinstance(state, dict) or not state:
+        state = _default_qlynktify_presence_state()
+        _ram_set_json(QLYNKTIFY_PRESENCE_FILE, state)
+        _mark_json_dirty(QLYNKTIFY_PRESENCE_FILE)
+        return state
+    state.setdefault("profiles", {})
+    for key, template in _default_qlynktify_presence_state()["profiles"].items():
+        state["profiles"].setdefault(key, template)
+    state.setdefault("updated_at", time.time())
+    _ram_set_json(QLYNKTIFY_PRESENCE_FILE, state)
+    return state
+
+
+def set_qlynktify_presence_state(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = data if isinstance(data, dict) else {}
+    payload.setdefault("profiles", {})
+    payload["updated_at"] = time.time()
+    _ram_set_json(QLYNKTIFY_PRESENCE_FILE, payload)
+    _mark_json_dirty(QLYNKTIFY_PRESENCE_FILE)
+    return payload
+
+
+def get_spotify_auth_state() -> Dict[str, Any]:
+    local = _load_local_spotify_auth()
+    if local:
+        return local
+    cloud = _load_cloud_spotify_auth()
+    if cloud:
+        _save_local_spotify_auth(cloud)
+    return cloud
+
+
+def set_spotify_auth_state(data: Dict[str, Any]) -> Dict[str, Any]:
+    payload = {
+        "access_token": data.get("access_token", ""),
+        "refresh_token": data.get("refresh_token", ""),
+        "expires_in": int(data.get("expires_in", 0) or 0),
+        "token_type": data.get("token_type", "Bearer"),
+        "scope": data.get("scope", ""),
+        "updated_at": time.time()
+    }
+    _save_local_spotify_auth(payload)
+    _save_cloud_spotify_auth()
+    return payload
+
+
+async def _spotify_refresh_internal() -> Dict[str, Any]:
+    state = get_spotify_auth_state()
+    refresh_token = state.get("refresh_token", "")
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="No Spotify refresh token available")
+    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Spotify credentials are not configured")
+
+    auth_pair = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode("utf-8")
+    basic = base64.b64encode(auth_pair).decode("utf-8")
+    headers = {
+        "Authorization": f"Basic {basic}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://accounts.spotify.com/api/token", headers=headers, data=form, timeout=20) as resp:
+            body = await resp.text()
+            if resp.status != 200:
+                raise HTTPException(status_code=resp.status, detail=f"Spotify refresh failed: {body[:350]}")
+            payload = json.loads(body)
+
+    merged = dict(state)
+    merged.update(payload)
+    if not merged.get("refresh_token"):
+        merged["refresh_token"] = refresh_token
+    return set_spotify_auth_state(merged)
+
+
+async def _spotify_access_token_valid() -> str:
+    state = get_spotify_auth_state()
+    token = state.get("access_token", "")
+    expires_in = int(state.get("expires_in", 0) or 0)
+    updated_at = float(state.get("updated_at", 0.0) or 0.0)
+    expires_at = updated_at + expires_in
+    if token and time.time() < (expires_at - 30):
+        return token
+    refreshed = await _spotify_refresh_internal()
+    return refreshed.get("access_token", "")
+
+
+async def spotify_call(path: str, request: Request, params: Dict[str, Any] = None, method: str = "GET", body: Dict[str, Any] = None) -> Dict[str, Any]:
+    await qlynktify_guard(request)
+    token = await _spotify_access_token_valid()
+    if not token:
+        raise HTTPException(status_code=401, detail="Spotify auth unavailable")
+
+    url = f"{SPOTIFY_API_BASE}{path}"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    async with aiohttp.ClientSession() as session:
+        req = session.get if method == "GET" else session.put if method == "PUT" else session.post
+        async with req(url, headers=headers, params=params, json=body, timeout=25) as resp:
+            txt = await resp.text()
+            if resp.status == 429:
+                retry_after = resp.headers.get("Retry-After", "2")
+                raise HTTPException(status_code=429, detail=f"Spotify rate limit. Retry after {retry_after}s")
+            if resp.status == 401:
+                await _spotify_refresh_internal()
+                token2 = await _spotify_access_token_valid()
+                headers["Authorization"] = f"Bearer {token2}"
+                async with req(url, headers=headers, params=params, json=body, timeout=25) as retry_resp:
+                    retry_txt = await retry_resp.text()
+                    if retry_resp.status >= 400:
+                        raise HTTPException(status_code=retry_resp.status, detail=f"Spotify API failure: {retry_txt[:350]}")
+                    return json.loads(retry_txt) if retry_txt else {}
+            if resp.status >= 400:
+                raise HTTPException(status_code=resp.status, detail=f"Spotify API failure: {txt[:350]}")
+            return json.loads(txt) if txt else {}
+
+
+def clean_music_title_v7(raw_filename: str) -> Dict[str, str]:
+    raw = os.path.splitext(str(raw_filename or ""))[0]
+    junk = [
+        r"\(official.*?\)", r"\[.*?\]", r"\(lyric.*?\)", r"\(audio\)",
+        r"\b(128|192|320)kbps\b", r"\b(hq|hd|4k)\b", r"\b(official video|music video)\b",
+        r"\b(pagalworld|djpunjab|wapking|djmaza|mrjatt)\b", r"www\.[^\s]+"
+    ]
+    for pat in junk:
+        raw = re.sub(pat, " ", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"[_\-]+", " ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    parts = raw.split(" - ", 1)
+    if len(parts) == 2:
+        artist = parts[0].strip() or "Unknown Artist"
+        title = parts[1].strip() or raw
+    else:
+        artist = "Unknown Artist"
+        title = raw or "Untitled"
+    return {"artist": artist, "title": title, "query": f"{artist} {title}".strip()}
+
+
+async def vault_audio_tracks(request: Request) -> List[Dict[str, Any]]:
+    await qlynktify_guard(request)
+    db = get_db()
+    rows = []
+    for f in db.get("files", []):
+        mime = str(f.get("mime_type", ""))
+        if mime.startswith("audio/"):
+            cleaned = clean_music_title_v7(f.get("filename", ""))
+            rows.append({
+                "track_id": f.get("slug"),
+                "slug": f.get("slug"),
+                "title": f.get("title") or cleaned["title"],
+                "artist": cleaned["artist"],
+                "album": "Qlynk Vault",
+                "artwork": f.get("thumbnail") or "",
+                "size_bytes": int(f.get("size_bytes", 0) or 0),
+                "uploaded_at": f.get("uploaded_at"),
+                "source": "vault",
+                "mime_type": mime,
+                "search_query": cleaned["query"]
+            })
+    rows.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
+    return rows
+
+
+qlynktify_stream_tokens_v7 = {}
+
+
+def _forbidden_api_response() -> JSONResponse:
+    return JSONResponse(
+        status_code=403,
+        content={
+            "status": "error",
+            "code": 403,
+            "message": "Access Denied: You need a Qlynk Pass to enter",
+            "checkout_url": QLYNKTIFY_CHECKOUT_URL
+        }
+    )
+
+
 @app.get("/qlynk-tify", response_class=HTMLResponse)
-async def serve_qlynktify(request: Request):
-    # .strip() lagane se end ka saara kachra aur '\n' delete ho jayega
-    clean_html = QLYNKTIFY_HTML.strip()
-    return HTMLResponse(content=clean_html)
+async def qlynktify_v7_entry(request: Request):
+    if not QLYNKTIFY_ENABLED:
+        return HTMLResponse(content=_qlynktify_disabled_page(), status_code=404)
+    if not _qlynktify_is_authorized(request):
+        return HTMLResponse(content=_qlynktify_forbidden_page(), status_code=403)
+    return HTMLResponse(content=QLYNKTIFY_HTML_V7)
+# END: Qlynk-tify V7 Trinity engine backend
+
+
+@app.get("/api/spotify/login")
+async def spotify_login(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    if not SPOTIFY_CLIENT_ID or not SPOTIFY_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Spotify credentials not configured")
+
+    state = hashlib.sha256(f"{secrets.token_hex(16)}:{time.time()}".encode()).hexdigest()
+    SPOTIFY_STATE_CACHE[state] = {"ts": time.time(), "ip": request.client.host if request.client else ""}
+
+    params = {
+        "client_id": SPOTIFY_CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": _spotify_redirect_uri(request),
+        "scope": "user-read-private user-read-email user-read-playback-state user-modify-playback-state streaming playlist-read-private user-top-read",
+        "state": state,
+        "show_dialog": "true"
+    }
+    return RedirectResponse(f"https://accounts.spotify.com/authorize?{urlencode(params)}", status_code=307)
+
+
+@app.get("/api/spotify/callback")
+async def spotify_callback(request: Request, code: str = "", state: str = ""):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return HTMLResponse(content=_qlynktify_forbidden_page(), status_code=403)
+    if not code or not state or state not in SPOTIFY_STATE_CACHE:
+        raise HTTPException(status_code=400, detail="Invalid Spotify callback parameters")
+
+    SPOTIFY_STATE_CACHE.pop(state, None)
+    auth_pair = f"{SPOTIFY_CLIENT_ID}:{SPOTIFY_CLIENT_SECRET}".encode("utf-8")
+    basic = base64.b64encode(auth_pair).decode("utf-8")
+
+    headers = {
+        "Authorization": f"Basic {basic}",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": _spotify_redirect_uri(request)
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.post("https://accounts.spotify.com/api/token", headers=headers, data=form, timeout=20) as resp:
+            txt = await resp.text()
+            if resp.status != 200:
+                raise HTTPException(status_code=resp.status, detail=f"Spotify auth exchange failed: {txt[:350]}")
+            data = json.loads(txt)
+
+    set_spotify_auth_state(data)
+    return RedirectResponse("/qlynk-tify?spotify=connected", status_code=307)
+
+
+@app.post("/api/spotify/refresh")
+async def spotify_refresh(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    refreshed = await _spotify_refresh_internal()
+    return {"status": "success", "token_type": refreshed.get("token_type", "Bearer"), "expires_in": refreshed.get("expires_in", 0)}
+
+
+@app.get("/api/spotify/status")
+async def spotify_status(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    state = get_spotify_auth_state()
+    return {
+        "connected": bool(state.get("refresh_token")),
+        "has_access_token": bool(state.get("access_token")),
+        "updated_at": state.get("updated_at", 0),
+        "expires_in": state.get("expires_in", 0)
+    }
+
+
+@app.get("/api/spotify/token")
+async def spotify_token(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    token = await _spotify_access_token_valid()
+    return {"access_token": token}
+
+
+@app.get("/api/spotify/search")
+async def spotify_search(request: Request, q: str = "", limit: int = 8):
+    if not q.strip():
+        return {"tracks": [], "artists": [], "albums": []}
+    data = await spotify_call(
+        "/search",
+        request,
+        params={"q": q, "type": "track,artist,album", "limit": max(1, min(limit, 20))}
+    )
+    return {
+        "tracks": data.get("tracks", {}).get("items", []),
+        "artists": data.get("artists", {}).get("items", []),
+        "albums": data.get("albums", {}).get("items", [])
+    }
+
+
+@app.get("/api/spotify/playlists")
+async def spotify_playlists(request: Request, limit: int = 30):
+    data = await spotify_call("/me/playlists", request, params={"limit": max(1, min(limit, 50))})
+    return {"items": data.get("items", [])}
+
+
+@app.get("/api/spotify/top-tracks")
+async def spotify_top_tracks(request: Request, limit: int = 20):
+    data = await spotify_call("/me/top/tracks", request, params={"limit": max(1, min(limit, 50)), "time_range": "medium_term"})
+    return {"items": data.get("items", [])}
+
+
+@app.get("/api/spotify/audio-analysis/{track_id}")
+async def spotify_audio_analysis(request: Request, track_id: str):
+    if not track_id:
+        raise HTTPException(status_code=400, detail="track_id required")
+    data = await spotify_call(f"/audio-analysis/{track_id}", request)
+    return data
+
+
+@app.put("/api/spotify/player/play")
+async def spotify_player_play(request: Request, device_id: str = "", uri: str = ""):
+    payload = {"uris": [uri]} if uri else {}
+    params = {"device_id": device_id} if device_id else None
+    await spotify_call("/me/player/play", request, params=params, method="PUT", body=payload)
+    return {"status": "ok"}
+
+
+@app.put("/api/spotify/player/pause")
+async def spotify_player_pause(request: Request, device_id: str = ""):
+    params = {"device_id": device_id} if device_id else None
+    await spotify_call("/me/player/pause", request, params=params, method="PUT")
+    return {"status": "ok"}
+
+
+@app.get("/api/qlynktify/library")
+async def qlynktify_library(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    rows = await vault_audio_tracks(request)
+    return {"status": "success", "tracks": rows}
+
+
+@app.get("/api/qlynktify/search")
+async def qlynktify_search(request: Request, q: str = ""):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+
+    query = q.strip().lower()
+    vault = await vault_audio_tracks(request)
+    vault_hits = []
+    if query:
+        for t in vault:
+            hay = f"{t.get('title','')} {t.get('artist','')} {t.get('slug','')}".lower()
+            if query in hay:
+                vault_hits.append(t)
+    else:
+        vault_hits = vault[:25]
+
+    spotify_result = {"tracks": [], "artists": [], "albums": []}
+    if query:
+        try:
+            spotify_result = await spotify_search(request, q=q, limit=10)
+        except HTTPException as e:
+            if e.status_code not in (401, 403, 429):
+                raise
+
+    return {
+        "status": "success",
+        "vault": vault_hits,
+        "spotify": spotify_result
+    }
+
+
+@app.get("/api/qlynktify/playlists")
+async def qlynktify_get_playlists(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    state = get_qlynktify_playlists_state()
+    state.setdefault("playlists", {})
+    return {"status": "success", "playlists": state.get("playlists", {}), "updated_at": state.get("updated_at", 0)}
+
+
+@app.post("/api/qlynktify/playlists")
+async def qlynktify_save_playlists(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    payload = await request.json()
+    playlists = payload.get("playlists", {}) if isinstance(payload, dict) else {}
+    saved = set_qlynktify_playlists_state({"playlists": playlists})
+    return {"status": "success", "updated_at": saved.get("updated_at", 0), "count": len(saved.get("playlists", {}))}
+
+
+@app.get("/api/qlynktify/presence")
+async def qlynktify_get_presence(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    state = get_qlynktify_presence_state()
+    return {"status": "success", "profiles": state.get("profiles", {}), "updated_at": state.get("updated_at", 0)}
+
+
+@app.post("/api/qlynktify/presence")
+async def qlynktify_set_presence(request: Request):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+    payload = await request.json()
+    state = get_qlynktify_presence_state()
+    profiles = state.setdefault("profiles", {})
+    user = str((payload or {}).get("user", "Admin")).strip() or "Admin"
+    track = (payload or {}).get("track", {}) if isinstance(payload, dict) else {}
+    if not isinstance(track, dict):
+        track = {}
+    profiles[user] = {
+        "user": user,
+        "status": str((payload or {}).get("status", "listening")),
+        "online": bool((payload or {}).get("online", True)),
+        "track": track,
+        "updated_at": time.time()
+    }
+    saved = set_qlynktify_presence_state(state)
+    return {"status": "success", "updated_at": saved.get("updated_at", 0), "user": user}
+
+
+@app.get("/api/qlynktify/lyrics")
+async def qlynktify_lyrics(request: Request, title: str = "", artist: str = ""):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+
+    query = (f"{title} {artist}").strip() or title or artist
+    if not query:
+        return {"synced": None, "plain": None}
+
+    url = f"https://lrclib.net/api/search?track_name={urllib.parse.quote(title or query)}&artist_name={urllib.parse.quote(artist or '')}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=8) as resp:
+                if resp.status != 200:
+                    return {"synced": None, "plain": None}
+                data = await resp.json()
+                if not data:
+                    return {"synced": None, "plain": None}
+                row = data[0]
+                return {"synced": row.get("syncedLyrics"), "plain": row.get("plainLyrics")}
+    except Exception:
+        return {"synced": None, "plain": None}
+
+
+@app.get("/api/qlynktify/generate_stream/{slug}")
+async def qlynktify_generate_stream(request: Request, slug: str):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return _forbidden_api_response()
+
+    db = get_db()
+    track = next((f for f in db.get("files", []) if f.get("slug") == slug), None)
+    if not track:
+        raise HTTPException(status_code=404, detail="Track not found")
+
+    token = uuid.uuid4().hex
+    qlynktify_stream_tokens_v7[token] = {
+        "slug": slug,
+        "path": track.get("path", ""),
+        "mime_type": track.get("mime_type", "audio/mpeg"),
+        "exp": time.time() + 600
+    }
+    return {"status": "success", "stream_token": token, "url": f"/stream/audio/qlynktify/{token}"}
+
+
+@app.get("/stream/audio/qlynktify/{token}")
+async def qlynktify_stream_audio(request: Request, token: str):
+    _qlynktify_enabled_or_404()
+    if not _qlynktify_is_authorized(request):
+        return HTMLResponse(content=_qlynktify_forbidden_page(), status_code=403)
+
+    row = qlynktify_stream_tokens_v7.get(token)
+    if not row or time.time() > row.get("exp", 0):
+        raise HTTPException(status_code=403, detail="Stream token expired")
+
+    rel_path = row.get("path", "")
+    if not rel_path:
+        raise HTTPException(status_code=404, detail="Stream path missing")
+
+    try:
+        local = hf_hub_download(
+            repo_id=DATASET_REPO,
+            filename=rel_path,
+            repo_type="dataset",
+            token=HF_TOKEN
+        )
+    except Exception:
+        raise HTTPException(status_code=404, detail="Audio file not available")
+
+    file_size = os.path.getsize(local)
+    range_hdr = request.headers.get("range")
+
+    if not range_hdr:
+        def iter_all():
+            with open(local, "rb") as f:
+                while True:
+                    chunk = f.read(1024 * 256)
+                    if not chunk:
+                        break
+                    yield chunk
+        return StreamingResponse(iter_all(), media_type=row.get("mime_type") or "audio/mpeg", headers={"Accept-Ranges": "bytes", "Content-Length": str(file_size)})
+
+    m = re.match(r"bytes=(\d+)-(\d*)", range_hdr)
+    if not m:
+        raise HTTPException(status_code=416, detail="Invalid range")
+
+    start = int(m.group(1))
+    end = int(m.group(2)) if m.group(2) else min(start + (1024 * 1024) - 1, file_size - 1)
+    if start >= file_size or end >= file_size or start > end:
+        raise HTTPException(status_code=416, detail="Range not satisfiable")
+
+    length = end - start + 1
+
+    def iter_range():
+        with open(local, "rb") as f:
+            f.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = f.read(min(remaining, 1024 * 128))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+                yield chunk
+
+    headers = {
+        "Content-Range": f"bytes {start}-{end}/{file_size}",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(length)
+    }
+    return StreamingResponse(iter_range(), status_code=206, media_type=row.get("mime_type") or "audio/mpeg", headers=headers)
+
+
+# START: Qlynk-tify frontend payload (HTML/CSS/JS)
+# What: Full client UI shell for search, queue, playback, Spotify bridge, vault controls, and overlays.
+# Why: Keeps the app as a single-delivery interface tightly coupled to backend APIs.
+# Without: `/qlynk-tify` route cannot render the interactive music experience.
+QLYNKTIFY_HTML_V7 = """
+<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1\" />
+  <title>Qlynk-tify V7 - Trinity Engine</title>
+  <script src=\"https://sdk.scdn.co/spotify-player.js\"></script>
+  <script src=\"https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js\"></script>
+  <style>
+    :root {
+      --bg: #121212;
+      --bg-soft: #181818;
+      --bg-soft-2: #202020;
+      --line: #2a2a2a;
+      --text: #f4f4f4;
+      --muted: #9f9f9f;
+      --green: #1db954;
+      --mesh-a: #0ea5e9;
+      --mesh-b: #a855f7;
+      --mesh-c: #1db954;
+      --player-h: 92px;
+      --sidebar-w: 284px;
+      --right-w: 380px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font-family: Circular, Circular Std, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      overflow: hidden;
+    }
+    #mesh {
+      position: fixed;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(900px 500px at 12% 0%, color-mix(in srgb, var(--mesh-a) 40%, transparent), transparent),
+        radial-gradient(850px 520px at 88% 10%, color-mix(in srgb, var(--mesh-b) 36%, transparent), transparent),
+        radial-gradient(1000px 700px at 40% 100%, color-mix(in srgb, var(--mesh-c) 35%, transparent), transparent),
+        #121212;
+      transition: filter .3s ease;
+    }
+    .app {
+      position: relative;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: var(--sidebar-w) 1fr var(--right-w);
+      grid-template-rows: 1fr var(--player-h);
+      height: 100vh;
+      gap: 0;
+    }
+    .sidebar {
+      grid-column: 1;
+      grid-row: 1;
+      border-right: 1px solid var(--line);
+      background: color-mix(in srgb, #000 40%, var(--bg));
+      overflow: auto;
+      padding: 14px;
+    }
+    .main {
+      grid-column: 2;
+      grid-row: 1;
+      overflow: auto;
+      padding: 18px 24px 130px;
+    }
+    .right {
+      grid-column: 3;
+      grid-row: 1;
+      border-left: 1px solid var(--line);
+      background: color-mix(in srgb, #000 32%, var(--bg));
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .player {
+      grid-column: 1 / 4;
+      grid-row: 2;
+      border-top: 1px solid var(--line);
+      background: #101010;
+      display: grid;
+      grid-template-columns: 1.2fr 2fr 1.1fr;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 14px;
+    }
+    .logo { font-weight: 900; letter-spacing: .4px; margin: 0 0 14px; }
+    .small { font-size: 12px; color: var(--muted); }
+    .nav-btn {
+      width: 100%; text-align: left; border: 1px solid transparent;
+      background: #171717; color: #e8e8e8; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
+    }
+    .nav-btn.active { border-color: #2f2f2f; background: #212121; }
+    .section-title { margin: 18px 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+    .list { display: flex; flex-direction: column; gap: 8px; }
+    .item {
+      display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center;
+      background: #181818; border: 1px solid #242424; border-radius: 10px; padding: 8px; cursor: pointer;
+    }
+    .item:hover { background: #222; }
+    .thumb, .avatar {
+      width: 34px; height: 34px; border-radius: 8px; object-fit: cover; background: #2a2a2a;
+    }
+    .badge {
+      display: inline-flex; align-items: center; justify-content: center;
+      border: 1px solid #3a3a3a; color: #d4d4d4; border-radius: 999px; font-size: 10px; padding: 3px 7px;
+    }
+    .hdr {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px;
+      position: sticky; top: 0; background: linear-gradient(180deg,#121212 60%,#121212b0 100%); padding-bottom: 8px; z-index: 5;
+    }
+    .search {
+      flex: 1; border: 1px solid #2b2b2b; border-radius: 999px; background: #0f0f0f; color: #fff; padding: 11px 15px; font-size: 14px;
+    }
+    .btn {
+      border: 1px solid #2d2d2d; background: #1f1f1f; color: #fff; border-radius: 999px; padding: 10px 14px; cursor: pointer;
+      font-weight: 700;
+    }
+    .btn.green { background: var(--green); color: #04220d; border-color: transparent; }
+    .hero {
+      border: 1px solid #2a2a2a; background: linear-gradient(135deg,#1c1c1c,#111); border-radius: 16px; padding: 18px; display: flex; gap: 14px; align-items: center;
+      margin-bottom: 16px;
+    }
+    .hero img { width: 100px; height: 100px; border-radius: 12px; object-fit: cover; }
+    .rows { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); gap: 12px; }
+    .card {
+      border: 1px solid #2b2b2b; border-radius: 12px; background: #181818; padding: 10px;
+      display: grid; grid-template-columns: 56px 1fr; gap: 10px; cursor: pointer;
+    }
+    .card img { width: 56px; height: 56px; border-radius: 10px; object-fit: cover; }
+    .table { width: 100%; border-collapse: collapse; margin-top: 18px; }
+    .table th, .table td { border-bottom: 1px solid #242424; text-align: left; padding: 10px 8px; font-size: 13px; }
+    .table tr:hover { background: #1d1d1d; }
+    .panel-tabs { display: flex; gap: 8px; padding: 12px; border-bottom: 1px solid #2b2b2b; }
+    .tab { flex: 1; border: 1px solid #2b2b2b; border-radius: 10px; background: #181818; color: #fff; padding: 9px 10px; cursor: pointer; }
+    .tab.active { background: #242424; }
+    .now {
+      padding: 14px; display: grid; gap: 10px; border-bottom: 1px solid #2b2b2b;
+    }
+    .now img { width: 100%; max-width: 260px; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 14px; justify-self: center; }
+    .lyrics, .visuals { flex: 1; overflow: auto; padding: 14px; }
+    .lyrics-line { padding: 5px 0; color: #d0d0d0; font-weight: 700; opacity: .55; transition: .2s; }
+    .lyrics-line.active { opacity: 1; color: #fff; transform: translateX(4px); }
+    #viz { width: 100%; height: 100%; border-radius: 12px; background: #0e0e0e; }
+    .p-left { display: grid; grid-template-columns: 52px 1fr; gap: 10px; align-items: center; }
+    .p-left img { width: 52px; height: 52px; border-radius: 8px; object-fit: cover; }
+    .p-mid { display: grid; gap: 7px; }
+    .ctrls { display: flex; justify-content: center; gap: 10px; }
+    .icon-btn {
+      width: 34px; height: 34px; border-radius: 50%; border: 1px solid #2e2e2e; background: #1a1a1a; color: #fff; cursor: pointer;
+    }
+    .icon-btn.play { width: 38px; height: 38px; background: #fff; color: #111; border-color: transparent; }
+    .prog { display: grid; grid-template-columns: 44px 1fr 44px; gap: 9px; align-items: center; font-size: 11px; color: #bdbdbd; }
+    .bar { height: 5px; background: #2a2a2a; border-radius: 999px; position: relative; cursor: pointer; }
+    .fill { position: absolute; top: 0; left: 0; height: 100%; width: 0%; border-radius: 999px; background: #fff; }
+    .p-right { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+    .vol { width: 120px; }
+    .dropzone {
+      border: 1px dashed #3f3f3f; border-radius: 12px; padding: 18px; text-align: center; color: #c7c7c7; margin-top: 12px;
+    }
+        .toast-wrap {
+            position: fixed;
+            right: 16px;
+            bottom: calc(var(--player-h) + 18px);
+            z-index: 80;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-width: min(420px, 92vw);
+            pointer-events: none;
+        }
+        .toast {
+            pointer-events: auto;
+            background: #1a1a1a;
+            color: #f5f5f5;
+            border: 1px solid #343434;
+            border-radius: 10px;
+            padding: 10px 12px;
+            font-size: 12px;
+            box-shadow: 0 10px 32px #0009;
+        }
+        .toast.warn { border-color: #8b5b16; }
+        .toast.err { border-color: #8f3131; }
+        .mode-btn {
+            min-width: 44px;
+            border-radius: 999px;
+            border: 1px solid #2f2f2f;
+            background: #161616;
+            color: #dedede;
+            padding: 6px 10px;
+            font-size: 11px;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .mode-btn.active { border-color: #1db954; color: #1db954; }
+        .eq-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 8px;
+            margin-top: 12px;
+        }
+        .eq-band {
+            display: grid;
+            justify-items: center;
+            gap: 6px;
+            border: 1px solid #2f2f2f;
+            border-radius: 10px;
+            padding: 8px 4px;
+            background: #171717;
+        }
+        .eq-band input[type=range] {
+            writing-mode: bt-lr;
+            -webkit-appearance: slider-vertical;
+            width: 20px;
+            height: 110px;
+        }
+        .friends-shell,
+        .sleep-shell {
+            border-top: 1px solid #2b2b2b;
+            padding: 12px;
+        }
+        .panel-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .panel-head strong {
+            font-size: 12px;
+            letter-spacing: .6px;
+            text-transform: uppercase;
+        }
+        .presence-list {
+            display: grid;
+            gap: 8px;
+        }
+        .presence-row {
+            display: grid;
+            grid-template-columns: 12px 1fr auto;
+            gap: 10px;
+            align-items: start;
+            padding: 10px;
+            border: 1px solid #2e2e2e;
+            border-radius: 12px;
+            background: linear-gradient(180deg, #181818, #141414);
+        }
+        .presence-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 999px;
+            margin-top: 4px;
+            background: #6b7280;
+            box-shadow: 0 0 0 4px #6b728022;
+        }
+        .presence-dot.on { background: #1db954; box-shadow: 0 0 0 4px #1db95422; }
+        .presence-meta { display: grid; gap: 3px; }
+        .presence-track { color: #f2f2f2; font-size: 12px; font-weight: 700; line-height: 1.2; }
+        .presence-note { color: var(--muted); font-size: 11px; }
+        .presence-time { color: #a6a6a6; font-size: 10px; text-align: right; }
+        .presence-avatar {
+            width: 24px;
+            height: 24px;
+            border-radius: 999px;
+            object-fit: cover;
+            border: 1px solid #2f2f2f;
+            background: #202020;
+        }
+        .presence-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .presence-select {
+            width: 100%;
+            background: #181818;
+            border: 1px solid #2b2b2b;
+            border-radius: 8px;
+            color: #f1f1f1;
+            font-size: 12px;
+            padding: 8px 10px;
+        }
+        .sleep-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .sleep-grid .btn {
+            padding: 9px 10px;
+            font-size: 12px;
+        }
+        .sleep-status {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            color: var(--muted);
+            font-size: 11px;
+        }
+        .context-menu {
+            position: fixed;
+            min-width: 240px;
+            z-index: 120;
+            background: rgba(15, 15, 15, .98);
+            border: 1px solid #343434;
+            border-radius: 16px;
+            box-shadow: 0 24px 60px #000a;
+            padding: 8px;
+            display: none;
+            backdrop-filter: blur(14px);
+        }
+        .context-menu.show { display: grid; }
+        .context-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            width: 100%;
+            border: 0;
+            background: transparent;
+            color: #f3f3f3;
+            border-radius: 10px;
+            padding: 11px 12px;
+            cursor: pointer;
+            font-size: 12px;
+            text-align: left;
+        }
+        .context-item:hover { background: #232323; }
+        .context-item:focus { outline: 2px solid #1db954; outline-offset: 1px; background: #232323; }
+        .context-divider {
+            height: 1px;
+            margin: 6px 4px;
+            background: #2d2d2d;
+        }
+        .context-submenu {
+            display: grid;
+            gap: 4px;
+            margin-left: 10px;
+            padding-left: 10px;
+            border-left: 1px solid #2b2b2b;
+        }
+        .context-subtitle {
+            color: var(--muted);
+            font-size: 10px;
+            letter-spacing: .5px;
+            text-transform: uppercase;
+            padding: 0 10px 2px;
+        }
+        .offline-badge { color: #8df0a8; border-color: #2f5d38; }
+        .offline-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .offline-card {
+            border: 1px solid #2f2f2f;
+            border-radius: 12px;
+            background: #171717;
+            padding: 10px;
+            display: grid;
+            grid-template-columns: 54px 1fr;
+            gap: 10px;
+            cursor: pointer;
+        }
+        .offline-card img { width: 54px; height: 54px; border-radius: 10px; object-fit: cover; background: #242424; }
+        .settings-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(5, 6, 10, .62);
+            backdrop-filter: blur(8px);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 240;
+            padding: 16px;
+        }
+        .settings-overlay.open { display: flex; }
+        .settings-modal {
+            width: min(760px, 96vw);
+            max-height: 82vh;
+            overflow: auto;
+            border: 1px solid #343434;
+            border-radius: 16px;
+            background: linear-gradient(180deg, #171717, #121212);
+            box-shadow: 0 30px 80px #000c;
+            transform: translateY(14px) scale(.98);
+            opacity: 0;
+            transition: transform .2s ease, opacity .2s ease;
+        }
+        .settings-overlay.open .settings-modal {
+            transform: translateY(0) scale(1);
+            opacity: 1;
+        }
+        .settings-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 14px 16px;
+            border-bottom: 1px solid #2e2e2e;
+        }
+        .settings-tabs {
+            display: flex;
+            gap: 8px;
+            padding: 12px 16px 0;
+        }
+        .settings-tab {
+            border: 1px solid #343434;
+            border-radius: 10px;
+            background: #1a1a1a;
+            color: #ececec;
+            padding: 8px 12px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .settings-tab.active { border-color: #1db954; color: #baf6cf; }
+        .settings-body { padding: 14px 16px 18px; }
+        .settings-pane { display: none; }
+        .settings-pane.active { display: block; }
+        .kbd-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 8px;
+        }
+        .kbd-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            border: 1px solid #303030;
+            border-radius: 10px;
+            padding: 9px 10px;
+            background: #181818;
+            font-size: 12px;
+        }
+        kbd {
+            border: 1px solid #3a3a3a;
+            border-bottom-width: 2px;
+            border-radius: 6px;
+            background: #111;
+            color: #dff7e8;
+            font-size: 11px;
+            padding: 2px 7px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+    .search-results { display: grid; gap: 8px; margin-top: 10px; }
+    .sr-item { border: 1px solid #303030; background: #181818; border-radius: 10px; padding: 9px; display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; }
+    .sr-item img { width: 44px; height: 44px; border-radius: 8px; object-fit: cover; }
+    .collapsed .sidebar { width: 72px; }
+    @media (max-width: 1200px) {
+      .app { grid-template-columns: 88px 1fr; }
+      .right { position: fixed; right: -100%; top: 0; bottom: var(--player-h); width: min(92vw,420px); transition: right .25s ease; z-index: 8; }
+      .right.open { right: 0; }
+      .player { grid-column: 1 / 3; }
+      .sidebar .item > div:nth-child(2), .sidebar .section-title, .sidebar .logo span { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id=\"mesh\"></div>
+  <div class=\"app\" id=\"app\">
+    <aside class=\"sidebar\" id=\"sidebar\">
+      <h2 class=\"logo\">Qlynk-<span>tify V7</span></h2>
+      <button class=\"nav-btn active\" id=\"nav-home\">Home</button>
+      <button class=\"nav-btn\" id=\"nav-search\">Search</button>
+      <button class=\"nav-btn\" id=\"nav-queue\">Queue</button>
+    <button class=\"nav-btn\" id=\"nav-offline\">Offline Library</button>
+      <button class=\"nav-btn\" id=\"nav-right\">Right Panel</button>
+
+      <div class=\"section-title\">Spotify</div>
+      <div style=\"display:flex; gap:8px; margin-bottom:8px;\">
+        <button class=\"btn green\" id=\"spotify-connect\">Connect</button>
+        <button class=\"btn\" id=\"spotify-refresh\">Refresh</button>
+      </div>
+      <div class=\"small\" id=\"spotify-status\">Checking Spotify status...</div>
+      <div class=\"list\" id=\"spotify-playlists\" style=\"margin-top:10px;\"></div>
+
+            <div class=\"section-title\">Vault Playlists</div>
+            <div class=\"list\" id=\"vault-playlists\"></div>
+
+            <div class=\"section-title\">Custom Mix Playlists</div>
+            <div style=\"display:flex; gap:8px; margin-bottom:8px;\">
+                <button class=\"btn\" id=\"create-playlist\">Create</button>
+                <button class=\"btn\" id=\"sync-playlist\">Sync</button>
+            </div>
+            <div class=\"list\" id=\"custom-playlists\"></div>
+
+      <div class=\"section-title\">Local Edge</div>
+      <button class=\"btn\" id=\"pick-folder\">Add Folder</button>
+      <div class=\"dropzone\" id=\"dropzone\">Drop MP3 folder or files here</div>
+      <div class=\"list\" id=\"local-folders\" style=\"margin-top:10px;\"></div>
+    </aside>
+
+    <main class=\"main\" id=\"main\">
+      <header class=\"hdr\">
+        <input class=\"search\" id=\"global-search\" placeholder=\"Search tracks, artists, albums, vault...\" />
+                <button class=\"btn\" id=\"open-settings\">Settings</button>
+        <button class=\"btn\" id=\"toggle-sidebar\">Sidebar</button>
+      </header>
+      <div id=\"dynamic\"></div>
+    </main>
+
+    <section class=\"right\" id=\"right\">
+      <div class=\"panel-tabs\">
+        <button class=\"tab active\" data-tab=\"lyrics\">Lyrics</button>
+        <button class=\"tab\" data-tab=\"visuals\">Visuals</button>
+      </div>
+      <div class=\"now\">
+        <img id=\"right-cover\" src=\"https://qlynk.vercel.app/quicklink-logo.png\" />
+        <div id=\"right-title\" style=\"font-size:18px; font-weight:800;\">Not Playing</div>
+        <div id=\"right-artist\" class=\"small\">Qlynk Node</div>
+      </div>
+            <div class=\"lyrics\" id=\"lyrics\"><div class=\"small\">Lyrics will appear here.</div></div>
+            <div class=\"visuals\" id=\"visuals\" style=\"display:none;\"><canvas id=\"viz\"></canvas></div>
+            <div class=\"friends-shell\" id=\"friends-shell\">
+                <div class=\"panel-head\">
+                    <strong>Friend Activity</strong>
+                    <button class=\"mode-btn\" id=\"presence-toggle\">Hide</button>
+                </div>
+                <div style=\"display:flex; gap:8px; align-items:center; margin-bottom:8px;\">
+                    <span class=\"small\">Profile</span>
+                    <select id=\"presence-self\" style=\"flex:1; background:#171717; color:#f4f4f4; border:1px solid #2f2f2f; border-radius:8px; padding:6px;\">
+                        <option value=\"Admin\">Admin</option>
+                        <option value=\"User2\">User2</option>
+                        <option value=\"User3\">User3</option>
+                    </select>
+                </div>
+                <div class=\"presence-list\" id=\"presence-list\"></div>
+            </div>
+            <div class=\"sleep-shell\">
+                <div class=\"panel-head\">
+                    <strong>Sleep Timer</strong>
+                    <button class=\"mode-btn\" id=\"sleep-cancel\">Cancel</button>
+                </div>
+                <div class=\"sleep-grid\">
+                    <button class=\"btn\" data-sleep=\"15\">15m</button>
+                    <button class=\"btn\" data-sleep=\"30\">30m</button>
+                    <button class=\"btn\" data-sleep=\"60\">1h</button>
+                    <button class=\"btn\" data-sleep=\"120\">2h</button>
+                </div>
+                <div class=\"sleep-status\" id=\"sleep-status\"><span>Timer idle</span><span>Ready</span></div>
+            </div>
+            <div style=\"padding:12px; border-top:1px solid #2b2b2b;\">
+                <div class=\"small\" style=\"margin-bottom:8px;\">10-Band EQ (Vault/Local)</div>
+                <div class=\"eq-grid\" id=\"eq-grid\"></div>
+                <div class=\"small\" style=\"margin:10px 0 6px;\">Crossfade Profile</div>
+                <div style=\"display:flex; gap:6px;\">
+                    <button class=\"mode-btn\" data-xfade=\"off\">Off</button>
+                    <button class=\"mode-btn\" data-xfade=\"smooth\">Smooth</button>
+                    <button class=\"mode-btn\" data-xfade=\"smart\">Smart BPM</button>
+                </div>
+            </div>
+    </section>
+
+    <footer class=\"player\">
+      <div class=\"p-left\">
+        <img id=\"player-cover\" src=\"https://qlynk.vercel.app/quicklink-logo.png\" />
+        <div>
+          <div id=\"player-title\" style=\"font-weight:700; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;\">No Track</div>
+          <div id=\"player-artist\" class=\"small\">Qlynk</div>
+        </div>
+      </div>
+      <div class=\"p-mid\">
+        <div class=\"ctrls\">
+                    <button class=\"mode-btn\" id=\"shuffle-btn\">Shuffle Off</button>
+                    <button class=\"mode-btn\" id=\"repeat-btn\">Repeat Off</button>
+          <button class=\"icon-btn\" id=\"prev\" aria-label=\"Previous\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\" style=\"width:18px;height:18px;display:block;fill:currentColor;\"><path d=\"M6 6h2v12H6zm3 6l9 6V6z\"/></svg></button>
+          <button class=\"icon-btn play\" id=\"play\" aria-label=\"Play / Pause\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\" style=\"width:18px;height:18px;display:block;fill:currentColor;\"><path d=\"M8 5v14l11-7z\"/></svg></button>
+          <button class=\"icon-btn\" id=\"next\" aria-label=\"Next\"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\" focusable=\"false\" style=\"width:18px;height:18px;display:block;fill:currentColor;\"><path d=\"M16 6h2v12h-2zm-9 6l9 6V6z\"/></svg></button>
+                    <button class=\"mode-btn\" id=\"add-current\">+ Playlist</button>
+        </div>
+        <div class=\"prog\">
+          <span id=\"cur\">0:00</span>
+          <div class=\"bar\" id=\"seek\"><div class=\"fill\" id=\"seek-fill\"></div></div>
+          <span id=\"dur\">0:00</span>
+        </div>
+      </div>
+      <div class=\"p-right\">
+        <span class=\"small\">Vol</span>
+        <input id=\"vol\" class=\"vol\" type=\"range\" min=\"0\" max=\"1\" step=\"0.01\" value=\"1\" />
+      </div>
+    </footer>
+  </div>
+
+    <audio id=\"audio\" crossorigin=\"anonymous\"></audio>
+    <audio id=\"audio-next\" crossorigin=\"anonymous\" preload=\"auto\" style=\"display:none;\"></audio>
+        <div class=\"settings-overlay\" id=\"settings-overlay\" aria-hidden=\"true\">
+            <section class=\"settings-modal\" role=\"dialog\" aria-modal=\"true\" aria-label=\"Qlynk-tify settings\">
+                <div class=\"settings-head\">
+                    <strong>Qlynk-tify Settings</strong>
+                    <button class=\"btn\" id=\"close-settings\">Close</button>
+                </div>
+                <div class=\"settings-tabs\">
+                    <button class=\"settings-tab active\" data-set-tab=\"general\">General</button>
+                    <button class=\"settings-tab\" data-set-tab=\"shortcuts\">Keyboard Shortcuts</button>
+                </div>
+                <div class=\"settings-body\">
+                    <div class=\"settings-pane active\" data-set-pane=\"general\">
+                        <div class=\"small\" style=\"margin-bottom:12px;\">Core playback and UI preferences.</div>
+                        <div class=\"kbd-grid\">
+                            <div class=\"kbd-row\"><span>Default Visual Tab</span><span><button class=\"mode-btn\" id=\"set-tab-lyrics\">Lyrics</button> <button class=\"mode-btn\" id=\"set-tab-visuals\">Visuals</button></span></div>
+                            <div class=\"kbd-row\"><span>Crossfade Profile</span><span id=\"settings-xfade-text\" class=\"small\">smooth</span></div>
+                            <div class=\"kbd-row\"><span>Shuffle Mode</span><span id=\"settings-shuffle-text\" class=\"small\">off</span></div>
+                            <div class=\"kbd-row\"><span>Repeat Mode</span><span id=\"settings-repeat-text\" class=\"small\">off</span></div>
+                        </div>
+                    </div>
+                    <div class=\"settings-pane\" data-set-pane=\"shortcuts\">
+                        <div class=\"small\" style=\"margin-bottom:12px;\">Built-in keyboard controls:</div>
+                        <div class=\"kbd-grid\">
+                            <div class=\"kbd-row\"><span>Play / Pause</span><kbd>Space</kbd></div>
+                            <div class=\"kbd-row\"><span>Next Track</span><kbd>Shift + Right</kbd></div>
+                            <div class=\"kbd-row\"><span>Previous Track</span><kbd>Shift + Left</kbd></div>
+                            <div class=\"kbd-row\"><span>Seek Forward</span><kbd>Right</kbd></div>
+                            <div class=\"kbd-row\"><span>Seek Back</span><kbd>Left</kbd></div>
+                            <div class=\"kbd-row\"><span>Open Settings</span><kbd>,</kbd></div>
+                            <div class=\"kbd-row\"><span>Close Settings</span><kbd>Esc</kbd></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+        <div class=\"toast-wrap\" id=\"toast-wrap\"></div>
+        <div class=\"context-menu\" id=\"context-menu\"></div>
+
+  <script>
+    const state = {
+      spotify: {
+        sdkReady: false,
+        connected: false,
+        player: null,
+        deviceId: null,
+        token: null,
+        current: null,
+        positionMs: 0,
+        durationMs: 0,
+        paused: true,
+        analysis: null
+      },
+      vaultTracks: [],
+      localTracks: [],
+            localFolders: [],
+      queue: [],
+      queueIndex: -1,
+      currentTrack: null,
+      mode: 'home',
+      rightTab: 'lyrics',
+            shuffleMode: 0,
+            repeatMode: 0,
+            customPlaylists: {},
+        trackRegistry: new Map(),
+        contextMenu: { track: null },
+        presence: { profiles: {}, interval: null, hidden: false },
+        sleepTimer: { interval: null, deadline: 0 },
+        pwa: { registered: false },
+            crossfade: { armed: false, inProgress: false, triggerSeconds: 5, profile: 'smooth' },
+            identity: { name: localStorage.getItem('qlynktify_identity') || 'Admin' },
+            menuNav: { index: 0, items: [] },
+      lyrics: [],
+      lyricsIndex: -1,
+      mesh: { r: 52, g: 88, b: 170 },
+            visualizer: { ctx: null, analyser: null, data: null, raf: null },
+            eq: { ctx: null, source: null, filters: [] }
+    };
+
+        const STORAGE_KEYS = {
+            queue: 'qlynktify_v7_queue',
+            queueIndex: 'qlynktify_v7_queue_idx',
+            currentTrack: 'qlynktify_v7_current_track',
+            customPlaylists: 'qlynktify_v7_custom_playlists'
+        };
+
+        const FS_DB_NAME = 'qlynktify_v7_local_fs';
+        const fsDbPromise = new Promise((resolve, reject) => {
+            const req = indexedDB.open(FS_DB_NAME, 1);
+            req.onupgradeneeded = () => {
+                req.result.createObjectStore('folders', { keyPath: 'name' });
+            };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+
+    const el = {
+      dynamic: document.getElementById('dynamic'),
+      search: document.getElementById('global-search'),
+      right: document.getElementById('right'),
+      rightCover: document.getElementById('right-cover'),
+      rightTitle: document.getElementById('right-title'),
+      rightArtist: document.getElementById('right-artist'),
+      lyrics: document.getElementById('lyrics'),
+      visuals: document.getElementById('visuals'),
+      viz: document.getElementById('viz'),
+      playerCover: document.getElementById('player-cover'),
+      playerTitle: document.getElementById('player-title'),
+      playerArtist: document.getElementById('player-artist'),
+      play: document.getElementById('play'),
+      prev: document.getElementById('prev'),
+      next: document.getElementById('next'),
+      cur: document.getElementById('cur'),
+      dur: document.getElementById('dur'),
+      seek: document.getElementById('seek'),
+      seekFill: document.getElementById('seek-fill'),
+      vol: document.getElementById('vol'),
+      audio: document.getElementById('audio'),
+    audioNext: document.getElementById('audio-next'),
+      spotifyStatus: document.getElementById('spotify-status'),
+      spotifyPlaylists: document.getElementById('spotify-playlists'),
+      vaultPlaylists: document.getElementById('vault-playlists'),
+            customPlaylists: document.getElementById('custom-playlists'),
+      localFolders: document.getElementById('local-folders'),
+      pickFolder: document.getElementById('pick-folder'),
+            dropzone: document.getElementById('dropzone'),
+            toastWrap: document.getElementById('toast-wrap'),
+            shuffleBtn: document.getElementById('shuffle-btn'),
+            repeatBtn: document.getElementById('repeat-btn'),
+            addCurrentBtn: document.getElementById('add-current'),
+            createPlaylistBtn: document.getElementById('create-playlist'),
+            syncPlaylistBtn: document.getElementById('sync-playlist'),
+                eqGrid: document.getElementById('eq-grid'),
+                contextMenu: document.getElementById('context-menu'),
+                presenceList: document.getElementById('presence-list'),
+                presenceToggle: document.getElementById('presence-toggle'),
+                sleepStatus: document.getElementById('sleep-status'),
+                sleepCancel: document.getElementById('sleep-cancel'),
+                navOffline: document.getElementById('nav-offline'),
+                presenceSelf: document.getElementById('presence-self')
+    };
+
+        const qlynktifyPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M8 5v14l11-7z"/></svg>';
+        const qlynktifyPauseIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M7 5h4v14H7zm6 0h4v14h-4z"/></svg>';
+        const qlynktifyPrevIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M6 6h2v12H6zm3 6l9 6V6z"/></svg>';
+        const qlynktifyNextIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M16 6h2v12h-2zm-9 6l9 6V6z"/></svg>';
+
+        function setFooterPlayButton(isPlaying) {
+            el.play.innerHTML = isPlaying ? qlynktifyPauseIcon : qlynktifyPlayIcon;
+        }
+
+    function fmt(sec) {
+      if (!sec || Number.isNaN(sec)) return '0:00';
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
+    }
+
+        function resolveTrackArtwork(track) {
+            return track?.artwork || track?.thumbnail || 'https://qlynk.vercel.app/quicklink-logo.png';
+        }
+
+    function notify(msg) {
+      console.log('[Qlynk-tify]', msg);
+    }
+
+        function showToast(msg, kind = 'ok', life = 3200) {
+            if (!el.toastWrap) return;
+            const node = document.createElement('div');
+            node.className = `toast ${kind === 'warn' ? 'warn' : kind === 'err' ? 'err' : ''}`;
+            node.textContent = msg;
+            el.toastWrap.appendChild(node);
+            setTimeout(() => node.remove(), life);
+        }
+
+        function savePlaybackState() {
+            try {
+                localStorage.setItem(STORAGE_KEYS.queue, JSON.stringify(state.queue || []));
+                localStorage.setItem(STORAGE_KEYS.queueIndex, String(Number(state.queueIndex || -1)));
+                localStorage.setItem(STORAGE_KEYS.currentTrack, JSON.stringify(state.currentTrack || null));
+            } catch (e) {}
+        }
+
+        function restorePlaybackState() {
+            try {
+                const q = JSON.parse(localStorage.getItem(STORAGE_KEYS.queue) || '[]');
+                const idx = Number(localStorage.getItem(STORAGE_KEYS.queueIndex) || '-1');
+                const cur = JSON.parse(localStorage.getItem(STORAGE_KEYS.currentTrack) || 'null');
+                state.queue = Array.isArray(q) ? q : [];
+                state.queueIndex = Number.isFinite(idx) ? idx : -1;
+                state.currentTrack = cur && typeof cur === 'object' ? cur : null;
+                registerTracks(state.queue);
+                if (state.currentTrack) registerTracks([state.currentTrack]);
+            } catch (e) {
+                state.queue = [];
+                state.queueIndex = -1;
+                state.currentTrack = null;
+            }
+        }
+
+        function saveCustomPlaylistsLocal() {
+            try {
+                localStorage.setItem(STORAGE_KEYS.customPlaylists, JSON.stringify(state.customPlaylists || {}));
+            } catch (e) {}
+        }
+
+        function restoreCustomPlaylistsLocal() {
+            try {
+                const raw = JSON.parse(localStorage.getItem(STORAGE_KEYS.customPlaylists) || '{}');
+                state.customPlaylists = raw && typeof raw === 'object' ? raw : {};
+                registerTracks(Object.values(state.customPlaylists).flat());
+            } catch (e) {
+                state.customPlaylists = {};
+            }
+        }
+
+        async function persistFolderHandle(handle) {
+            try {
+                const db = await fsDbPromise;
+                const tx = db.transaction('folders', 'readwrite');
+                tx.objectStore('folders').put({ name: handle.name, handle });
+            } catch (e) {
+                showToast('Could not persist folder permission', 'warn');
+            }
+        }
+
+        async function restoreFolderHandles() {
+            try {
+                const db = await fsDbPromise;
+                const tx = db.transaction('folders', 'readonly');
+                const req = tx.objectStore('folders').getAll();
+                const rows = await new Promise(resolve => {
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                });
+                for (const row of rows) {
+                    const handle = row.handle;
+                    if (!handle) continue;
+                    try {
+                        const q = handle.queryPermission ? await handle.queryPermission({ mode: 'read' }) : 'granted';
+                        const granted = q === 'granted' || (handle.requestPermission && (await handle.requestPermission({ mode: 'read' })) === 'granted');
+                        if (!granted) continue;
+                        if (!state.localFolders.find(h => h.name === handle.name)) state.localFolders.push(handle);
+                        await linkFolderHandle(handle, true);
+                    } catch (e) {}
+                }
+            } catch (e) {}
+        }
+
+        const OFFLINE_DB = 'qlynktify_v7_offline_tracks';
+        const offlineDbPromise = new Promise((resolve, reject) => {
+            const req = indexedDB.open(OFFLINE_DB, 1);
+            req.onupgradeneeded = () => req.result.createObjectStore('tracks', { keyPath: 'id' });
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        });
+
+        async function saveTrackOffline(track) {
+            if (!track) return;
+            try {
+                let blob = null;
+                if (track.source === 'local' && track.file) {
+                    blob = track.file;
+                } else if (track.source === 'vault' && track.slug) {
+                    const token = await safeFetch(`/api/qlynktify/generate_stream/${encodeURIComponent(track.slug)}`);
+                    const res = await fetch(`/stream/audio/qlynktify/${token.stream_token}`);
+                    if (res.ok) blob = await res.blob();
+                }
+                if (!blob) {
+                    showToast('Offline save supported for Vault/Local tracks only', 'warn');
+                    return;
+                }
+                const db = await offlineDbPromise;
+                const tx = db.transaction('tracks', 'readwrite');
+                const offlineId = String(track.track_id || track.slug || `${Date.now()}`);
+                tx.objectStore('tracks').put({
+                    id: offlineId,
+                    blob,
+                    meta: {
+                        title: track.title || '',
+                        artist: track.artist || '',
+                        artwork: track.artwork || '',
+                        source: track.source || '',
+                        slug: track.slug || ''
+                    },
+                    savedAt: Date.now()
+                });
+                if (navigator.serviceWorker?.controller && track.source === 'vault' && track.slug) {
+                    navigator.serviceWorker.controller.postMessage({ type: 'cache-url', url: `/f/${track.slug}` });
+                }
+                showToast('Saved for offline playback');
+            } catch (e) {
+                showToast('Offline save failed', 'err');
+            }
+        }
+
+    function safeFetch(url, opts = {}) {
+      return fetch(url, opts).then(async r => {
+        const ct = (r.headers.get('content-type') || '').toLowerCase();
+        let body = null;
+        if (ct.includes('application/json')) {
+          body = await r.json();
+        } else {
+          body = await r.text();
+        }
+        if (!r.ok) {
+          const err = new Error(typeof body === 'string' ? body.slice(0, 240) : JSON.stringify(body));
+          err.status = r.status;
+          err.payload = body;
+                    if (r.status === 429) showToast('Spotify API limit reached. Switching to Vault mode.', 'warn', 5000);
+                    if (r.status === 403) showToast('Access denied. You need a Qlynk Pass.', 'err');
+                    if (r.status === 401) showToast('Session expired. Refreshing auth...', 'warn');
+                    if (r.status >= 500) showToast('Server error while fetching data', 'err');
+          throw err;
+        }
+        return body;
+      });
+    }
+
+    function readSessionCache(bucket, key, maxAgeMs = 10 * 60 * 1000) {
+      try {
+        const raw = sessionStorage.getItem(`${bucket}:${key}`);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return null;
+        if (Date.now() - Number(parsed.savedAt || 0) > maxAgeMs) return null;
+        return parsed.value;
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function writeSessionCache(bucket, key, value) {
+      try {
+        sessionStorage.setItem(`${bucket}:${key}`, JSON.stringify({ savedAt: Date.now(), value }));
+      } catch (e) {}
+    }
+
+    function registerTracks(tracks = []) {
+      for (const track of tracks || []) {
+        if (!track || track.track_id == null) continue;
+        state.trackRegistry.set(String(track.track_id), track);
+      }
+    }
+
+    function findTrack(trackId) {
+      if (trackId == null) return null;
+      return state.trackRegistry.get(String(trackId)) || null;
+    }
+
+
+    function bindContextMenuActions() {
+      if (state._contextMenuBound) return;
+      state._contextMenuBound = true;
+      document.addEventListener('contextmenu', ev => {
+        const node = ev.target.closest('[data-id]');
+        if (!node) return;
+        ev.preventDefault();
+        const track = findTrack(node.getAttribute('data-id'));
+        if (!track) return;
+        state.contextMenu.track = track;
+        const names = Object.keys(state.customPlaylists || {}).sort((a, b) => a.localeCompare(b));
+        const submenu = names.length
+          ? `<div class="context-subtitle">Add to Playlist</div><div class="context-submenu">${names.map(name => `<button class="context-item" data-action="playlist" data-playlist="${name}"><span>${name}</span><span class="small">Mix</span></button>`).join('')}</div>`
+          : `<div class="context-subtitle">Add to Playlist</div><div class="context-submenu"><div class="small">No custom playlists yet.</div></div>`;
+        el.contextMenu.innerHTML = `
+          <button class="context-item" data-action="play-next"><span>Play Next</span><span class="small">Insert after current</span></button>
+          <button class="context-item" data-action="queue-end"><span>Add to Queue</span><span class="small">Append</span></button>
+          <div class="context-divider"></div>
+          ${submenu}
+          <div class="context-divider"></div>
+          <button class="context-item" data-action="offline"><span>Save to Local Edge</span><span class="small">IndexedDB</span></button>
+        `;
+        el.contextMenu.style.left = `${Math.min(window.innerWidth - 260, Math.max(12, ev.clientX))}px`;
+        el.contextMenu.style.top = `${Math.min(window.innerHeight - 260, Math.max(12, ev.clientY))}px`;
+        el.contextMenu.classList.add('show');
+      });
+      el.contextMenu.addEventListener('click', async ev => {
+        const btn = ev.target.closest('[data-action]');
+        if (!btn || !state.contextMenu.track) return;
+        const action = btn.getAttribute('data-action');
+        const playlist = btn.getAttribute('data-playlist') || '';
+        const track = state.contextMenu.track;
+        if (action === 'play-next') {
+          const insertAt = state.queueIndex >= 0 ? Math.min(state.queueIndex + 1, state.queue.length) : 0;
+          state.queue.splice(insertAt, 0, track);
+          savePlaybackState();
+          showToast(`Play next: ${track.title || 'track'}`);
+        } else if (action === 'queue-end') {
+          state.queue.push(track);
+          savePlaybackState();
+          showToast(`Queued: ${track.title || 'track'}`);
+        } else if (action === 'playlist' && playlist) {
+          state.customPlaylists[playlist] = state.customPlaylists[playlist] || [];
+          const exists = state.customPlaylists[playlist].some(row => String(row.track_id) === String(track.track_id));
+          if (!exists) state.customPlaylists[playlist].push(track);
+          saveCustomPlaylistsLocal();
+          renderCustomPlaylists();
+          showToast(`Added to ${playlist}`);
+        } else if (action === 'offline') {
+                    await saveTrackOffline(track);
+        }
+        el.contextMenu.classList.remove('show');
+      });
+      document.addEventListener('click', () => el.contextMenu.classList.remove('show'));
+            document.addEventListener('keydown', ev => {
+                if (!el.contextMenu.classList.contains('show')) return;
+                const items = Array.from(el.contextMenu.querySelectorAll('[data-action]'));
+                if (!items.length) return;
+                if (ev.key === 'Escape') {
+                    el.contextMenu.classList.remove('show');
+                    return;
+                }
+                if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+                    ev.preventDefault();
+                    const currentIndex = Math.max(0, state.menuNav.index || 0);
+                    const nextIndex = ev.key === 'ArrowDown' ? (currentIndex + 1) % items.length : (currentIndex - 1 + items.length) % items.length;
+                    state.menuNav.index = nextIndex;
+                    items.forEach((item, idx) => item.classList.toggle('focused', idx === nextIndex));
+                    items[nextIndex]?.focus?.();
+                    return;
+                }
+                if (ev.key === 'Enter') {
+                    ev.preventDefault();
+                    const current = items[state.menuNav.index || 0];
+                    current?.click();
+                }
+            });
+    }
+
+        function setCrossfadeProfile(profile) {
+            state.crossfade.profile = profile;
+            state.crossfade.armed = false;
+            if (profile === 'off') state.crossfade.triggerSeconds = 0;
+            if (profile === 'smooth') state.crossfade.triggerSeconds = 5;
+            if (profile === 'smart') state.crossfade.triggerSeconds = 5;
+            document.querySelectorAll('[data-xfade]').forEach(btn => btn.classList.toggle('active', btn.getAttribute('data-xfade') === profile));
+            showToast(`Crossfade profile: ${profile}`);
+        }
+
+        async function syncPresenceIdentity() {
+            try {
+                localStorage.setItem('qlynktify_identity', state.identity.name);
+                await safeFetch('/api/qlynktify/presence', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user: state.identity.name,
+                        status: 'online',
+                        online: true,
+                        track: state.currentTrack ? {
+                            track_id: state.currentTrack.track_id || '',
+                            title: state.currentTrack.title || '',
+                            artist: state.currentTrack.artist || '',
+                            source: state.currentTrack.source || '',
+                            artwork: state.currentTrack.artwork || ''
+                        } : null
+                    })
+                });
+                await refreshPresence();
+            } catch (e) {}
+        }
+
+    async function refreshPresence() {
+      try {
+        const data = await safeFetch('/api/qlynktify/presence');
+        state.presence.profiles = data.profiles || {};
+        const names = Object.keys(state.presence.profiles);
+        if (!names.length) {
+          el.presenceList.innerHTML = '<div class="small">No live presence yet.</div>';
+          return;
+        }
+        el.presenceList.innerHTML = names.map(name => {
+          const row = state.presence.profiles[name] || {};
+          const track = row.track || {};
+          const live = !!row.online;
+          return `
+            <div class="presence-row">
+              <div class="presence-dot ${live ? 'on' : ''}"></div>
+              <div class="presence-meta">
+                <div style="display:flex; justify-content:space-between; gap:8px;"><strong>${name}</strong><span class="badge ${live ? 'offline-badge' : ''}">${live ? 'Live' : 'Idle'}</span></div>
+                <div class="presence-track">${track.title || 'Nothing playing'}</div>
+                <div class="presence-note">${track.artist || 'Unknown artist'} · ${row.status || 'listening'}</div>
+              </div>
+              <div class="presence-time">${new Date(Number(row.updated_at || Date.now())).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+            </div>
+          `;
+        }).join('');
+      } catch (e) {
+        el.presenceList.innerHTML = '<div class="small">Presence unavailable.</div>';
+      }
+    }
+
+    function cancelSleepTimer() {
+      if (state.sleepTimer.interval) clearInterval(state.sleepTimer.interval);
+      state.sleepTimer.interval = null;
+      state.sleepTimer.deadline = 0;
+      if (el.sleepStatus) el.sleepStatus.innerHTML = '<span>Timer idle</span><span>Ready</span>';
+    }
+
+    function startSleepTimer(minutes) {
+      cancelSleepTimer();
+      const total = Math.max(1, Number(minutes || 0));
+      state.sleepTimer.deadline = Date.now() + total * 60 * 1000;
+      if (el.sleepStatus) el.sleepStatus.innerHTML = `<span>Sleep timer armed</span><span>${total}m</span>`;
+      state.sleepTimer.interval = setInterval(() => {
+        const remaining = state.sleepTimer.deadline - Date.now();
+        if (remaining <= 0) {
+          cancelSleepTimer();
+          fadeOutPlayback(5000).catch(() => null);
+          return;
+        }
+        const mins = Math.floor(remaining / 60000);
+        const secs = Math.floor((remaining % 60000) / 1000);
+        if (el.sleepStatus) el.sleepStatus.innerHTML = `<span>Countdown active</span><span>${mins}:${secs < 10 ? '0' : ''}${secs}</span>`;
+      }, 1000);
+    }
+
+    async function fadeOutPlayback(durationMs = 5000) {
+      const steps = 20;
+      const stepMs = Math.max(80, Math.floor(durationMs / steps));
+      const baseVolume = Number(el.vol.value || 1);
+      for (let i = steps; i >= 0; i--) {
+        const gain = i / steps;
+        el.audio.volume = baseVolume * gain;
+        el.audioNext.volume = baseVolume * gain;
+        if (state.spotify.player) {
+          try { await state.spotify.player.setVolume(baseVolume * gain); } catch (e) {}
+        }
+        await new Promise(resolve => setTimeout(resolve, stepMs));
+      }
+      try { el.audio.pause(); } catch (e) {}
+      try { el.audioNext.pause(); } catch (e) {}
+      if (state.spotify.connected && state.spotify.deviceId) {
+        await safeFetch(`/api/spotify/player/pause?device_id=${encodeURIComponent(state.spotify.deviceId)}`, { method: 'PUT' }).catch(() => null);
+      }
+            setFooterPlayButton(false);
+      showToast('Sleep timer completed');
+    }
+
+    function registerPwaServiceWorker() {
+      if (state.pwa.registered || !('serviceWorker' in navigator) || !window.Blob || !window.URL?.createObjectURL) return;
+            const swCode = `
+                const CACHE_NAME = 'qlynktify-v7-shell';
+                const SHELL = ['/', '/qlynk-tify', 'https://qlynk.vercel.app/quicklink-logo.png'];
+                self.addEventListener('install', event => {
+                    event.waitUntil((async () => {
+                        const cache = await caches.open(CACHE_NAME);
+                        await Promise.all(SHELL.map(async u => { try { await cache.add(new Request(u, { mode: 'no-cors' })); } catch (e) {} }));
+                        await self.skipWaiting();
+                    })());
+                });
+                self.addEventListener('activate', event => {
+                    event.waitUntil((async () => {
+                        const keys = await caches.keys();
+                        await Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k)));
+                        await self.clients.claim();
+                    })());
+                });
+                self.addEventListener('message', event => {
+                    const data = event.data || {};
+                    if (data.type === 'cache-url' && data.url) {
+                        event.waitUntil((async () => {
+                            const cache = await caches.open(CACHE_NAME);
+                            try { await cache.add(data.url); } catch (e) {}
+                        })());
+                    }
+                });
+                self.addEventListener('fetch', event => {
+                    if (event.request.method !== 'GET') return;
+                    event.respondWith((async () => {
+                        const cache = await caches.open(CACHE_NAME);
+                        const hit = await cache.match(event.request);
+                        if (hit) return hit;
+                        try {
+                            const fresh = await fetch(event.request);
+                            if (fresh && fresh.status < 400) cache.put(event.request, fresh.clone()).catch(() => null);
+                            return fresh;
+                        } catch (e) {
+                            return hit || Response.error();
+                        }
+                    })());
+                });
+            `;
+      try {
+        const blob = new Blob([swCode], { type: 'text/javascript' });
+        const swUrl = URL.createObjectURL(blob);
+        navigator.serviceWorker.register(swUrl, { scope: '/' }).then(() => { state.pwa.registered = true; }).catch(() => null);
+      } catch (e) {}
+    }
+
+    async function spotifyStatus() {
+      try {
+        const s = await safeFetch('/api/spotify/status');
+        state.spotify.connected = !!s.connected;
+        el.spotifyStatus.textContent = s.connected ? 'Spotify connected' : 'Spotify disconnected';
+      } catch (e) {
+        el.spotifyStatus.textContent = 'Spotify status unavailable';
+      }
+    }
+
+    async function spotifyRefresh() {
+      try {
+        await safeFetch('/api/spotify/refresh', { method: 'POST' });
+        await spotifyStatus();
+      } catch (e) {
+        notify('Spotify refresh failed');
+      }
+    }
+
+    async function loadVault() {
+      try {
+        const data = await safeFetch('/api/qlynktify/library');
+        state.vaultTracks = data.tracks || [];
+                registerTracks(state.vaultTracks);
+      } catch (e) {
+        state.vaultTracks = [];
+      }
+    }
+
+    async function loadSpotifyPlaylists() {
+      try {
+        const data = await safeFetch('/api/spotify/playlists');
+        const items = data.items || [];
+        el.spotifyPlaylists.innerHTML = items.slice(0, 15).map(pl => {
+          const img = pl.images && pl.images[0] ? pl.images[0].url : 'https://qlynk.vercel.app/quicklink-logo.png';
+          return `<div class=\"item\"><img class=\"thumb\" src=\"${img}\"><div><div style=\"font-size:12px;font-weight:700;\">${pl.name}</div><div class=\"small\">${pl.tracks?.total || 0} tracks</div></div><span class=\"badge\">Spotify</span></div>`;
+        }).join('');
+      } catch (e) {
+        el.spotifyPlaylists.innerHTML = '<div class=\"small\">Playlists unavailable</div>';
+      }
+    }
+
+    async function loadSpotifyTopTracks() {
+      try {
+        const data = await safeFetch('/api/spotify/top-tracks');
+                const tracks = (data.items || []).map(row => ({
+          track_id: row.id,
+          title: row.name,
+          artist: (row.artists || []).map(a => a.name).join(', ') || 'Unknown Artist',
+          album: row.album?.name || 'Spotify',
+          artwork: row.album?.images?.[0]?.url || 'https://qlynk.vercel.app/quicklink-logo.png',
+          spotify_uri: row.uri,
+          source: 'spotify',
+          duration_ms: row.duration_ms || 0
+        }));
+                registerTracks(tracks);
+                return tracks;
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function vaultAutoPlaylists() {
+      const recent = [...state.vaultTracks].slice(0, 12);
+      const additions = [...state.vaultTracks].slice(0, 24);
+      return {
+        'Vault Additions': additions,
+        'Jump Back In': recent
+      };
+    }
+
+    function setNow(track) {
+            const art = resolveTrackArtwork(track);
+      el.playerCover.src = art;
+      el.rightCover.src = art;
+      el.playerTitle.textContent = track.title || 'Untitled';
+      el.rightTitle.textContent = track.title || 'Untitled';
+      el.playerArtist.textContent = track.artist || 'Unknown Artist';
+      el.rightArtist.textContent = track.artist || 'Unknown Artist';
+      updateMeshFromImage(art);
+    }
+
+    async function updateMeshFromImage(src) {
+      try {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = src;
+        await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+        const c = document.createElement('canvas');
+        const x = c.getContext('2d');
+        c.width = 64; c.height = 64;
+        x.drawImage(img, 0, 0, 64, 64);
+        const d = x.getImageData(0, 0, 64, 64).data;
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          r += d[i]; g += d[i + 1]; b += d[i + 2]; n += 1;
+        }
+        r = Math.round(r / n); g = Math.round(g / n); b = Math.round(b / n);
+        document.documentElement.style.setProperty('--mesh-a', `rgb(${r},${g},${b})`);
+        document.documentElement.style.setProperty('--mesh-b', `rgb(${Math.max(30, 255-r)},${Math.max(30, 255-g)},${Math.max(30, 255-b)})`);
+        document.documentElement.style.setProperty('--mesh-c', `rgb(${Math.max(10, g)},${Math.max(10, b)},${Math.max(10, r)})`);
+      } catch (e) {
+      }
+    }
+
+    function renderVaultPlaylists() {
+      const p = vaultAutoPlaylists();
+      el.vaultPlaylists.innerHTML = Object.keys(p).map(name =>
+        `<div class=\"item\" data-pl=\"${name}\"><div class=\"avatar\"></div><div><div style=\"font-size:12px;font-weight:700;\">${name}</div><div class=\"small\">${p[name].length} tracks</div></div><span class=\"badge\">Vault</span></div>`
+      ).join('');
+
+      Array.from(el.vaultPlaylists.querySelectorAll('.item')).forEach(node => {
+        node.addEventListener('click', () => {
+          const key = node.getAttribute('data-pl');
+          state.queue = [...(p[key] || [])];
+          state.queueIndex = -1;
+          renderQueueView();
+        });
+      });
+    }
+
+        function renderCustomPlaylists() {
+            const names = Object.keys(state.customPlaylists || {});
+            if (!names.length) {
+                el.customPlaylists.innerHTML = '<div class="small">No custom playlists yet.</div>';
+                return;
+            }
+            el.customPlaylists.innerHTML = names.map(name => {
+                const arr = state.customPlaylists[name] || [];
+                return `<div class="item" data-cpl="${name}"><div class="avatar"></div><div><div style="font-size:12px;font-weight:700;">${name}</div><div class="small">${arr.length} tracks</div></div><span class="badge">Mix</span></div>`;
+            }).join('');
+            Array.from(el.customPlaylists.querySelectorAll('.item')).forEach(node => {
+                node.addEventListener('click', () => {
+                    const name = node.getAttribute('data-cpl');
+                    const tracks = state.customPlaylists[name] || [];
+                    state.queue = [...tracks];
+                    state.queueIndex = -1;
+                    savePlaybackState();
+                    renderQueueView();
+                });
+            });
+        }
+
+        function createCustomPlaylist() {
+            const name = (prompt('Playlist name?') || '').trim();
+            if (!name) return;
+            if (!state.customPlaylists[name]) state.customPlaylists[name] = [];
+            saveCustomPlaylistsLocal();
+            renderCustomPlaylists();
+            showToast(`Playlist created: ${name}`);
+        }
+
+        function addCurrentToCustomPlaylist() {
+            if (!state.currentTrack) {
+                showToast('No track selected', 'warn');
+                return;
+            }
+            const names = Object.keys(state.customPlaylists);
+            if (!names.length) {
+                showToast('Create a playlist first', 'warn');
+                return;
+            }
+            const name = (prompt(`Add to which playlist?\n${names.join(', ')}`) || '').trim();
+            if (!name || !state.customPlaylists[name]) return;
+            const exists = state.customPlaylists[name].find(t => String(t.track_id) === String(state.currentTrack.track_id));
+            if (!exists) state.customPlaylists[name].push(state.currentTrack);
+            saveCustomPlaylistsLocal();
+            renderCustomPlaylists();
+            showToast(`Added to ${name}`);
+        }
+
+        async function syncCustomPlaylistsToBackend() {
+            try {
+                await safeFetch('/api/qlynktify/playlists', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ playlists: state.customPlaylists })
+                });
+                showToast('Custom playlists synced');
+            } catch (e) {
+                showToast('Playlist sync failed', 'err');
+            }
+        }
+
+        async function loadCustomPlaylistsFromBackend() {
+            try {
+                const data = await safeFetch('/api/qlynktify/playlists');
+                if (data && data.playlists && typeof data.playlists === 'object') {
+                    state.customPlaylists = data.playlists;
+                    saveCustomPlaylistsLocal();
+                    renderCustomPlaylists();
+                }
+            } catch (e) {}
+        }
+
+    function renderHome(topSpotify) {
+      const jump = vaultAutoPlaylists()['Jump Back In'];
+      const add = vaultAutoPlaylists()['Vault Additions'];
+      const hero = jump[0] || add[0] || topSpotify[0] || {
+        title: 'Qlynk-tify', artist: 'Trinity Engine', artwork: 'https://qlynk.vercel.app/quicklink-logo.png'
+      };
+
+      el.dynamic.innerHTML = `
+        <section class=\"hero\">
+          <img src=\"${hero.artwork || 'https://qlynk.vercel.app/quicklink-logo.png'}\" />
+          <div>
+            <div class=\"small\">QLYNK-TIFY V7</div>
+            <h1 style=\"margin:4px 0 6px;\">Trinity Engine Home</h1>
+            <div class=\"small\">Unified Spotify + Vault + Local playback with dual visualizers.</div>
+                        <div style=\"margin-top:10px;\"><button class=\"btn green\" id=\"play-all-home\">Play All</button></div>
+          </div>
+        </section>
+
+        <h3 style=\"margin:18px 0 10px;\">Jump Back In</h3>
+        <div class=\"rows\" id=\"row-jump\"></div>
+
+        <h3 style=\"margin:20px 0 10px;\">Top Spotify Tracks</h3>
+        <div class=\"rows\" id=\"row-spotify\"></div>
+
+        <h3 style=\"margin:20px 0 10px;\">Vault Additions</h3>
+        <table class=\"table\" id=\"vault-table\"></table>
+      `;
+
+      const rowJump = document.getElementById('row-jump');
+      rowJump.innerHTML = jump.slice(0, 8).map(t => card(t, 'Vault')).join('');
+
+      const rowSpotify = document.getElementById('row-spotify');
+      rowSpotify.innerHTML = topSpotify.slice(0, 8).map(t => card(t, 'Spotify')).join('');
+
+      const table = document.getElementById('vault-table');
+      table.innerHTML = `<thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Source</th></tr></thead><tbody>${add.slice(0, 40).map((t, i) =>
+        `<tr data-id=\"${t.track_id}\"><td>${i + 1}</td><td>${t.title}</td><td>${t.artist}</td><td><span class=\"badge\">Vault</span></td></tr>`
+      ).join('')}</tbody>`;
+
+      wireTrackClicks(el.dynamic, [...jump, ...topSpotify, ...add]);
+            const playAllHome = document.getElementById('play-all-home');
+            if (playAllHome) {
+                playAllHome.addEventListener('click', () => {
+                    const all = [...jump, ...topSpotify, ...add];
+                    if (!all.length) return;
+                    state.queue = all;
+                    state.queueIndex = 0;
+                    savePlaybackState();
+                    playTrack(all[0]);
+                });
+            }
+    }
+
+    function card(t, src) {
+      return `<div class=\"card\" data-id=\"${t.track_id}\"><img src=\"${t.artwork || 'https://qlynk.vercel.app/quicklink-logo.png'}\"><div><div style=\"font-size:13px;font-weight:700;line-height:1.25;\">${t.title}</div><div class=\"small\">${t.artist}</div><div style=\"margin-top:6px;\"><span class=\"badge\">${src}</span></div></div></div>`;
+    }
+
+    function wireTrackClicks(root, allTracks) {
+      const map = new Map(allTracks.map(t => [String(t.track_id), t]));
+      root.querySelectorAll('[data-id]').forEach(node => {
+        node.addEventListener('click', () => {
+          const id = node.getAttribute('data-id');
+          const t = map.get(String(id));
+          if (!t) return;
+          state.queue = allTracks;
+          state.queueIndex = Math.max(0, allTracks.findIndex(x => String(x.track_id) === String(id)));
+                    savePlaybackState();
+          playTrack(t);
+        });
+      });
+    }
+
+    function renderQueueView() {
+      const q = state.queue;
+            registerTracks(q);
+      el.dynamic.innerHTML = `<h2 style=\"margin-top:0;\">Queue</h2><table class=\"table\"><thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Source</th></tr></thead><tbody>${q.map((t, i) =>
+        `<tr data-id=\"${t.track_id}\"><td>${i + 1}</td><td>${t.title}</td><td>${t.artist}</td><td><span class=\"badge\">${t.source}</span></td></tr>`).join('')}</tbody></table>`;
+      wireTrackClicks(el.dynamic, q);
+    }
+
+        async function renderOfflineLibrary() {
+            try {
+                const db = await offlineDbPromise;
+                const tx = db.transaction('tracks', 'readonly');
+                const req = tx.objectStore('tracks').getAll();
+                const rows = await new Promise(resolve => {
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => resolve([]);
+                });
+                const tracks = rows.map(row => ({
+                    track_id: row.id,
+                    title: row.meta?.title || 'Offline Track',
+                    artist: row.meta?.artist || 'Unknown Artist',
+                    artwork: row.meta?.artwork || 'https://qlynk.vercel.app/quicklink-logo.png',
+                    source: 'local',
+                    file: new File([row.blob], `${row.id}.mp3`, { type: row.blob.type || 'audio/mpeg' })
+                }));
+                registerTracks(tracks);
+                el.dynamic.innerHTML = `<h2 style=\"margin-top:0;\">Offline Library</h2><div class=\"small\" style=\"margin-bottom:10px;\">${tracks.length} cached tracks</div><div class=\"search-results\">${tracks.map(t => `<div class=\"sr-item\" data-id=\"${t.track_id}\"><img src=\"${t.artwork}\"><div><div style=\"font-size:13px;font-weight:700;\">${t.title}</div><div class=\"small\">${t.artist}</div></div><span class=\"badge\">Offline</span></div>`).join('')}</div>`;
+                wireTrackClicks(el.dynamic, tracks);
+            } catch (e) {
+                el.dynamic.innerHTML = `<h2 style=\"margin-top:0;\">Offline Library</h2><div class=\"small\">Offline cache unavailable.</div>`;
+            }
+        }
+
+    async function searchEverywhere(q) {
+      if (!q.trim()) return { mixed: [] };
+      const cached = readSessionCache('search', q.toLowerCase(), 15 * 60 * 1000);
+      if (cached) return cached;
+      try {
+        const data = await safeFetch(`/api/qlynktify/search?q=${encodeURIComponent(q)}`);
+        const vault = (data.vault || []).map(v => ({
+          track_id: v.track_id,
+          title: v.title,
+          artist: v.artist,
+                    artwork: v.artwork || v.thumbnail,
+          source: 'vault',
+          slug: v.slug
+        }));
+        const spotifyTracks = (data.spotify?.tracks || []).map(s => ({
+          track_id: s.id,
+          title: s.name,
+          artist: (s.artists || []).map(a => a.name).join(', '),
+          artwork: s.album?.images?.[0]?.url,
+          source: 'spotify',
+          spotify_uri: s.uri,
+          duration_ms: s.duration_ms || 0
+        }));
+        const payload = { mixed: [...vault, ...spotifyTracks] };
+        registerTracks(payload.mixed);
+        writeSessionCache('search', q.toLowerCase(), payload);
+        return payload;
+      } catch (e) {
+        return { mixed: [] };
+      }
+    }
+
+    async function renderSearch() {
+
+      const q = el.search.value.trim();
+      const result = await searchEverywhere(q);
+      const rows = result.mixed;
+      el.dynamic.innerHTML = `<h2 style=\"margin-top:0;\">Search Results</h2><div class=\"search-results\" id=\"sr\">${rows.map(r =>
+                `<div class=\"sr-item\" data-id=\"${r.track_id}\"><img src=\"${resolveTrackArtwork(r)}\" loading=\"lazy\" decoding=\"async\" referrerpolicy=\"no-referrer\" onerror=\"this.onerror=null;this.src='https://qlynk.vercel.app/quicklink-logo.png'\" alt=\"\"><div><div style=\"font-size:13px;font-weight:700;\">${r.title}</div><div class=\"small\">${r.artist}</div></div><span class=\"badge\">${r.source === 'spotify' ? '[Spotify]' : '[Vault]'}</span></div>`
+      ).join('')}</div>`;
+      wireTrackClicks(el.dynamic, rows);
+    }
+
+    function setActiveTab(tab) {
+      state.rightTab = tab;
+      document.querySelectorAll('.tab').forEach(n => n.classList.toggle('active', n.getAttribute('data-tab') === tab));
+            el.lyrics.style.display = tab === 'lyrics' ? 'block' : 'none';
+            el.visuals.style.display = tab === 'visuals' ? 'block' : 'none';
+    }
+
+    async function fetchLyrics(track) {
+      try {
+        const cacheKey = `${(track.title || '').toLowerCase()}::${(track.artist || '').toLowerCase()}`;
+        const cached = readSessionCache('lyrics', cacheKey, 30 * 60 * 1000);
+        if (cached) {
+          if (cached.synced) {
+            state.lyrics = cached.synced.split('\n').map(line => {
+              const m = line.match(/\[(\d{2}):(\d{2}\.\d{2})\](.*)/);
+              if (!m) return null;
+              return { t: Number(m[1]) * 60 + Number(m[2]), text: (m[3] || '').trim() };
+            }).filter(Boolean);
+            el.lyrics.innerHTML = state.lyrics.map((l, i) => `<div class="lyrics-line" id="ly-${i}">${l.text || '...'}</div>`).join('');
+            return;
+          }
+          if (cached.plain) {
+            state.lyrics = [];
+            el.lyrics.innerHTML = `<div style="white-space:pre-wrap;line-height:1.7;">${cached.plain}</div>`;
+            return;
+          }
+        }
+        const data = await safeFetch(`/api/qlynktify/lyrics?title=${encodeURIComponent(track.title || '')}&artist=${encodeURIComponent(track.artist || '')}`);
+        writeSessionCache('lyrics', cacheKey, data);
+        if (data.synced) {
+          state.lyrics = data.synced.split('\n').map(line => {
+            const m = line.match(/\[(\d{2}):(\d{2}\.\d{2})\](.*)/);
+            if (!m) return null;
+            return { t: Number(m[1]) * 60 + Number(m[2]), text: (m[3] || '').trim() };
+          }).filter(Boolean);
+          el.lyrics.innerHTML = state.lyrics.map((l, i) => `<div class="lyrics-line" id="ly-${i}">${l.text || '...'}</div>`).join('');
+          return;
+        }
+        if (data.plain) {
+          state.lyrics = [];
+          el.lyrics.innerHTML = `<div style="white-space:pre-wrap;line-height:1.7;">${data.plain}</div>`;
+          return;
+        }
+      } catch (e) {
+      }
+      state.lyrics = [];
+      el.lyrics.innerHTML = '<div class="small">Lyrics unavailable for this track.</div>';
+    }
+
+    function syncLyrics(sec) {
+
+      if (!state.lyrics.length) return;
+      let idx = -1;
+      for (let i = 0; i < state.lyrics.length; i++) {
+        if (sec >= state.lyrics[i].t) idx = i; else break;
+      }
+      if (idx === state.lyricsIndex) return;
+      state.lyricsIndex = idx;
+      document.querySelectorAll('.lyrics-line').forEach(n => n.classList.remove('active'));
+      const active = document.getElementById(`ly-${idx}`);
+      if (active) {
+        active.classList.add('active');
+        active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    }
+
+    function setupVisualizer() {
+      const canvas = el.viz;
+      const ctx = canvas.getContext('2d');
+      state.visualizer.ctx = ctx;
+      const ro = new ResizeObserver(() => {
+        const r = canvas.getBoundingClientRect();
+        canvas.width = Math.max(1, Math.floor(r.width));
+        canvas.height = Math.max(1, Math.floor(r.height));
+      });
+      ro.observe(canvas);
+
+            try {
+                const ac = new (window.AudioContext || window.webkitAudioContext)();
+                const source = ac.createMediaElementSource(el.audio);
+                const analyser = ac.createAnalyser();
+                analyser.fftSize = 256;
+
+                const eqFreqs = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+                let prev = source;
+                state.eq.filters = eqFreqs.map(freq => {
+                    const f = ac.createBiquadFilter();
+                    f.type = 'peaking';
+                    f.frequency.value = freq;
+                    f.Q.value = 1.0;
+                    f.gain.value = 0;
+                    prev.connect(f);
+                    prev = f;
+                    return f;
+                });
+                prev.connect(analyser);
+                analyser.connect(ac.destination);
+
+                state.eq.ctx = ac;
+                state.eq.source = source;
+                state.visualizer.analyser = analyser;
+                state.visualizer.data = new Uint8Array(analyser.frequencyBinCount);
+
+                el.eqGrid.innerHTML = state.eq.filters.map((f, i) => {
+                    const hz = f.frequency.value >= 1000 ? `${(f.frequency.value / 1000).toFixed(f.frequency.value >= 10000 ? 0 : 1)}k` : `${Math.round(f.frequency.value)}`;
+                    return `<div class="eq-band"><input type="range" min="-12" max="12" step="0.5" value="0" data-eq="${i}"><div class="small">${hz}</div></div>`;
+                }).join('');
+                Array.from(el.eqGrid.querySelectorAll('input[data-eq]')).forEach(sl => {
+                    sl.addEventListener('input', () => {
+                        const idx = Number(sl.getAttribute('data-eq'));
+                        const gain = Number(sl.value || '0');
+                        if (state.eq.filters[idx]) state.eq.filters[idx].gain.value = gain;
+                    });
+                });
+            } catch (e) {
+                el.eqGrid.innerHTML = '<div class="small">EQ unavailable in this browser.</div>';
+            }
+
+      function draw() {
+        state.visualizer.raf = requestAnimationFrame(draw);
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = '#0e0e0e';
+        ctx.fillRect(0, 0, w, h);
+
+        const spotifyMode = state.currentTrack && state.currentTrack.source === 'spotify';
+        if (spotifyMode && state.spotify.analysis) {
+          const seg = state.spotify.analysis.segments || [];
+          const cur = (state.spotify.positionMs || 0) / 1000;
+          let current = seg.find(s => cur >= s.start && cur <= (s.start + s.duration));
+          if (!current && seg.length) current = seg[Math.min(seg.length - 1, Math.floor(cur) % seg.length)];
+          const loud = current ? Math.max(0.1, (current.loudness_max + 60) / 60) : 0.35;
+          const bars = 64;
+          for (let i = 0; i < bars; i++) {
+            const x = (w / bars) * i;
+            const nh = (Math.sin((i + cur * 4) * 0.35) * 0.5 + 0.5) * h * loud;
+            ctx.fillStyle = `rgba(29,185,84,${0.35 + (i / bars) * 0.6})`;
+            ctx.fillRect(x, h - nh, (w / bars) - 2, nh);
+          }
+          return;
+        }
+
+        const an = state.visualizer.analyser;
+        if (!an) return;
+        const arr = state.visualizer.data;
+        an.getByteFrequencyData(arr);
+        const bars = arr.length;
+        for (let i = 0; i < bars; i++) {
+          const val = arr[i] / 255;
+          const x = (w / bars) * i;
+          const bh = Math.max(2, h * val);
+          ctx.fillStyle = `rgba(29,185,84,${0.25 + val * 0.8})`;
+          ctx.fillRect(x, h - bh, (w / bars) - 1.2, bh);
+        }
+      }
+      draw();
+    }
+
+    async function fetchSpotifyAnalysis(trackId) {
+      try {
+        state.spotify.analysis = await safeFetch(`/api/spotify/audio-analysis/${trackId}`);
+      } catch (e) {
+        state.spotify.analysis = null;
+      }
+    }
+
+    async function ensureSpotifySdk() {
+      if (state.spotify.sdkReady) return;
+      if (!window.Spotify) {
+        await new Promise(resolve => {
+          window.onSpotifyWebPlaybackSDKReady = resolve;
+        });
+      }
+
+      const tokenResp = await safeFetch('/api/spotify/status');
+      if (!tokenResp.connected) return;
+
+      state.spotify.player = new window.Spotify.Player({
+        name: 'Qlynk-tify Trinity Player',
+        getOAuthToken: async cb => {
+          try {
+            await safeFetch('/api/spotify/refresh', { method: 'POST' });
+                        const tokenData = await safeFetch('/api/spotify/token').catch(() => null);
+                        cb(tokenData && tokenData.access_token ? tokenData.access_token : '');
+          } catch (e) { cb(''); }
+        },
+        volume: 0.8
+      });
+
+      state.spotify.player.addListener('ready', ({ device_id }) => {
+        state.spotify.deviceId = device_id;
+        state.spotify.connected = true;
+      });
+
+      state.spotify.player.addListener('player_state_changed', st => {
+        if (!st) return;
+        state.spotify.paused = st.paused;
+        state.spotify.positionMs = st.position;
+        state.spotify.durationMs = st.duration;
+        if (state.currentTrack && state.currentTrack.source === 'spotify') {
+          el.cur.textContent = fmt(st.position / 1000);
+          el.dur.textContent = fmt(st.duration / 1000);
+          const p = st.duration ? (st.position / st.duration) * 100 : 0;
+          el.seekFill.style.width = `${Math.min(100, Math.max(0, p))}%`;
+          syncLyrics(st.position / 1000);
+                    setFooterPlayButton(!st.paused);
+        }
+      });
+
+      state.spotify.player.connect();
+      state.spotify.sdkReady = true;
+    }
+
+    async function playTrack(track) {
+            state.crossfade.armed = false;
+            state.crossfade.inProgress = false;
+      state.currentTrack = track;
+      setNow(track);
+            savePlaybackState();
+      await fetchLyrics(track);
+
+      try {
+        await safeFetch('/api/qlynktify/presence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+                        user: state.identity.name,
+            status: 'listening',
+            online: true,
+            track: {
+              track_id: track.track_id || '',
+              title: track.title || '',
+              artist: track.artist || '',
+              source: track.source || '',
+              artwork: track.artwork || ''
+            }
+          })
+        });
+      } catch (e) {}
+
+      if (track.source === 'spotify') {
+        try {
+          el.audio.pause();
+          el.audioNext.pause();
+          await ensureSpotifySdk();
+          if (!state.spotify.deviceId) {
+            throw new Error('Spotify device not ready');
+          }
+          await safeFetch(`/api/spotify/player/play?device_id=${encodeURIComponent(state.spotify.deviceId)}&uri=${encodeURIComponent(track.spotify_uri)}`, { method: 'PUT' });
+          setFooterPlayButton(true);
+          fetchSpotifyAnalysis(track.track_id);
+                    showToast(`Playing on Spotify: ${track.title}`);
+          return;
+        } catch (e) {
+                    showToast('Spotify playback failed. Falling back to Vault/Local.', 'warn');
+        }
+      }
+
+      if (state.spotify.connected && state.spotify.deviceId) {
+        safeFetch(`/api/spotify/player/pause?device_id=${encodeURIComponent(state.spotify.deviceId)}`, { method: 'PUT' }).catch(() => null);
+      }
+
+      try {
+        el.audioNext.pause();
+        el.audioNext.removeAttribute('src');
+        el.audioNext.load();
+        if (track.source === 'local' && track.file) {
+          if (track.blobUrl) URL.revokeObjectURL(track.blobUrl);
+          track.blobUrl = URL.createObjectURL(track.file);
+          el.audio.src = track.blobUrl;
+        } else if (track.source === 'vault') {
+          const t = await safeFetch(`/api/qlynktify/generate_stream/${encodeURIComponent(track.slug)}`);
+          el.audio.src = `/stream/audio/qlynktify/${t.stream_token}`;
+        } else {
+          throw new Error('Unknown source');
+        }
+        el.audio.volume = Number(el.vol.value || 1);
+        el.audioNext.volume = Number(el.vol.value || 1);
+        await el.audio.play();
+        setFooterPlayButton(true);
+                showToast(`Now playing: ${track.title}`);
+      } catch (e) {
+        setFooterPlayButton(false);
+                showToast('Playback failed for selected track', 'err');
+      }
+    }
+
+        async function prepareCrossfadeNext() {
+            if (state.crossfade.armed || state.crossfade.inProgress) return;
+            if (!state.currentTrack || state.currentTrack.source === 'spotify') return;
+            if (state.crossfade.profile === 'off') return;
+            if (!state.queue.length) return;
+            if (state.queueIndex < 0) return;
+
+            if (state.crossfade.profile === 'smart') {
+                const tempo = Number(state.spotify.analysis?.track?.tempo || 0);
+                if (tempo > 0) {
+                    const beatsForFade = 8;
+                    const secs = Math.max(3, Math.min(10, (60 / tempo) * beatsForFade));
+                    state.crossfade.triggerSeconds = secs;
+                } else {
+                    state.crossfade.triggerSeconds = 5;
+                }
+            } else {
+                state.crossfade.triggerSeconds = 5;
+            }
+
+            const nextIndex = (state.queueIndex + 1) % state.queue.length;
+            const nextTrack = state.queue[nextIndex];
+            if (!nextTrack || nextTrack.source === 'spotify') return;
+
+            try {
+                let src = '';
+                if (nextTrack.source === 'local' && nextTrack.file) {
+                    if (nextTrack.nextBlobUrl) URL.revokeObjectURL(nextTrack.nextBlobUrl);
+                    nextTrack.nextBlobUrl = URL.createObjectURL(nextTrack.file);
+                    src = nextTrack.nextBlobUrl;
+                } else if (nextTrack.source === 'vault' && nextTrack.slug) {
+                    const t = await safeFetch(`/api/qlynktify/generate_stream/${encodeURIComponent(nextTrack.slug)}`);
+                    src = `/stream/audio/qlynktify/${t.stream_token}`;
+                }
+                if (!src) return;
+                el.audioNext.src = src;
+                el.audioNext.volume = 0;
+                await el.audioNext.play();
+                el.audioNext.pause();
+                el.audioNext.currentTime = 0;
+                state.crossfade.armed = true;
+            } catch (e) {
+                state.crossfade.armed = false;
+            }
+        }
+
+        async function beginCrossfadeToNext() {
+            if (state.crossfade.inProgress) return;
+            if (!state.crossfade.armed) return;
+            state.crossfade.inProgress = true;
+            const nextIndex = (state.queueIndex + 1) % state.queue.length;
+            const nextTrack = state.queue[nextIndex];
+            if (!nextTrack) {
+                state.crossfade.inProgress = false;
+                return;
+            }
+
+            try {
+                await el.audioNext.play();
+                const base = Number(el.vol.value || 1);
+                const steps = 20;
+                for (let i = 0; i <= steps; i++) {
+                    const p = i / steps;
+                    el.audio.volume = base * (1 - p);
+                    el.audioNext.volume = base * p;
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                }
+
+                el.audio.pause();
+                el.audio.src = el.audioNext.src;
+                el.audio.currentTime = el.audioNext.currentTime;
+                el.audio.volume = base;
+                el.audioNext.pause();
+                el.audioNext.removeAttribute('src');
+                el.audioNext.load();
+
+                state.queueIndex = nextIndex;
+                state.currentTrack = nextTrack;
+                setNow(nextTrack);
+                savePlaybackState();
+                await fetchLyrics(nextTrack);
+                state.crossfade.armed = false;
+            } catch (e) {
+            } finally {
+                state.crossfade.inProgress = false;
+            }
+        }
+
+    function playQueueAt(idx) {
+
+      if (!state.queue.length) return;
+            const nextIdx = (idx + state.queue.length) % state.queue.length;
+      state.queueIndex = nextIdx;
+      const t = state.queue[nextIdx];
+            savePlaybackState();
+      playTrack(t);
+    }
+
+        function applyShuffleMode() {
+            if (state.shuffleMode === 0) {
+                el.shuffleBtn.textContent = 'Shuffle Off';
+                el.shuffleBtn.classList.remove('active');
+                return;
+            }
+            el.shuffleBtn.textContent = state.shuffleMode === 1 ? 'Shuffle All' : 'Shuffle Smart';
+            el.shuffleBtn.classList.add('active');
+            if (state.queue.length > 2) {
+                const current = state.queue[state.queueIndex] || null;
+                const rest = state.queue.filter((_, i) => i !== state.queueIndex);
+                for (let i = rest.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [rest[i], rest[j]] = [rest[j], rest[i]];
+                }
+                state.queue = current ? [current, ...rest] : rest;
+                state.queueIndex = current ? 0 : -1;
+            }
+            savePlaybackState();
+        }
+
+        function applyRepeatMode() {
+            const labels = ['Repeat Off', 'Repeat All', 'Repeat One'];
+            el.repeatBtn.textContent = labels[state.repeatMode] || labels[0];
+            el.repeatBtn.classList.toggle('active', state.repeatMode > 0);
+        }
+
+        function seekRelative(seconds) {
+            if (state.currentTrack?.source === 'spotify') return;
+            if (!el.audio.duration) return;
+            el.audio.currentTime = Math.max(0, Math.min(el.audio.duration, el.audio.currentTime + seconds));
+        }
+
+        async function linkFolderHandle(handle, fromRestore = false) {
+            if (!fromRestore) {
+                await persistFolderHandle(handle);
+                state.localFolders.push(handle);
+            }
+
+      const folderId = `${handle.name}-${Date.now()}`;
+      let count = 0;
+            const seen = new Set(state.localTracks.filter(t => t.source === 'local' && t.album === handle.name).map(t => t.title));
+      for await (const entry of handle.values()) {
+        if (entry.kind !== 'file') continue;
+        if (!entry.name.match(/\.(mp3|m4a|ogg|wav|flac)$/i)) continue;
+        const file = await entry.getFile();
+                const baseTitle = entry.name.replace(/\.[^/.]+$/, '');
+                if (seen.has(baseTitle)) continue;
+        const track = {
+          track_id: `local-${folderId}-${count}`,
+                    title: baseTitle,
+          artist: 'Local Edge',
+          album: handle.name,
+          artwork: '',
+          source: 'local',
+          file
+        };
+        if (window.jsmediatags) {
+          await new Promise(resolve => {
+            jsmediatags.read(file, {
+              onSuccess: tag => {
+                if (tag.tags?.title) track.title = tag.tags.title;
+                if (tag.tags?.artist) track.artist = tag.tags.artist;
+                if (tag.tags?.album) track.album = tag.tags.album;
+                if (tag.tags?.picture) {
+                  const p = tag.tags.picture;
+                  let binary = '';
+                  for (let i = 0; i < p.data.length; i++) binary += String.fromCharCode(p.data[i]);
+                  track.artwork = `data:${p.format};base64,${btoa(binary)}`;
+                }
+                resolve();
+              },
+              onError: () => resolve()
+            });
+          });
+        }
+        state.localTracks.push(track);
+                seen.add(baseTitle);
+        count += 1;
+      }
+
+      const box = document.createElement('div');
+      box.className = 'item';
+      box.innerHTML = `<div class=\"avatar\"></div><div><div style=\"font-size:12px;font-weight:700;\">${handle.name}</div><div class=\"small\">${count} local tracks</div></div><span class=\"badge\">Local</span>`;
+      box.addEventListener('click', () => {
+        state.queue = [...state.localTracks.filter(t => t.album === handle.name)];
+                savePlaybackState();
+        renderQueueView();
+      });
+      el.localFolders.prepend(box);
+            if (!fromRestore) showToast(`Linked local folder: ${handle.name}`);
+    }
+
+    function wireDropZone() {
+      ['dragenter', 'dragover'].forEach(ev => el.dropzone.addEventListener(ev, e => {
+        e.preventDefault();
+        el.dropzone.style.borderColor = '#1db954';
+      }));
+      ['dragleave', 'drop'].forEach(ev => el.dropzone.addEventListener(ev, e => {
+        e.preventDefault();
+        el.dropzone.style.borderColor = '#3f3f3f';
+      }));
+      el.dropzone.addEventListener('drop', async e => {
+        const files = Array.from(e.dataTransfer.files || []).filter(f => f.name.match(/\.(mp3|m4a|ogg|wav|flac)$/i));
+        for (const file of files) {
+          state.localTracks.push({
+            track_id: `drop-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+            title: file.name.replace(/\.[^/.]+$/, ''),
+            artist: 'Local Edge',
+            album: 'Dropped',
+            artwork: '',
+            source: 'local',
+            file
+          });
+        }
+        if (files.length) {
+          state.queue = [...state.localTracks];
+          renderQueueView();
+        }
+      });
+    }
+
+    function wireEvents() {
+      document.getElementById('nav-home').addEventListener('click', async () => {
+        const topSpotify = await loadSpotifyTopTracks();
+        state.mode = 'home';
+        renderHome(topSpotify);
+      });
+      document.getElementById('nav-search').addEventListener('click', async () => { state.mode = 'search'; await renderSearch(); });
+      document.getElementById('nav-queue').addEventListener('click', () => { state.mode = 'queue'; renderQueueView(); });
+      document.getElementById('nav-right').addEventListener('click', () => el.right.classList.toggle('open'));
+      document.getElementById('toggle-sidebar').addEventListener('click', () => document.getElementById('app').classList.toggle('collapsed'));
+            if (el.openSettings) el.openSettings.addEventListener('click', () => openSettingsModal('general'));
+            if (el.closeSettings) el.closeSettings.addEventListener('click', closeSettingsModal);
+            if (el.settingsOverlay) {
+                el.settingsOverlay.addEventListener('click', (e) => {
+                    if (e.target === el.settingsOverlay) closeSettingsModal();
+                });
+            }
+            document.querySelectorAll('[data-set-tab]').forEach(btn => {
+                btn.addEventListener('click', () => switchSettingsTab(btn.getAttribute('data-set-tab') || 'general'));
+            });
+            const setTabLyrics = document.getElementById('set-tab-lyrics');
+            const setTabVisuals = document.getElementById('set-tab-visuals');
+            if (setTabLyrics) setTabLyrics.addEventListener('click', () => setActiveTab('lyrics'));
+            if (setTabVisuals) setTabVisuals.addEventListener('click', () => setActiveTab('visuals'));
+
+      document.getElementById('spotify-connect').addEventListener('click', () => { window.location.href = '/api/spotify/login'; });
+      document.getElementById('spotify-refresh').addEventListener('click', spotifyRefresh);
+            el.createPlaylistBtn.addEventListener('click', createCustomPlaylist);
+            el.syncPlaylistBtn.addEventListener('click', syncCustomPlaylistsToBackend);
+            el.addCurrentBtn.addEventListener('click', addCurrentToCustomPlaylist);
+            el.navOffline.addEventListener('click', async () => {
+                state.mode = 'offline';
+                await renderOfflineLibrary();
+            });
+            el.presenceSelf.addEventListener('change', async () => {
+                state.identity.name = el.presenceSelf.value || 'Admin';
+                await syncPresenceIdentity();
+            });
+            el.presenceToggle.addEventListener('click', () => {
+                state.presence.hidden = !state.presence.hidden;
+                el.presenceToggle.textContent = state.presence.hidden ? 'Show' : 'Hide';
+                el.friendsShell?.classList.toggle('hidden', state.presence.hidden);
+            });
+            el.sleepCancel.addEventListener('click', cancelSleepTimer);
+
+            document.querySelectorAll('[data-sleep]').forEach(btn => {
+                btn.addEventListener('click', () => startSleepTimer(Number(btn.getAttribute('data-sleep') || '0')));
+            });
+            document.querySelectorAll('[data-xfade]').forEach(btn => {
+                btn.addEventListener('click', () => setCrossfadeProfile(btn.getAttribute('data-xfade') || 'off'));
+            });
+
+            el.shuffleBtn.addEventListener('click', () => {
+                state.shuffleMode = (state.shuffleMode + 1) % 3;
+                applyShuffleMode();
+            });
+            el.repeatBtn.addEventListener('click', () => {
+                state.repeatMode = (state.repeatMode + 1) % 3;
+                applyRepeatMode();
+            });
+
+      el.search.addEventListener('keydown', e => {
+        if (e.key === 'Enter') renderSearch();
+      });
+
+      Array.from(document.querySelectorAll('.tab')).forEach(t => t.addEventListener('click', () => setActiveTab(t.getAttribute('data-tab'))));
+
+      el.play.addEventListener('click', async () => {
+        if (!state.currentTrack && state.queue.length) return playQueueAt(0);
+        if (!state.currentTrack) return;
+
+        if (state.currentTrack.source === 'spotify') {
+          try {
+            if (state.spotify.paused) {
+              await safeFetch(`/api/spotify/player/play?device_id=${encodeURIComponent(state.spotify.deviceId)}`, { method: 'PUT' });
+                            setFooterPlayButton(true);
+            } else {
+              await safeFetch(`/api/spotify/player/pause?device_id=${encodeURIComponent(state.spotify.deviceId)}`, { method: 'PUT' });
+                            setFooterPlayButton(false);
+            }
+          } catch (e) {}
+          return;
+        }
+
+        if (el.audio.paused) {
+                    try { await el.audio.play(); setFooterPlayButton(true); } catch (e) {}
+        } else {
+          el.audio.pause();
+                    setFooterPlayButton(false);
+        }
+      });
+
+    el.prev.addEventListener('click', () => playQueueAt((state.queueIndex > 0 ? state.queueIndex : 0) - 1));
+    el.next.addEventListener('click', () => playQueueAt((state.queueIndex >= 0 ? state.queueIndex : -1) + 1));
+
+      el.audio.addEventListener('timeupdate', () => {
+        const c = el.audio.currentTime || 0;
+        const d = el.audio.duration || 0;
+        el.cur.textContent = fmt(c);
+        el.dur.textContent = fmt(d);
+        const p = d ? (c / d) * 100 : 0;
+        el.seekFill.style.width = `${Math.max(0, Math.min(100, p))}%`;
+        syncLyrics(c);
+
+                if (state.currentTrack && state.currentTrack.source !== 'spotify' && d > 0) {
+                    const remain = d - c;
+                    if (remain <= state.crossfade.triggerSeconds + 2 && !state.crossfade.armed && !state.crossfade.inProgress) {
+                        prepareCrossfadeNext().catch(() => null);
+                    }
+                    if (remain <= state.crossfade.triggerSeconds && state.crossfade.armed && !state.crossfade.inProgress) {
+                        beginCrossfadeToNext().catch(() => null);
+                    }
+                }
+      });
+
+    el.audio.addEventListener('play', () => { setFooterPlayButton(true); });
+    el.audio.addEventListener('pause', () => { if (state.currentTrack?.source !== 'spotify') setFooterPlayButton(false); });
+            el.audio.addEventListener('ended', () => {
+                if (state.crossfade.inProgress) return;
+                if (state.repeatMode === 2) {
+                    el.audio.currentTime = 0;
+                    el.audio.play().catch(() => null);
+                    return;
+                }
+                if (state.repeatMode === 1) {
+                    playQueueAt(state.queueIndex + 1);
+                    return;
+                }
+                if (state.queueIndex < state.queue.length - 1) {
+                    playQueueAt(state.queueIndex + 1);
+                } else {
+                    setFooterPlayButton(false);
+                }
+            });
+
+      el.seek.addEventListener('click', e => {
+        const rect = el.seek.getBoundingClientRect();
+        const p = (e.clientX - rect.left) / rect.width;
+        if (state.currentTrack?.source === 'spotify') {
+          return;
+        }
+        if (el.audio.duration) {
+          el.audio.currentTime = Math.max(0, Math.min(el.audio.duration, p * el.audio.duration));
+        }
+      });
+
+      el.vol.addEventListener('input', () => {
+        const v = Number(el.vol.value);
+        el.audio.volume = v;
+        if (state.spotify.player) state.spotify.player.setVolume(v).catch(() => null);
+      });
+
+      el.pickFolder.addEventListener('click', async () => {
+        try {
+          if (!('showDirectoryPicker' in window)) {
+            notify('Browser does not support File System Access API');
+            return;
+          }
+          const handle = await window.showDirectoryPicker();
+          await linkFolderHandle(handle);
+        } catch (e) {}
+      });
+
+            document.addEventListener('keydown', e => {
+                const activeTag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
+                if (activeTag === 'input' || activeTag === 'textarea') return;
+
+                if (e.key === 'Escape' && el.settingsOverlay?.classList.contains('open')) {
+                    e.preventDefault();
+                    closeSettingsModal();
+                    return;
+                }
+                if (e.key === ',') {
+                    e.preventDefault();
+                    openSettingsModal('general');
+                    return;
+                }
+
+                if (e.code === 'Space') {
+                    e.preventDefault();
+                    el.play.click();
+                    return;
+                }
+                if (e.shiftKey && e.code === 'ArrowRight') {
+                    e.preventDefault();
+                    el.next.click();
+                    return;
+                }
+                if (e.shiftKey && e.code === 'ArrowLeft') {
+                    e.preventDefault();
+                    el.prev.click();
+                    return;
+                }
+                if (e.code === 'ArrowRight') {
+                    e.preventDefault();
+                    seekRelative(5);
+                    return;
+                }
+                if (e.code === 'ArrowLeft') {
+                    e.preventDefault();
+                    seekRelative(-5);
+                    return;
+                }
+            });
+
+      wireDropZone();
+            bindContextMenuActions();
+    }
+
+    async function boot() {
+            restoreCustomPlaylistsLocal();
+            restorePlaybackState();
+
+      await spotifyStatus();
+      await loadVault();
+      renderVaultPlaylists();
+            renderCustomPlaylists();
+            await loadCustomPlaylistsFromBackend();
+      await loadSpotifyPlaylists();
+            await restoreFolderHandles();
+      const topSpotify = await loadSpotifyTopTracks();
+            if (!state.queue.length) {
+                state.queue = [...state.vaultTracks];
+            }
+      renderHome(topSpotify);
+            applyShuffleMode();
+            applyRepeatMode();
+            setFooterPlayButton(false);
+      setupVisualizer();
+      wireEvents();
+    await syncPresenceIdentity();
+    setCrossfadeProfile(state.crossfade.profile || 'smooth');
+        updateSettingsSnapshot();
+
+            window.addEventListener('beforeunload', savePlaybackState);
+    }
+
+    boot().catch(err => {
+      document.getElementById('dynamic').innerHTML = `<div style=\"padding:18px;border:1px solid #2f2f2f;border-radius:12px;\"><h2>Qlynk-tify startup failed</h2><pre style=\"white-space:pre-wrap;\">${String(err)}</pre></div>`;
+    });
+  </script>
+</body>
+</html>
+"""
+# END: Qlynk-tify frontend payload (HTML/CSS/JS)
+
+
+# ==========================================
+# 23. TRINITY 1-CLICK AUTO-DEPOLYER & ONBOARDING WIZARD
+# ==========================================
+# START: Trinity Try-Now onboarding frontend payload (HTML/CSS/JS)
+# What: Guided deployment wizard UI for cloning and configuring user-owned cloud nodes.
+# Why: Simplifies onboarding and setup flow into a single guided experience.
+# Without: Users need manual setup and lose the one-click assisted deployment pathway.
+TRY_NOW_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trinity 1-Click Auto-Deployer</title>
+    <meta name="theme-color" content="#05060a" />
+    <style>
+        :root {
+            --bg: #05060a;
+            --panel: rgba(11, 14, 22, 0.9);
+            --panel-2: rgba(15, 19, 31, 0.92);
+            --line: rgba(255,255,255,0.09);
+            --text: #eef2ff;
+            --muted: #97a3b6;
+            --accent: #7c5cff;
+            --accent-2: #00d4ff;
+            --good: #42f5a1;
+            --warn: #ffd36b;
+            --bad: #ff6b8b;
+            --radius: 18px;
+            --shadow: 0 32px 100px rgba(0,0,0,.45);
+            --font: Inter, ui-sans-serif, system-ui, sans-serif;
+            --mono: "Fira Code", ui-monospace, monospace;
+        }
+        * { box-sizing: border-box; }
+        body {
+            margin: 0; font-family: var(--font); color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(124,92,255,.22), transparent 28%),
+                radial-gradient(circle at top right, rgba(0,212,255,.18), transparent 25%),
+                linear-gradient(180deg, #04050a 0%, #070b14 100%);
+            min-height: 100vh;
+        }
+        .shell { max-width: 1280px; margin: 0 auto; padding: 40px 20px 60px; }
+        .hero {
+            display: grid; grid-template-columns: 1.15fr .85fr; gap: 20px; align-items: stretch;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+            box-shadow: var(--shadow); backdrop-filter: blur(18px);
+        }
+        .hero-main { padding: 28px; position: relative; overflow: hidden; }
+        .hero-main:after {
+            content: ''; position: absolute; inset: auto -10% -55% auto; width: 320px; height: 320px;
+            background: radial-gradient(circle, rgba(124,92,255,.32), transparent 70%); pointer-events: none;
+        }
+        .eyebrow { color: var(--accent-2); text-transform: uppercase; letter-spacing: .24em; font-size: 12px; font-weight: 700; }
+        h1 { margin: 10px 0 12px; font-size: clamp(2.4rem, 4vw, 4.8rem); line-height: .95; letter-spacing: -.06em; }
+        .lede { max-width: 56ch; color: var(--muted); font-size: 1.05rem; line-height: 1.7; }
+        .stats-strip {
+            display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px;
+        }
+        .chip {
+            padding: 12px 14px; border-radius: 999px; border: 1px solid var(--line);
+            background: rgba(255,255,255,.03); color: var(--text); font-size: 14px;
+        }
+        .chip strong { color: white; }
+        .hero-side { padding: 22px; display: grid; gap: 12px; }
+        .hero-side .metric {
+            padding: 18px; border-radius: 16px; background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+            border: 1px solid var(--line);
+        }
+        .metric .label { font-size: 12px; text-transform: uppercase; letter-spacing: .18em; color: var(--muted); }
+        .metric .value { font-size: 1.8rem; font-weight: 800; margin-top: 8px; }
+        .wizard {
+            display: grid; grid-template-columns: 300px 1fr; gap: 18px; margin-top: 18px;
+        }
+        .steps, .stage { padding: 22px; }
+        .steps { position: sticky; top: 20px; height: fit-content; }
+        .step {
+            display: flex; gap: 12px; align-items: flex-start; padding: 14px; border-radius: 16px;
+            border: 1px solid transparent; transition: .2s ease;
+        }
+        .step.active { border-color: rgba(124,92,255,.45); background: rgba(124,92,255,.08); }
+        .step.done { opacity: .75; }
+        .bubble {
+            width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: 0 0 auto;
+            background: rgba(255,255,255,.06); border: 1px solid var(--line); font-weight: 700;
+        }
+        .step.active .bubble { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; }
+        .step h3 { margin: 0; font-size: 15px; }
+        .step p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+        .panel { background: var(--panel-2); border: 1px solid var(--line); border-radius: 20px; padding: 22px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .field { display: grid; gap: 8px; }
+        .field label { font-size: 13px; color: var(--muted); font-weight: 600; }
+        .field input, .field select, .field textarea {
+            width: 100%; background: rgba(255,255,255,.03); color: var(--text); border: 1px solid var(--line);
+            border-radius: 14px; padding: 14px 15px; outline: none; font: inherit;
+        }
+        .field textarea { min-height: 112px; resize: vertical; font-family: var(--mono); }
+        .toggle-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .toggle {
+            padding: 12px 14px; border-radius: 999px; border: 1px solid var(--line); cursor: pointer; background: rgba(255,255,255,.03);
+        }
+        .toggle.active { border-color: rgba(0,212,255,.55); background: rgba(0,212,255,.12); }
+        .section-title { margin: 0 0 12px; font-size: 18px; }
+        .section-sub { color: var(--muted); margin: -4px 0 18px; }
+        .footer-actions { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+        .btn {
+            appearance: none; border: 0; border-radius: 14px; padding: 14px 18px; font: inherit; font-weight: 700; cursor: pointer;
+            transition: transform .18s ease, box-shadow .18s ease, opacity .18s ease;
+        }
+        .btn:hover { transform: translateY(-1px); }
+        .btn-primary { color: #fff; background: linear-gradient(135deg, var(--accent), #4f8cff); box-shadow: 0 18px 40px rgba(124,92,255,.22); }
+        .btn-ghost { color: var(--text); background: rgba(255,255,255,.04); border: 1px solid var(--line); }
+        .btn-success { color: #03150d; background: linear-gradient(135deg, #7bffbb, #42f5a1); }
+        .terminal {
+            background: #04070d; border: 1px solid var(--line); border-radius: 18px; padding: 16px; min-height: 280px;
+            font-family: var(--mono); color: #d4f7ff; overflow: auto; white-space: pre-wrap; line-height: 1.55;
+        }
+        .terminal .line { display: block; margin-bottom: 8px; }
+        .terminal .ok { color: var(--good); }
+        .terminal .warn { color: var(--warn); }
+        .terminal .bad { color: var(--bad); }
+        .summary { display: grid; gap: 10px; }
+        .summary .item { padding: 14px; border-radius: 14px; background: rgba(255,255,255,.03); border: 1px solid var(--line); }
+        .hidden { display: none !important; }
+        @media (max-width: 1040px) { .hero, .wizard { grid-template-columns: 1fr; } .steps { position: static; } }
+        @media (max-width: 720px) { .shell { padding: 18px 14px 40px; } .grid-2 { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="shell">
+        <div class="hero">
+            <div class="card hero-main">
+                <div class="eyebrow">Feature 23 · Trinity 1-Click Auto-Deployer</div>
+                <h1>Clone Qlynk into your own Hugging Face account.</h1>
+                <p class="lede">This onboarding wizard provisions a new Space, creates its private vault dataset, injects the runtime secrets you provide, and returns a live node URL in one guided flow.</p>
+                <div class="stats-strip">
+                    <div class="chip">Join <strong id="join-count">0</strong> users who already deployed</div>
+                    <div class="chip">Private vault, public or private node</div>
+                    <div class="chip">Secrets stay local to the deployment call</div>
+                </div>
+            </div>
+            <div class="card hero-side">
+                <div class="metric"><div class="label">Global Deployments</div><div class="value" id="global-count">0</div></div>
+                <div class="metric"><div class="label">Runtime</div><div class="value">~1 minute</div></div>
+                <div class="metric"><div class="label">Storage</div><div class="value">HF Dataset Vault</div></div>
+            </div>
+        </div>
+
+        <div class="wizard">
+            <aside class="card steps">
+                <div class="step active" data-step="1"><div class="bubble">1</div><div><h3>Profile</h3><p>Enter your name and email so the wizard can label your deployment.</p></div></div>
+                <div class="step" data-step="2"><div class="bubble">2</div><div><h3>Authentication</h3><p>Paste a Hugging Face token with Write access.</p></div></div>
+                <div class="step" data-step="3"><div class="bubble">3</div><div><h3>Configuration</h3><p>Set passwords, music, bot, and payment secrets for the new Space.</p></div></div>
+                <div class="step" data-step="4"><div class="bubble">4</div><div><h3>Terminal</h3><p>Watch the live deploy log as the Space and Vault are provisioned.</p></div></div>
+                <div class="step" data-step="5"><div class="bubble">5</div><div><h3>Success</h3><p>Open your new node and continue with onboarding.</p></div></div>
+            </aside>
+
+            <main class="card stage">
+                <form id="deploy-form">
+                    <section class="panel" id="panel-1">
+                        <h2 class="section-title">Step 1 · Profile</h2>
+                        <p class="section-sub">Tell us who is deploying the node.</p>
+                        <div class="grid-2">
+                            <div class="field"><label for="user_name">Name</label><input id="user_name" name="user_name" placeholder="Your name" required /></div>
+                            <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" placeholder="you@example.com" required /></div>
+                        </div>
+                    </section>
+
+                    <section class="panel hidden" id="panel-2" style="margin-top: 16px;">
+                        <h2 class="section-title">Step 2 · Authentication</h2>
+                        <p class="section-sub">Use a Hugging Face token with Write access. The wizard never stores your secrets in our database.</p>
+                        <div class="field"><label for="hf_token">Hugging Face Token</label><textarea id="hf_token" name="hf_token" placeholder="hf_xxx..."></textarea></div>
+                    </section>
+
+                    <section class="panel hidden" id="panel-3" style="margin-top: 16px;">
+                        <h2 class="section-title">Step 3 · Configuration</h2>
+                        <p class="section-sub">Visibility defaults to Public. Configure the rest of your runtime secrets below.</p>
+                        <div class="field" style="margin-bottom: 14px;">
+                            <label>Space Visibility</label>
+                            <div class="toggle-row" id="visibility-group">
+                                <button class="toggle active" type="button" data-vis="public">Public</button>
+                                <button class="toggle" type="button" data-vis="private">Private</button>
+                            </div>
+                        </div>
+
+                        <div class="grid-2">
+                            <div class="field"><label for="space_password">Core · SPACE_PASSWORD</label><input id="space_password" /></div>
+                            <div class="field"><label for="domain_2">Core · DOMAIN_2</label><input id="domain_2" placeholder="https://your-website.com" /></div>
+                            <div class="field"><label for="auto_slug_rotator">Core · AUTO_SLUG_ROTATOR</label><select id="auto_slug_rotator"><option value="true">true</option><option value="false">false</option></select></div>
+                            <div class="field"><label for="qlynktify_enabled">Core · QLYNKTIFY_ENABLED</label><select id="qlynktify_enabled"><option value="true">true</option><option value="false">false</option></select></div>
+
+                            <div class="field"><label for="spotify_client_id">Music · SPOTIFY_CLIENT_ID</label><input id="spotify_client_id" /></div>
+                            <div class="field"><label for="spotify_client_secret">Music · SPOTIFY_CLIENT_SECRET</label><input id="spotify_client_secret" /></div>
+                            <div class="field"><label for="proxy_url">Music · PROXY_URL</label><input id="proxy_url" placeholder="http://proxy:8080" /></div>
+                            <div class="field"><label for="yt_cookies">Music · YT_COOKIES</label><input id="yt_cookies" placeholder="Netscape cookie string" /></div>
+
+                            <div class="field"><label for="tg_api_id">Bot · TG_API_ID</label><input id="tg_api_id" /></div>
+                            <div class="field"><label for="tg_api_hash">Bot · TG_API_HASH</label><input id="tg_api_hash" /></div>
+                            <div class="field"><label for="telegram_bot_token">Bot · TELEGRAM_BOT_TOKEN</label><input id="telegram_bot_token" /></div>
+                            <div class="field"><label for="tg_session_string">Bot · TG_SESSION_STRING</label><input id="tg_session_string" /></div>
+
+                            <div class="field"><label for="checkout_toggle">Payments · CHECKOUT_TOGGLE</label><input id="checkout_toggle" /></div>
+                            <div class="field"><label for="razorpay_key_id">Payments · RAZORPAY_KEY_ID</label><input id="razorpay_key_id" /></div>
+                            <div class="field"><label for="razorpay_key_secret">Payments · RAZORPAY_KEY_SECRET</label><input id="razorpay_key_secret" /></div>
+                        </div>
+                    </section>
+
+                    <section class="panel hidden" id="panel-4" style="margin-top: 16px;">
+                        <h2 class="section-title">Step 4 · Terminal</h2>
+                        <p class="section-sub">Deployment logs appear here in real time.</p>
+                        <div class="terminal" id="terminal"><span class="line">Ready to deploy.</span></div>
+                    </section>
+
+                    <section class="panel hidden" id="panel-5" style="margin-top: 16px;">
+                        <h2 class="section-title">Step 5 · Success</h2>
+                        <p class="section-sub">Your Trinity node is live. Open it below.</p>
+                        <div class="summary" id="summary"></div>
+                        <div class="footer-actions">
+                            <a class="btn btn-success" id="visit-node" href="#" target="_blank">Visit Your Node</a>
+                        </div>
+                    </section>
+
+                    <div class="footer-actions" style="margin-top: 18px;">
+                        <button class="btn btn-primary" type="button" id="continue-btn">Continue</button>
+                        <button class="btn btn-ghost hidden" type="button" id="deploy-btn">Start Deployment</button>
+                    </div>
+                </form>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const state = { step: 1, visibility: 'public', stats: 0, logs: [] };
+        const steps = Array.from(document.querySelectorAll('.step'));
+        const panels = [1,2,3,4,5].map(i => document.getElementById(`panel-${i}`));
+        const terminal = document.getElementById('terminal');
+        const summary = document.getElementById('summary');
+        const visitNode = document.getElementById('visit-node');
+        const continueBtn = document.getElementById('continue-btn');
+        const deployBtn = document.getElementById('deploy-btn');
+        const form = document.getElementById('deploy-form');
+        const visibilityButtons = Array.from(document.querySelectorAll('[data-vis]'));
+
+        function setStep(step) {
+            state.step = step;
+            steps.forEach((el, idx) => el.classList.toggle('active', idx + 1 === step));
+            panels.forEach((panel, idx) => panel.classList.toggle('hidden', idx + 1 !== step));
+            continueBtn.classList.toggle('hidden', step >= 3);
+            deployBtn.classList.toggle('hidden', step < 3);
+            if (step === 4) deployBtn.textContent = 'Deploy Now';
+            if (step === 5) { continueBtn.classList.add('hidden'); deployBtn.classList.add('hidden'); }
+        }
+
+        function pushLog(text, kind='') {
+            const span = document.createElement('span');
+            span.className = `line ${kind}`.trim();
+            span.textContent = text;
+            terminal.appendChild(span);
+            terminal.scrollTop = terminal.scrollHeight;
+        }
+
+        function collectPayload() {
+            return {
+                user_name: document.getElementById('user_name').value.trim(),
+                email: document.getElementById('email').value.trim(),
+                hf_token: document.getElementById('hf_token').value.trim(),
+                visibility: state.visibility,
+                space_password: document.getElementById('space_password').value,
+                domain_2: document.getElementById('domain_2').value,
+                auto_slug_rotator: document.getElementById('auto_slug_rotator').value,
+                qlynktify_enabled: document.getElementById('qlynktify_enabled').value,
+                spotify_client_id: document.getElementById('spotify_client_id').value,
+                spotify_client_secret: document.getElementById('spotify_client_secret').value,
+                proxy_url: document.getElementById('proxy_url').value,
+                yt_cookies: document.getElementById('yt_cookies').value,
+                tg_api_id: document.getElementById('tg_api_id').value,
+                tg_api_hash: document.getElementById('tg_api_hash').value,
+                telegram_bot_token: document.getElementById('telegram_bot_token').value,
+                tg_session_string: document.getElementById('tg_session_string').value,
+                checkout_toggle: document.getElementById('checkout_toggle').value,
+                razorpay_key_id: document.getElementById('razorpay_key_id').value,
+                razorpay_key_secret: document.getElementById('razorpay_key_secret').value,
+            };
+        }
+
+        async function loadStats() {
+            try {
+                const res = await fetch('/api/deploy/stats');
+                const data = await res.json();
+                state.stats = data.total_deployments || 0;
+                document.getElementById('join-count').textContent = state.stats.toLocaleString();
+                document.getElementById('global-count').textContent = state.stats.toLocaleString();
+            } catch (e) {
+                document.getElementById('join-count').textContent = '0';
+                document.getElementById('global-count').textContent = '0';
+            }
+        }
+
+        async function executeDeploy() {
+            setStep(4);
+            terminal.innerHTML = '';
+            pushLog('Cloning repository...', 'warn');
+            pushLog('Setting up Vault...', 'warn');
+            pushLog('Pushing Secrets...', 'warn');
+            const payload = collectPayload();
+            try {
+                const res = await fetch('/api/deploy/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || data.message || 'Deployment failed');
+                (data.logs || []).forEach(line => pushLog(line, 'ok'));
+                setStep(5);
+                summary.innerHTML = `
+                    <div class="item"><strong>Node URL</strong><div><a href="${data.new_space_url}" target="_blank">${data.new_space_url}</a></div></div>
+                    <div class="item"><strong>Vault Dataset</strong><div>${data.dataset_repo}</div></div>
+                    <div class="item"><strong>Total Deployments</strong><div>${Number(data.total_deployments || 0).toLocaleString()}</div></div>
+                `;
+                visitNode.href = data.new_space_url;
+                pushLog('Deployment finished successfully.', 'ok');
+            } catch (error) {
+                pushLog(String(error.message || error), 'bad');
+                continueBtn.classList.remove('hidden');
+                deployBtn.classList.remove('hidden');
+                throw error;
+            }
+        }
+
+        visibilityButtons.forEach(btn => btn.addEventListener('click', () => {
+            visibilityButtons.forEach(x => x.classList.remove('active'));
+            btn.classList.add('active');
+            state.visibility = btn.dataset.vis;
+        }));
+
+        continueBtn.addEventListener('click', () => {
+            if (state.step === 1) { setStep(2); return; }
+            if (state.step === 2) { setStep(3); return; }
+            setStep(3);
+        });
+        deployBtn.addEventListener('click', executeDeploy);
+
+        loadStats();
+        setStep(1);
+    </script>
+</body>
+</html>
+"""
+# END: Trinity Try-Now onboarding frontend payload (HTML/CSS/JS)
+
+
+@app.get("/try-now", response_class=HTMLResponse)
+async def try_now_onboarding():
+    return HTMLResponse(content=TRY_NOW_HTML)
 
 # ==========================================
 # END OF QLYNK ARCHITECTURE V6 (TITAN)
@@ -7366,6 +9749,38 @@ async def serve_qlynktify(request: Request):
 # --- SYSTEM HIBERNATION INITIATED ---
 # Developer Status: Offline. 
 # Mission: IIT Kharagpur CSE. 
+# Last Update: 13:59pm || 13 April 2026 IST
+# GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
+# ==========================================
+
+# ==========================================
+# END OF FILE (FOR REAL THIS TIME! GO STUDY!)
+# ==========================================
+# END OF QLYNK ARCHITECTURE V2
+# ==========================================
+
+# ==========================================
+# END OF FILE
+# --- SYSTEM HIBERNATION INITIATED ---
+# Developer Status: Offline. 
+# Mission: IIT Kharagpur CSE. 
+# Last Update: 13:59pm || 13 April 2026 IST
+# GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
+# ==========================================
+
+# ==========================================
+# END OF FILE (FOR REAL THIS TIME! GO STUDY!)
+# ==========================================
+# --- SYSTEM HIBERNATION INITIATED ---
+# Developer Status: Offline. 
+# Mission: IIT Kharagpur CSE. 
+# Last Update: 13:59pm || 13 April 2026 IST
+# GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
+# ==========================================
+
+# ==========================================
+# END OF FILE (FOR REAL THIS TIME! GO STUDY!)
+# ==========================================# Mission: IIT Kharagpur CSE. 
 # Last Update: 13:59pm || 13 April 2026 IST
 # GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
 # ==========================================
