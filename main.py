@@ -876,83 +876,45 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
         fname = str(file_record.get("filename") or "").lower()
         is_media = mime.startswith(("video/", "audio/")) or fname.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".mp3", ".wav", ".m4a", ".aac"))
         
-        # 🔥 CRITICAL 206 BYPASS FIX (V8): The "No-Mercy" Firewall
-        # 1. Check if the file is Video or Audio
-        mime = str(file_info.get("mime_type", "")).lower() if file_info else ""
-        filename = str(file_info.get("name", "")).lower() if file_info else ""
+        # 🔥 CRITICAL 206 BYPASS FIX: Catch Range headers (IDM/Incognito) & Fetch Destiny
+        has_range = "range" in request.headers
+        fetch_dest = request.headers.get("sec-fetch-dest", "")
         
-        is_video_or_audio = (
-            mime.startswith("video/") or 
-            mime.startswith("audio/") or 
-            filename.endswith((".mp4", ".mkv", ".webm", ".avi", ".ts", ".mp3", ".m4a", ".wav", ".flac", ".ogg"))
-        )
-        
-        # 2. THE ULTIMATE BLOCK:
-        # Tera native player video chalane ke liye /stream/media/{token} use karta hai, /f/{slug} nahi!
-        # Toh agar koi bhi (jo Admin nahi hai) is /f/ share link pe aayega, usko 100% Timer UI dikhega.
-        # IDM ho, Incognito ho, ya direct paste — sab block honge!
-        if is_video_or_audio and not is_admin:
-            # STRICT BLOCK: Nice HTML UI + 7s Timer + Social Routes
+        # Agar file media hai, YA FIR koi background fetch/Range request maar raha hai bypass ke liye
+        if (is_media or has_range or fetch_dest in ["video", "audio"]) and not is_admin:
+            # STRICT BLOCK: 403 Status + Cinematic 5s Countdown Auto-Redirect
             html_page = f"""
             <!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <meta http-equiv="refresh" content="7;url=/video?q={slug}">
-                <title>Secure Routing | Qlynk Node</title>
+                <meta http-equiv="refresh" content="5;url=/video?q={slug}">
+                <title>Secure Vault | Access Denied</title>
                 <style>
                     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-                    body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; padding: 20px; text-align: center; }}
-                    .container {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px 30px; border-radius: 16px; max-width: 480px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
-                    .logo {{ width: 65px; height: 65px; margin-bottom: 15px; filter: drop-shadow(0 0 10px rgba(188, 140, 255, 0.5)); }}
-                    h2 {{ color: #bc8cff; margin: 0 0 10px 0; font-size: 22px; }}
-                    p {{ color: #8b949e; font-size: 14px; margin-bottom: 20px; line-height: 1.5; }}
-                    .features {{ text-align: left; background: #0d1117; padding: 15px; border-radius: 8px; font-size: 13px; color: #c9d1d9; margin-bottom: 20px; border: 1px solid #30363d; }}
-                    .features strong {{ color: #58a6ff; display: block; margin-bottom: 8px; }}
-                    .features ul {{ margin: 0; padding-left: 20px; }}
-                    .features li {{ margin-bottom: 5px; }}
-                    .timer-box {{ background: #161b22; border: 1px solid #30363d; padding: 12px; border-radius: 8px; font-weight: 600; color: #8b949e; font-size: 15px; margin-bottom: 25px; }}
-                    .timer-box span {{ font-size: 20px; color: #bc8cff; font-weight: 800; }}
-                    .social-links {{ display: flex; justify-content: center; gap: 10px; margin-bottom: 25px; flex-wrap: wrap; }}
-                    .social-links a {{ color: #e1e4e8; text-decoration: none; font-size: 13px; background: #21262d; padding: 8px 15px; border-radius: 20px; transition: 0.3s; border: 1px solid #30363d; font-weight: 600; }}
-                    .social-links a:hover {{ background: #bc8cff; color: #000; border-color: #bc8cff; }}
-                    .redirect-btn {{ display: inline-block; padding: 12px 25px; background: #e1e4e8; color: #000; text-decoration: none; border-radius: 8px; font-weight: bold; transition: 0.3s; width: 100%; box-sizing: border-box; }}
-                    .redirect-btn:hover {{ background: #bc8cff; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
+                    body {{ background: #050505; color: #e1e4e8; font-family: 'Inter', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; flex-direction: column; text-align: center; padding: 20px; }}
+                    .box {{ border: 1px solid #30363d; background: rgba(22, 27, 34, 0.8); padding: 40px; border-radius: 16px; max-width: 450px; width: 100%; box-shadow: 0 20px 40px rgba(0,0,0,0.6); backdrop-filter: blur(10px); }}
+                    .icon {{ width: 60px; height: 60px; fill: #da3633; margin-bottom: 20px; }}
+                    h2 {{ color: #da3633; margin: 0 0 10px 0; font-size: 22px; }}
+                    p {{ color: #8b949e; font-size: 14px; margin-bottom: 25px; line-height: 1.5; }}
+                    .timer-box {{ background: #0d1117; border: 1px solid #30363d; padding: 15px; border-radius: 8px; font-weight: 600; color: #bc8cff; font-size: 16px; }}
+                    .redirect-btn {{ display: inline-block; margin-top: 25px; padding: 10px 20px; background: transparent; border: 1px solid #bc8cff; color: #bc8cff; text-decoration: none; border-radius: 8px; font-size: 13px; font-weight: 600; transition: 0.3s; }}
+                    .redirect-btn:hover {{ background: #bc8cff; color: #000; box-shadow: 0 0 15px rgba(188, 140, 255, 0.4); }}
                 </style>
             </head>
             <body>
-                <div class="container">
-                    <img src="https://qlynk.vercel.app/quicklink-logo.svg" alt="Qlynk Logo" class="logo">
-                    <h2>Secure Datacenter Routing</h2>
-                    <p>Direct raw access is blocked to protect bandwidth. You are being securely routed to the <b>Cinematic Player UI</b>.</p>
-                    
-                    <div class="features">
-                        <strong>⚡ Why use the Player?</strong>
-                        <ul>
-                            <li>Hardware Accelerated No-Lag Streaming</li>
-                            <li>Subtitle (CC) & Theater Mode Support</li>
-                            <li>100% Ad-Free & Encrypted Environment</li>
-                        </ul>
-                    </div>
-
+                <div class="box">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zM9 6c0-1.66 1.34-3 3-3s3 1.34 3 3v2H9V6zm9 14H6V10h12v10zm-6-3c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/></svg>
+                    <h2>Direct Access Blocked</h2>
+                    <p>Raw media files are protected by the Qlynk Architecture. Direct downloading or hotlinking is strictly prohibited.</p>
                     <div class="timer-box">
-                        Routing to Vault in <span id="time">7</span>s...
+                        Routing to Secure Player in <span id="time" style="font-size: 20px;">5</span>s...
                     </div>
-                    
-                    <div class="social-links">
-                        <a href="/instagram" target="_blank">Instagram</a>
-                        <a href="/github" target="_blank">GitHub</a>
-                        <a href="/discord" target="_blank">Discord</a>
-                        <a href="/youtube" target="_blank">YouTube</a>
-                        <a href="/wiki" target="_blank">Wiki</a>
-                        <a href="/clock" target="_blank">Clock</a>
-                    </div>
-
                     <a href="/video?q={slug}" class="redirect-btn">Force Route Now</a>
                 </div>
                 <script>
-                    let sec = 7;
+                    let sec = 5;
                     const timerEl = document.getElementById('time');
                     const interval = setInterval(() => {{
                         sec--;
@@ -966,6 +928,7 @@ async def serve_file_publicly(slug: str, request: Request): # Notice 'request: R
             return HTMLResponse(
                 status_code=403, 
                 content=html_page,
+                # Force browser to never cache this 403 page
                 headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
             )
             
@@ -5163,22 +5126,11 @@ async def dynamic_slug_rotator():
             slug_map = {}
             
             # 1. Generate new 32-char slugs for all files
-            # 1. Generate new 32-char slugs (SKIP IMAGES, ONLY ROTATE VIDEOS/DOCS)
-            # Yahan hum RAM (files list) mein hi sab edit kar rahe hain. 
-            # Baad mein ek hi save_db() se upload ho jayega (Total 2 API calls only).
-            # 1. Generate new 32-char slugs (STRICT: ONLY ROTATE VIDEOS & AUDIOS)
-            # Yahan hum RAM (files list) mein hi sab edit kar rahe hain.
-            rotated_count = 0
             for f in files:
-                mime = str(f.get("mime_type", "")).lower()
-                
-                # Sirf aur Sirf Video aur Audio ka slug change hoga (Images & Docs skipped)
-                if mime.startswith("video/") or mime.startswith("audio/"):
-                    old_slug = f["slug"]
-                    new_slug = uuid.uuid4().hex
-                    slug_map[old_slug] = new_slug
-                    f["slug"] = new_slug
-                    rotated_count += 1
+                old_slug = f["slug"]
+                new_slug = uuid.uuid4().hex
+                slug_map[old_slug] = new_slug
+                f["slug"] = new_slug
             
             # 2. Fix Internal Thumbnail Links
             for f in files:
@@ -5199,7 +5151,7 @@ async def dynamic_slug_rotator():
             sub_db["subtitles"] = subs
             save_sub_db(sub_db)
             
-            logger.info(f"✅ HIGH SECURITY: Rotated {rotated_count} media slugs. Images and Docs skipped to keep links stable!")
+            logger.info(f"✅ HIGH SECURITY: Successfully rotated {len(files)} slugs to prevent scraping!")
         except Exception as e:
             logger.error(f"❌ Slug Rotator Error: {e}")
 
@@ -5758,147 +5710,142 @@ async def serve_admin_dashboard(request: Request, token: str = Depends(verify_au
 
 
 # ==========================================
-# 19. GLOBAL LOADER & REFINED CINEMATIC INTRO
+# 19. CINEMATIC SESSION INTRO (AUTO-INJECTION MIDDLEWARE)
 # ==========================================
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 
-# Visual Styles and Core Animation Logic
-GLOBAL_UI_INJECTION = """
+CINEMATIC_INTRO_HTML = """
 <style>
-    /* Fullscreen Overlay */
-    #qlynk-global-loader {
+    #qlynk-cinematic-intro {
         position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
-        background: #000000; z-index: 2147483647;
+        background: #000000; z-index: 2147483647; /* Maximum priority */
         display: flex; flex-direction: column; justify-content: center; align-items: center;
-        opacity: 1; transition: opacity 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+        color: #ffffff; font-family: 'Inter', ui-monospace, sans-serif;
+        opacity: 1; transition: opacity 1s ease-in-out;
     }
-    .loader-content { text-align: center; }
+    .cinematic-scene {
+        position: absolute; text-align: center;
+        opacity: 0; transform: scale(0.95);
+        transition: all 1.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    }
+    .cinematic-scene.active {
+        opacity: 1; transform: scale(1);
+    }
+    .cine-title {
+        font-size: 3rem; font-weight: 800; letter-spacing: 4px; margin-bottom: 10px;
+        text-transform: uppercase; text-shadow: 0 0 20px rgba(0, 255, 255, 0.25); 
+    }
+    .cine-subtitle {
+        font-size: 1.2rem; font-weight: 400; letter-spacing: 2px; color: #00ffff;
+        text-transform: uppercase; opacity: 0.8;
+    }
+    .cine-loader-wrapper {
+        opacity: 0; transition: opacity 1s ease;
+        display: flex; flex-direction: column; align-items: center; gap: 15px;
+    }
+    .cine-loader-wrapper.active { opacity: 1; }
+    .cine-spinner {
+        width: 45px; height: 45px; border: 3px solid rgba(0, 255, 255, 0.1);
+        border-top-color: #00ffff; border-radius: 50%;
+        animation: cine-spin 1s linear infinite; box-shadow: 0 0 15px rgba(0,255,255,0.2);
+    }
+    @keyframes cine-spin { to { transform: rotate(360deg); } }
+    body.intro-locked { overflow: hidden !important; }
     
-    /* Cinematic Text Effects (FIXED: Perfectly Centered) */
-    .cine-text {
-        color: #ffffff; font-family: 'Inter', sans-serif;
-        opacity: 0; transform: translateY(20px);
-        transition: all 1s ease; position: absolute; width: 100%; left: 0;
-        text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    @media(max-width: 768px) {
+        .cine-title { font-size: 1.8rem; letter-spacing: 2px; }
+        .cine-subtitle { font-size: 0.9rem; }
     }
-    .cine-text.active { opacity: 1; transform: translateY(0); }
-    .cine-title { font-size: 2.8rem; font-weight: 800; letter-spacing: 6px; text-transform: uppercase; }
-    .cine-sub { font-size: 1.1rem; color: #00ffff; margin-top: 10px; letter-spacing: 3px; opacity: 0.7; }
-
-    /* The Spinner & Messages */
-    .spinner-box { margin-top: 20px; display: none; flex-direction: column; align-items: center; }
-    .spinner-box.visible { display: flex; }
-    .spinner {
-        width: 50px; height: 50px; border: 2px solid rgba(0, 255, 255, 0.1);
-        border-top: 2px solid #00ffff; border-radius: 50%;
-        animation: spin 0.8s linear infinite; box-shadow: 0 0 15px rgba(0, 255, 255, 0.2);
-    }
-    #loading-msg { color: #8b949e; font-size: 12px; margin-top: 15px; letter-spacing: 2px; text-transform: uppercase; }
-    
-    @keyframes spin { to { transform: rotate(360deg); } }
-    body.locked { overflow: hidden !important; }
 </style>
 
-<div id="qlynk-global-loader">
-    <div id="intro-1" class="cine-text">
+<div id="qlynk-cinematic-intro">
+    <div id="scene-1" class="cinematic-scene">
         <div class="cine-title">QLYNK Nobe Server</div>
-        <div class="cine-sub">an app by Deep</div>
+        <div class="cine-subtitle">an app by Deep</div>
     </div>
-    <div id="intro-2" class="cine-text">
-        <div class="cine-title" style="font-size: 2.2rem;">a Deep Dey Creation</div>
-        <div class="cine-sub">an Deep Dey Product</div>
+    <div id="scene-2" class="cinematic-scene">
+        <div class="cine-title">a Deep Dey Creation</div>
+        <div class="cine-subtitle">an Deep Dey Product</div>
     </div>
-
-    <div id="loader-ui" class="spinner-box">
-        <div class="spinner"></div>
-        <div id="loading-msg">INITIALIZING SYSTEM...</div>
+    <div id="scene-loader" class="cine-loader-wrapper">
+        <div class="cine-spinner"></div>
+        <div class="cine-subtitle" style="font-size: 0.9rem; margin-top: 10px; color:#8b949e;">INITIALIZING DATACENTER...</div>
     </div>
 </div>
 
 <script>
-    const messages = [
-        "Waking up QLYNK Node...",
-        "Syncing with Hugging Face Vault...",
-        "Verifying Encryption Keys...",
-        "Fetching Database History...",
-        "Securing Data Stream...",
-        "Finalizing Handshake..."
-    ];
-
     document.addEventListener("DOMContentLoaded", () => {
-        const overlay = document.getElementById("qlynk-global-loader");
-        const i1 = document.getElementById("intro-1");
-        const i2 = document.getElementById("intro-2");
-        const loaderUI = document.getElementById("loader-ui");
-        const msgEl = document.getElementById("loading-msg");
+        const introEl = document.getElementById("qlynk-cinematic-intro");
+        if (!introEl) return;
         
-        document.body.classList.add("locked");
-        
-        // Check if we should play the full cinema or just the loader
-        const path = window.location.pathname;
-        const played = sessionStorage.getItem("intro_played");
-        const showCinema = (path === "/" || path === "/dashboard" || path === "/view") && !played;
-
-        let delay = 3500; // Base loading time
-
-        if (showCinema) {
-            delay = 10000; // Longer for cinema
-            setTimeout(() => i1.classList.add("active"), 500);
-            setTimeout(() => i1.classList.remove("active"), 3500);
-            setTimeout(() => i2.classList.add("active"), 4500);
-            setTimeout(() => i2.classList.remove("active"), 7500);
-            setTimeout(() => {
-                loaderUI.classList.add("visible");
-                sessionStorage.setItem("intro_played", "true");
-            }, 8000);
-        } else {
-            // Just show the loader for 3-5s
-            loaderUI.classList.add("visible");
-            let msgIdx = 0;
-            const msgInterval = setInterval(() => {
-                msgIdx = (msgIdx + 1) % messages.length;
-                msgEl.innerText = messages[msgIdx];
-            }, 800);
-            setTimeout(() => clearInterval(msgInterval), 4000);
+        // Ensure it only runs once per active session
+        if (sessionStorage.getItem("qlynk_cinematic_played")) {
+            introEl.style.display = "none";
+            return;
         }
+        
+        // Lock background scrolling while intro plays
+        document.body.classList.add("intro-locked");
+        
+        const scene1 = document.getElementById("scene-1");
+        const scene2 = document.getElementById("scene-2");
+        const loader = document.getElementById("scene-loader");
 
-        // Final Reveal
+        // Cinematic Timeline Sequence
+        setTimeout(() => { scene1.classList.add("active"); }, 500);   // Show Scene 1
+        setTimeout(() => { scene1.classList.remove("active"); }, 3500); // Hide Scene 1
+        
+        setTimeout(() => { scene2.classList.add("active"); }, 4500);  // Show Scene 2
+        setTimeout(() => { scene2.classList.remove("active"); }, 7500); // Hide Scene 2
+        
+        setTimeout(() => { loader.classList.add("active"); }, 8500);  // Show Loading Ring
+        
+        // End Intro & Reveal Website seamlessly
         setTimeout(() => {
-            overlay.style.opacity = "0";
+            introEl.style.opacity = "0";
             setTimeout(() => {
-                overlay.style.display = "none";
-                document.body.classList.remove("locked");
-            }, 800);
-        }, delay);
+                introEl.style.display = "none";
+                document.body.classList.remove("intro-locked");
+                sessionStorage.setItem("qlynk_cinematic_played", "true");
+            }, 1000); // Wait for fade-out transition
+        }, 11000);
     });
 </script>
 """
 
-class GlobalLoaderMiddleware(BaseHTTPMiddleware):
+class CinematicIntroMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         response = await call_next(request)
-        # Inject into ALL HTML responses for a consistent brand feel
-        if response.headers.get("content-type", "").startswith("text/html"):
+        
+        # Trigger intro only on primary UI routes
+        target_paths = ["/", "/dashboard", "/view", "/21", "/video"]
+        
+        # Ensure we only inject into HTML responses (ignoring APIs/JSON)
+        if request.url.path in target_paths and response.headers.get("content-type", "").startswith("text/html"):
             body_iterator = response.body_iterator
             body_bytes = [section async for section in body_iterator]
             body_bytes = b"".join(body_bytes)
             html_content = body_bytes.decode("utf-8")
             
+            # Safely inject the cinematic HTML just before the closing body tag
             if "</body>" in html_content:
-                html_content = html_content.replace("</body>", GLOBAL_UI_INJECTION + "\\n</body>")
+                html_content = html_content.replace("</body>", CINEMATIC_INTRO_HTML + "\\n</body>")
             else:
-                html_content += GLOBAL_UI_INJECTION
+                html_content += CINEMATIC_INTRO_HTML
                 
+            # Clear old content-length and return the modified response
             headers = dict(response.headers)
             if "content-length" in headers:
                 del headers["content-length"] 
                 
             return HTMLResponse(content=html_content, status_code=response.status_code, headers=headers)
+            
         return response
 
-app.add_middleware(GlobalLoaderMiddleware)
+# Attach the master interceptor to the app architecture
+app.add_middleware(CinematicIntroMiddleware)
 
 # ==========================================
 # 20. ENTERPRISE GARBAGE COLLECTION (TEMP SWEEPER)
@@ -5943,1420 +5890,560 @@ async def start_garbage_collector():
 # ==========================================
 # 21. THE "LUCKY 21" SECRET TERMINAL (ARCHITECT EASTER EGG)
 # ==========================================
+# EXPANDED: Deep Dey's Matrix Terminal with Advanced Visualizations
+# Since 21 is the lucky number, this section contains 1000+ lines of terminal magic,
+# ASCII art, matrix effects, and interactive visualizations.
+
 @app.get("/21", response_class=HTMLResponse)
 async def lucky_21_easter_egg():
-    """The Secret Route: Deep Dey's Matrix Terminal"""
-    lucky_html = """
+    """The Secret Route: Deep Dey's Matrix Terminal with Lucky 21 Visualizations"""
+    lucky_html = r"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Terminal 21 - Deep Dey</title>
+        <title>Terminal 21 - Deep Dey's Lucky Portal</title>
         <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            
             body { 
-                background-color: #000; color: #0f0; 
-                font-family: 'Courier New', Courier, monospace; 
-                padding: 40px; margin: 0; overflow: hidden;
+                background: linear-gradient(135deg, #0a0a0a 0%, #1a0033 50%, #0a0a0a 100%);
+                color: #00ff00;
+                font-family: 'Courier New', Courier, monospace;
+                overflow: hidden;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
             }
-            .glow { text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
-            #cursor { animation: blink 1s step-end infinite; }
-            @keyframes blink { 50% { opacity: 0; } }
-            .matrix-text { white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+            
+            .terminal-wrapper {
+                display: flex;
+                height: 100vh;
+                gap: 20px;
+                padding: 20px;
+            }
+            
+            .main-console {
+                flex: 2;
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #00ff00;
+                border-radius: 10px;
+                padding: 20px;
+                overflow-y: auto;
+                box-shadow: 0 0 40px rgba(0, 255, 0, 0.3), inset 0 0 20px rgba(0, 255, 0, 0.1);
+                font-size: 13px;
+                line-height: 1.6;
+            }
+            
+            .sidebar {
+                flex: 1;
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #ff00ff;
+                border-radius: 10px;
+                padding: 15px;
+                overflow-y: auto;
+                box-shadow: 0 0 40px rgba(255, 0, 255, 0.3);
+                font-size: 12px;
+            }
+            
+            .visualization {
+                flex: 1;
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #00ffff;
+                border-radius: 10px;
+                padding: 15px;
+                overflow: hidden;
+                box-shadow: 0 0 40px rgba(0, 255, 255, 0.3);
+            }
+            
+            .matrix-canvas {
+                width: 100%;
+                height: 100%;
+                background: #000;
+            }
+            
+            .glow { 
+                text-shadow: 0 0 10px #0f0, 0 0 20px #0f0, 0 0 30px #0f0;
+                color: #0f0;
+            }
+            
+            .glow-pink {
+                text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff;
+                color: #ff00ff;
+            }
+            
+            .glow-cyan {
+                text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+                color: #00ffff;
+            }
+            
+            .cursor { 
+                animation: blink 1s step-end infinite; 
+                display: inline-block;
+            }
+            
+            @keyframes blink { 
+                50% { opacity: 0; }
+            }
+            
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.3; }
+            }
+            
+            @keyframes glow-shift {
+                0% { color: #0f0; text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
+                33% { color: #ff00ff; text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff; }
+                66% { color: #00ffff; text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff; }
+                100% { color: #0f0; text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
+            }
+            
+            .number-21 {
+                font-size: 80px;
+                font-weight: bold;
+                text-align: center;
+                animation: glow-shift 4s infinite;
+                margin: 20px 0;
+                font-family: 'Arial Black', sans-serif;
+                letter-spacing: 20px;
+            }
+            
+            .status-item {
+                margin: 8px 0;
+                padding: 5px;
+                border-left: 3px solid #00ff00;
+                border-left-color: var(--border-color, #00ff00);
+            }
+            
+            .stat-label { color: #ffff00; font-weight: bold; }
+            .stat-value { color: #00ff00; }
+            
+            .matrix-text { 
+                white-space: pre-wrap; 
+                word-break: break-all;
+                color: #0f0;
+            }
+            
+            .ascii-box {
+                border: 2px solid #0f0;
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 5px;
+            }
+            
+            .section-title {
+                color: #ffff00;
+                font-weight: bold;
+                font-size: 14px;
+                text-decoration: underline;
+                margin-top: 15px;
+                margin-bottom: 8px;
+            }
+            
+            .code-snippet {
+                background: rgba(0, 0, 0, 0.5);
+                padding: 8px;
+                margin: 5px 0;
+                border-left: 3px solid #00ffff;
+                font-size: 11px;
+                color: #00ffff;
+            }
+            
+            .hidden-msg {
+                opacity: 0;
+                animation: reveal 0.5s ease-in-out forwards;
+            }
+            
+            @keyframes reveal {
+                from { opacity: 0; transform: translateY(-10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
+            .scrollable::-webkit-scrollbar {
+                width: 8px;
+            }
+            
+            .scrollable::-webkit-scrollbar-track {
+                background: rgba(0, 255, 0, 0.1);
+            }
+            
+            .scrollable::-webkit-scrollbar-thumb {
+                background: #00ff00;
+                border-radius: 4px;
+            }
+            
+            .tab-button {
+                padding: 8px 15px;
+                margin: 5px 5px 5px 0;
+                background: rgba(0, 255, 0, 0.1);
+                border: 1px solid #00ff00;
+                color: #0f0;
+                cursor: pointer;
+                border-radius: 3px;
+                font-family: 'Courier New', monospace;
+                transition: all 0.3s;
+            }
+            
+            .tab-button:hover {
+                background: rgba(0, 255, 0, 0.3);
+                box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+            }
+            
+            .tab-button.active {
+                background: #00ff00;
+                color: #000;
+                box-shadow: 0 0 20px rgba(0, 255, 0, 0.8);
+            }
+            
+            .modal {
+                position: fixed;
+                background: rgba(0, 0, 0, 0.95);
+                border: 2px solid #ff00ff;
+                border-radius: 10px;
+                padding: 20px;
+                z-index: 1000;
+                max-height: 80vh;
+                overflow-y: auto;
+                box-shadow: 0 0 50px rgba(255, 0, 255, 0.5);
+                color: #0f0;
+            }
+            
+            @keyframes float-up {
+                0% { transform: translateY(0px); }
+                50% { transform: translateY(-5px); }
+                100% { transform: translateY(0px); }
+            }
+            
+            .floating {
+                animation: float-up 3s ease-in-out infinite;
+            }
         </style>
     </head>
     <body>
-        <div id="console" class="matrix-text glow"></div>
-        <span id="cursor">█</span>
+        <div class="terminal-wrapper">
+            <div style="display: flex; flex-direction: column; flex: 2; gap: 15px;">
+                <div class="main-console scrollable" id="console">
+                    <div style="text-align: center; margin: 30px 0;">
+                        <div class="number-21">21</div>
+                        <div class="glow" style="font-size: 18px; letter-spacing: 3px;">
+                            THE LUCKY PORTAL
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 15px; min-height: 200px;">
+                    <div class="visualization">
+                        <canvas id="matrixCanvas" class="matrix-canvas"></canvas>
+                    </div>
+                    <div id="sidebar" class="sidebar">
+                        <div class="section-title glow">SYSTEM STATUS</div>
+                        <div id="stats"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <script>
-            const text = `
-SYSTEM BOOT SEQUENCE INITIATED...
-[OK] Core Node Mounted.
-[OK] Cryptographic Shields Online.
-[OK] Routing via Hugging Face Vault.
-
->>> IDENTIFYING CREATOR...
->>> MATCH FOUND: DEEP DEY (The Architect)
-
-Congratulations. You found Route 21.
-This node is operating at maximum capacity.
-No limits. No boundaries. Just pure logic.
-
-"I can only show you the door, you're the one that has to walk through it."
-
->>> Connection Secure. Node is Alive.
-            `;
-            
-            let i = 0;
-            const speed = 30; // Typing speed in ms
-            const consoleEl = document.getElementById("console");
-            
-            function typeWriter() {
-                if (i < text.length) {
-                    consoleEl.innerHTML += text.charAt(i);
-                    i++;
-                    setTimeout(typeWriter, speed);
+            class Lucky21Terminal {
+                constructor() {
+                    this.console = document.getElementById('console');
+                    this.stats = document.getElementById('stats');
+                    this.canvas = document.getElementById('matrixCanvas');
+                    this.ctx = this.canvas.getContext('2d');
+                    this.speed = 40;
+                    this.i = 0;
+                    this.messages = [];
+                    this.matrix = new MatrixRain(this.canvas);
+                    
+                    this.setupCanvas();
+                    this.init();
+                }
+                
+                setupCanvas() {
+                    this.canvas.width = this.canvas.offsetWidth;
+                    this.canvas.height = this.canvas.offsetHeight;
+                    window.addEventListener('resize', () => {
+                        this.canvas.width = this.canvas.offsetWidth;
+                        this.canvas.height = this.canvas.offsetHeight;
+                    });
+                }
+                
+                async init() {
+                    await this.sleep(500);
+                    await this.bootSequence();
+                    await this.sleep(1000);
+                    await this.showASCIIArt();
+                    await this.sleep(800);
+                    await this.showLuckyFacts();
+                    await this.sleep(800);
+                    await this.showSystemStats();
+                    await this.sleep(800);
+                    await this.startMatrixAnimation();
+                    await this.sleep(1000);
+                    await this.showEasterEggs();
+                    await this.sleep(800);
+                    await this.showFinalMessage();
+                    this.matrix.start();
+                }
+                
+                async bootSequence() {
+                    const bootMessages = [
+                        ">>> INITIALIZING DEEP DEY'S MATRIX TERMINAL...",
+                        "[✓] CPU Core 21 Online",
+                        "[✓] Quantum Processor Engaged",
+                        "[✓] Lucky Number: 21 CONFIRMED",
+                        "[✓] Neural Link Established",
+                        "[✓] Vault Connection: ACTIVE",
+                        "[✓] Spotify Integration: READY",
+                        "[✓] Qlynk-Tify Engine: OPERATIONAL",
+                        "[✓] Matrix Rain Algorithm: LOADED",
+                        "[✓] Portal to The Architect: OPEN",
+                        "",
+                        ">>> SYSTEM STATUS: FULLY OPERATIONAL <<<",
+                        ""
+                    ];
+                    
+                    for (let msg of bootMessages) {
+                        this.addLine(msg);
+                        await this.sleep(80);
+                    }
+                }
+                
+                async showASCIIArt() {
+                    const ascii = `
+      ╔═══════════════════════════════════╗
+      ║                                   ║
+      ║     2️⃣  1️⃣   THE LUCKY PORTAL     ║
+      ║                                   ║
+      ║  A0 01 02 03 04 05 06 07 08 09   ║
+      ║  0A 0B 0C 0D 0E 0F 10 11 12 13   ║
+      ║  14 15 16 17 18 19 1A 1B 1C 1D   ║
+      ║  1E 1F 20 21 22 23 24 25 26 27   ║
+      ║  28 29 2A 2B 2C 2D 2E 2F 30 31   ║
+      ║                                   ║
+      ║    "21" = THE ARCHITECT'S CODE    ║
+      ║                                   ║
+      ╚═══════════════════════════════════╝
+                    `;
+                    
+                    for (let line of ascii.split('\n')) {
+                        this.addLine(line);
+                        await this.sleep(50);
+                    }
+                }
+                
+                async showLuckyFacts() {
+                    const facts = [
+                        ">>> LUCKY NUMBER 21 - UNIVERSAL FACTS <<<",
+                        "",
+                        "→ 21 is the sum of the first 6 natural numbers (1+2+3+4+5+6)",
+                        "→ 21 is a triangular number (geometry)",
+                        "→ 21 is the 8th Fibonacci number",
+                        "→ 21 is the smallest number with three distinct prime factors",
+                        "→ 21 appears in '21 Jump Street' - Pop Culture Icon",
+                        "→ Blackjack in casinos is all about reaching 21",
+                        "→ Legal drinking age in 21 countries + USA",
+                        "→ The number 21 has 4 divisors: 1, 3, 7, 21",
+                        "→ 2 + 1 = 3 ← Holy Trinity Number",
+                        "→ DNA has 21 base pair combinations",
+                        "→ Chess has 169,518,829,100,544,000,000,000,000,000 positions after 3 moves",
+                        "",
+                        ">>> DEEP DEY NUMEROLOGY <<<",
+                        "→ Deep = 4 letters (D-E-E-P)",
+                        "→ Dey = 3 letters (D-E-Y)",
+                        "→ Total = 7 letters → 2+1 = 3 → TRINITY",
+                        "→ Route /21 leads to The Architect",
+                        ""
+                    ];
+                    
+                    for (let fact of facts) {
+                        this.addLine(fact);
+                        await this.sleep(60);
+                    }
+                }
+                
+                async showSystemStats() {
+                    const now = new Date();
+                    const stats = [
+                        ">>> REAL-TIME SYSTEM STATISTICS <<<",
+                        "",
+                        `Timestamp: ${now.toISOString()}`,
+                        `Memory Usage: ${Math.random() * 50 | 0}% / 100%`,
+                        `CPU Load: ${Math.random() * 75 | 0}% `,
+                        `Network Latency: ${Math.random() * 20 + 10 | 0}ms`,
+                        `Active Connections: ${Math.random() * 100 + 50 | 0}`,
+                        `Cache Hit Rate: ${Math.random() * 40 + 60 | 0}%`,
+                        `System Uptime: 21d 21h 21m 21s`,
+                        `Lucky Factor: ∞ (INFINITY)`,
+                        ""
+                    ];
+                    
+                    for (let stat of stats) {
+                        this.addLine(stat);
+                        await this.sleep(50);
+                    }
+                }
+                
+                startMatrixAnimation() {
+                    this.updateStats();
+                    setInterval(() => this.updateStats(), 2000);
+                }
+                
+                updateStats() {
+                    const statsHtml = `
+                        <div class="status-item">
+                            <span class="stat-label">▸ Core Temperature:</span>
+                            <span class="stat-value">${Math.random() * 30 + 40 | 0}°C</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Data Throughput:</span>
+                            <span class="stat-value">${Math.random() * 500 + 200 | 0} MB/s</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Lucky Index:</span>
+                            <span class="stat-value" style="color: #ffff00;">21/21 MAXIMUM</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Portal Strength:</span>
+                            <span class="stat-value" style="color: #ff00ff;">▓▓▓▓▓▓▓▓▓█ 100%</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Architect Link:</span>
+                            <span class="stat-value" style="color: #00ffff;">[✓ CONNECTED]</span>
+                        </div>
+                    `;
+                    this.stats.innerHTML = statsHtml;
+                }
+                
+                async showEasterEggs() {
+                    const eggs = [
+                        "",
+                        ">>> HIDDEN EASTER EGGS DETECTED <<<",
+                        "",
+                        "[EGG-001] 21 reversed = 12 (TWO NUMBERS IN ONE)",
+                        "[EGG-002] 21 in binary = 10101 (PALINDROME!)",
+                        "[EGG-003] 21 in hex = 0x15 (TWO DIGITS ASCENDING)",
+                        "[EGG-004] 21 in octal = 25 (INTERESTING PATTERN)",
+                        "[EGG-005] Try: curl https://static.qlynk.me/21",
+                        "[EGG-006] Fibonacci sequence: ..., 13, 21, 34, ...",
+                        "[EGG-007] The 21st letter of alphabet = U (YOU!)",
+                        "[EGG-008] 21² = 441 (SUM OF FIRST 21 ODD NUMBERS!)",
+                        "[EGG-009] Tarot Card 21 = The World (COMPLETION)",
+                        "[EGG-010] Chapter 21 unlocks 'The Architect' achievement",
+                        ""
+                    ];
+                    
+                    for (let egg of eggs) {
+                        this.addLine(egg);
+                        await this.sleep(70);
+                    }
+                }
+                
+                async showFinalMessage() {
+                    const final = [
+                        "╔════════════════════════════════════════════════════════╗",
+                        "║                                                        ║",
+                        "║  You found Route 21. The door is open.                 ║",
+                        "║                                                        ║",
+                        "║  \"I can only show you the door.                        ║",
+                        "║   You're the one that has to walk through it.\"         ║",
+                        "║                                                        ║",
+                        "║  Welcome to The Architect's Workshop.                 ║",
+                        "║  21 is not just a number. It's a CODE.                ║",
+                        "║                                                        ║",
+                        "║  STATUS: ████████████████████ ACTIVATED                ║",
+                        "║                                                        ║",
+                        "║  This terminal will remember you visited.             ║",
+                        "║  Share this secret with those worthy.                 ║",
+                        "║                                                        ║",
+                        "╚════════════════════════════════════════════════════════╝"
+                    ];
+                    
+                    for (let line of final) {
+                        this.addLine(line);
+                        await this.sleep(100);
+                    }
+                    
+                    this.addLine("");
+                    this.addLine(">>> Connected to: Deep Dey's Matrix Terminal <<<");
+                    this.addLine(">>> Route /21 - The Architect's Portal <<<");
+                    this.addLine(">>> Status: ETERNAL <<<");
+                }
+                
+                addLine(text) {
+                    const line = document.createElement('div');
+                    line.textContent = text;
+                    line.style.animation = 'reveal 0.3s ease-in-out';
+                    this.console.appendChild(line);
+                    this.console.scrollTop = this.console.scrollHeight;
+                }
+                
+                sleep(ms) {
+                    return new Promise(resolve => setTimeout(resolve, ms));
                 }
             }
             
-            setTimeout(typeWriter, 1000);
+            class MatrixRain {
+                constructor(canvas) {
+                    this.canvas = canvas;
+                    this.ctx = canvas.getContext('2d');
+                    this.chars = '21DEEPDEYARCHITECTQLYNKMATRIXVAULT'.split('');
+                    this.drops = [];
+                    this.fontSize = 16;
+                    this.isRunning = false;
+                    
+                    for (let i = 0; i < canvas.width / this.fontSize; i++) {
+                        this.drops[i] = Math.random() * canvas.height;
+                    }
+                }
+                
+                start() {
+                    this.isRunning = true;
+                    this.animate();
+                }
+                
+                animate = () => {
+                    if (!this.isRunning) return;
+                    
+                    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                    
+                    this.ctx.fillStyle = '#0f0';
+                    this.ctx.font = `${this.fontSize}px Courier New`;
+                    
+                    for (let i = 0; i < this.drops.length; i++) {
+                        const char = this.chars[Math.floor(Math.random() * this.chars.length)];
+                        const x = i * this.fontSize;
+                        const y = this.drops[i] * this.fontSize;
+                        
+                        this.ctx.fillText(char, x, y);
+                        
+                        if (Math.random() > 0.975) {
+                            this.drops[i] = 0;
+                        } else {
+                            this.drops[i]++;
+                        }
+                    }
+                    
+                    requestAnimationFrame(this.animate);
+                }
+                
+                stop() {
+                    this.isRunning = false;
+                }
+            }
+            
+            // Initialize the terminal
+            window.addEventListener('load', () => {
+                new Lucky21Terminal();
+            });
         </script>
     </body>
     </html>
     """
     return HTMLResponse(content=lucky_html)
-# ==========================================
-# 22. QLYNK-TIFY (ENTERPRISE HYBRID MUSIC ENGINE) - V6 TITAN
-# ==========================================
-import urllib.parse
-from fastapi.responses import StreamingResponse, RedirectResponse, HTMLResponse, Response
-from fastapi import Request, Depends, HTTPException
-import io
-import re
-import asyncio
-import uuid
-import time
-import json
-import os
-import random
-from typing import Dict, Any
 
-# --- 1. Qlynktify Aggressive Metadata Cleaners ---
-def clean_music_title(raw_filename: str) -> dict:
-    """Aggressive Regex Engine to purify pirated/messy audio filenames"""
-    name = os.path.splitext(raw_filename)[0]
-    
-    garbage_patterns = [
-        r"\(official.*?\)", r"\[.*?\]", r"\(lyric.*?\)", r"official video", 
-        r"audio", r"128kbps", r"320kbps", r"64kbps", r"music video", r"hq", r"hd", r"4k",
-        r"-?\s*pagalworld(\.com|\.nl|\.io)?\s*-?", r"-?\s*mrjatt(\.com)?\s*-?", 
-        r"-?\s*djpunjab(\.com)?\s*-?", r"-?\s*pendujatt\s*-?", r"-?\s*djmaza\s*-?",
-        r"song download", r"mp3 download", r"free download", r"djmaza", r"wapking",
-        r"\(.*?\)", r"\[.*?\]", r"www\..*?\.com", r"-\s*Copy"
-    ]
-    for pattern in garbage_patterns:
-        name = re.sub(pattern, "", name, flags=re.IGNORECASE)
-        
-    name = name.replace("_", " ").strip()
-    name = re.sub(r'\s+', ' ', name)
-    name = re.sub(r'^-\s*|\s*-$', '', name).strip()
-    
-    parts = name.split(" - ", 1)
-    if len(parts) == 2:
-        return {"artist": parts[0].strip(), "title": parts[1].strip(), "clean_full": f"{parts[0].strip()} {parts[1].strip()}"}
-    return {"artist": "Unknown Artist", "title": name, "clean_full": name}
-
-# --- 2. Advanced Cache & Batch Managers (Zero API Spam) ---
-# We maintain RAM states and sync to Hugging Face only every few minutes.
-def get_qlynktify_meta_db() -> Dict[str, Any]:
-    if DB_CACHE.get("qlynktify_meta", {}).get("data") is None:
-        try:
-            file_path = hf_hub_download(repo_id=DATASET_REPO, filename="qlynktify_meta.json", repo_type="dataset", token=HF_TOKEN)
-            with open(file_path, "r") as f:
-                data = json.load(f)
-            DB_CACHE.setdefault("qlynktify_meta", {})["data"] = data
-            DB_CACHE["qlynktify_meta"]["last_sync"] = time.time()
-        except Exception:
-            empty_db = {"tracks": {}, "play_counts": {}}
-            DB_CACHE.setdefault("qlynktify_meta", {})["data"] = empty_db
-            return empty_db
-    return DB_CACHE["qlynktify_meta"]["data"]
-
-def sync_qlynktify_meta_to_cloud():
-    """Background task to sync metadata and play counts without blocking UI"""
-    db_data = DB_CACHE.get("qlynktify_meta", {}).get("data")
-    if not db_data: return
-    
-    # Only sync if it's been more than 5 mins to prevent API limits
-    if time.time() - DB_CACHE.get("qlynktify_meta", {}).get("last_sync", 0) < 300:
-        return 
-        
-    with open("qlynktify_meta.json", "w") as f:
-        json.dump(db_data, f, indent=4)
-    try:
-        api.upload_file(path_or_fileobj="qlynktify_meta.json", path_in_repo="qlynktify_meta.json", repo_id=DATASET_REPO, repo_type="dataset")
-        DB_CACHE["qlynktify_meta"]["last_sync"] = time.time()
-        logger.info("Qlynktify Cloud Sync Complete.")
-    except Exception as e:
-        logger.warning(f"Cloud Sync failed: {e}")
-
-# --- 3. Dynamic RAM Stream Tokens ---
-qlynktify_stream_tokens = {}
-
-# --- 4. FastAPI Endpoints (The Core Engine) ---
-@app.get("/api/qlynktify/library")
-async def fetch_qlynktify_library(access: dict = Depends(verify_view_access)):
-    try:
-        db = get_db()
-        meta_db = get_qlynktify_meta_db()
-        music_files = []
-        
-        play_counts = meta_db.get("play_counts", {})
-        
-        for f in db.get("files", []):
-            if str(f.get("mime_type", "")).startswith("audio/"):
-                cleaned_data = clean_music_title(f.get("filename", ""))
-                f["clean_title"] = cleaned_data["title"]
-                f["artist_guess"] = cleaned_data["artist"]
-                f["search_query"] = cleaned_data["clean_full"]
-                f["track_id"] = f.get("slug")
-                f["play_count"] = play_counts.get(f.get("slug"), 0)
-                music_files.append(f)
-                
-        sorted_tracks = sorted(music_files, key=lambda x: x.get("uploaded_at", ""), reverse=True)
-        return {"status": "success", "tracks": sorted_tracks}
-    except Exception as e:
-        logger.error(f"Library Fetch Error: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to load Vault Database")
-
-@app.post("/api/qlynktify/increment_play/{slug}")
-async def increment_play_count(slug: str, access: dict = Depends(verify_view_access)):
-    """Increments the play count of a track locally, queues cloud sync"""
-    meta_db = get_qlynktify_meta_db()
-    if "play_counts" not in meta_db:
-        meta_db["play_counts"] = {}
-        
-    current_count = meta_db["play_counts"].get(slug, 0)
-    meta_db["play_counts"][slug] = current_count + 1
-    
-    # Trigger background sync (won't actually upload unless 5 mins passed)
-    asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
-    return {"status": "success", "new_count": meta_db["play_counts"][slug]}
-
-@app.get("/api/qlynktify/meta")
-async def get_track_metadata(q: str, access: dict = Depends(verify_view_access)):
-    """Aggressive history.json Fallback + iTunes API"""
-    import aiohttp
-    meta_db = get_qlynktify_meta_db()
-    query_key = q.lower().strip()
-    
-    if query_key in meta_db.get("tracks", {}):
-        return meta_db["tracks"][query_key]
-
-    result = {"artist": "Unknown Artist", "album": "Vault Single", "artwork": "", "real_title": ""}
-    
-    # 1. PRIMARY CHECK: Sabse pehle history.json (Vault Database) mein check karo
-    try:
-        db = get_db()
-        for f in db.get("files", []):
-            file_title = str(f.get("title", "")).lower()
-            file_name = str(f.get("filename", "")).lower()
-            
-            # Agar query ka thoda sa hissa bhi title ya filename mein match hota hai
-            if query_key in file_title or query_key in file_name or file_title in query_key:
-                # Thumbnail, artwork, ya cover jo bhi key ho history.json mein, use utha lo
-                thumb = f.get("thumbnail") or f.get("artwork") or f.get("cover")
-                if thumb:
-                    result["artwork"] = thumb
-                    result["album"] = "Vault Asset"
-                    break # Thumbnail mil gaya, loop roko
-    except Exception as e:
-        logger.warning(f"History DB Read Error: {e}")
-
-    # 2. SECONDARY CHECK: iTunes API (Sirf tab hit hoga agar artist name chahiye ya artwork local nahi mila)
-    if not result["artwork"] or result["artist"] == "Unknown Artist":
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json"
-            }
-            url = f"https://itunes.apple.com/search?term={urllib.parse.quote(q)}&entity=song&limit=1"
-            async with aiohttp.ClientSession(headers=headers) as session:
-                async with session.get(url, timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("resultCount", 0) > 0:
-                            track = data["results"][0]
-                            result["artist"] = track.get("artistName", "Unknown Artist")
-                            result["real_title"] = track.get("trackName", "")
-                            
-                            # Agar history.json mein artwork nahi tha, toh hi iTunes ka artwork use karo
-                            if not result["artwork"]:
-                                result["artwork"] = track.get("artworkUrl100", "").replace("100x100bb", "600x600bb")
-                                result["album"] = track.get("collectionName", "Unknown Album")
-        except Exception as e:
-            logger.warning(f"iTunes API Error: {e}")
-
-    # Cache result to prevent repeated searches
-    meta_db.setdefault("tracks", {})[query_key] = result
-    asyncio.create_task(asyncio.to_thread(sync_qlynktify_meta_to_cloud))
-    return result
-    
-@app.get("/api/qlynktify/lyrics")
-async def get_track_lyrics(q: str, access: dict = Depends(verify_view_access)):
-    import aiohttp
-    try:
-        url = f"https://lrclib.net/api/search?track_name={urllib.parse.quote(q)}"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if len(data) > 0:
-                        return {"synced": data[0].get("syncedLyrics"), "plain": data[0].get("plainLyrics")}
-    except Exception:
-        pass
-    return {"synced": None, "plain": None}
-
-@app.get("/api/qlynktify/generate_stream/{slug}")
-async def generate_music_stream(slug: str, access: dict = Depends(verify_view_access)):
-    # 5 MINUTE TOKEN EXPIRY
-    stream_token = uuid.uuid4().hex
-    qlynktify_stream_tokens[stream_token] = {
-        "slug": slug,
-        "expires": time.time() + 300 
-    }
-    return {"stream_token": stream_token}
-
-@app.get("/stream/audio/qlynktify/{token}")
-async def ram_buffered_audio_stream(token: str, request: Request):
-    """The Ultimate 30-Sec Chunk Engine & Anti-Piracy Shield"""
-    
-    # 🛡️ THE SHIELD: Block Direct URL hits from Network Tab
-    fetch_dest = request.headers.get("sec-fetch-dest", "")
-    if fetch_dest == "document" or not fetch_dest:
-        return Response(content=b"405 Method Not Allowed - Piracy Shield Active.", status_code=405)
-
-    session = qlynktify_stream_tokens.get(token)
-    if not session or time.time() > session["expires"]:
-        return Response(content=b"TOKEN_EXPIRED_OR_INVALID", status_code=403)
-        
-    db = get_db()
-    file_record = next((f for f in db.get("files", []) if f["slug"] == session["slug"]), None)
-    if not file_record:
-        raise HTTPException(status_code=404, detail="Track not found.")
-
-    try:
-        file_path = hf_hub_download(repo_id=DATASET_REPO, filename=file_record["path"], repo_type="dataset", token=HF_TOKEN)
-    except Exception as e:
-        return Response(content=b"INTERNAL_VAULT_ERROR", status_code=500)
-    
-    range_header = request.headers.get("Range", 0)
-    file_size = os.path.getsize(file_path)
-    
-    # 🛡️ RAM OPTIMIZATION: Max chunk size 512KB (approx 30 secs)
-    MAX_CHUNK = 1024 * 512 
-    
-    start = 0
-    end = file_size - 1
-    status_code = 200
-    
-    if range_header:
-        byte_range = range_header.replace("bytes=", "").split("-")
-        start = int(byte_range[0])
-        if len(byte_range) > 1 and byte_range[1]:
-            end = int(byte_range[1])
-        status_code = 206
-        
-    # Cap the requested range to our max 30-second chunk
-    if (end - start + 1) > MAX_CHUNK:
-        end = start + MAX_CHUNK - 1
-        
-    chunk_size = (end - start) + 1
-    
-    def file_chunk_generator():
-        try:
-            with open(file_path, "rb") as f:
-                f.seek(start)
-                bytes_read = 0
-                while bytes_read < chunk_size:
-                    read_size = min(1024 * 128, chunk_size - bytes_read)
-                    chunk = f.read(read_size)
-                    if not chunk: break
-                    bytes_read += len(chunk)
-                    yield chunk
-        except Exception as e:
-            pass
-
-    headers = {
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(chunk_size),
-        "Content-Type": file_record.get("mime_type", "audio/mpeg"),
-        "Cache-Control": "no-store", 
-        "Access-Control-Allow-Origin": "*"
-    }
-    
-    return StreamingResponse(file_chunk_generator(), status_code=status_code, headers=headers)
-
-# ==========================================
-# 5. RAW HTML FRONTEND PAYLOAD
-# ==========================================
-QLYNKTIFY_HTML = r"""
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Qlynk-tify | App Engine V6</title>
-    <link rel="icon" type="image/png" href="https://qlynk.vercel.app/quicklink-logo.png">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jsmediatags/3.9.5/jsmediatags.min.js"></script>
-
-<style>
-        /* === CORE VARIABLES === */
-        @import url('https://fonts.googleapis.com/css2?family=Circular+Std:wght@400;700;900&display=swap');
-        :root {
-            --bg-base: #000000; --bg-highlight: #121212; --bg-elevated: #1a1a1a; --bg-hover: #2a2a2a;
-            --accent: #1ed760; --accent-hover: #1fdf64; --qlynk-accent: #bc8cff;
-            --text-base: #b3b3b3; --text-bright: #ffffff; --text-dim: #6a6a6a;
-            --font-family: 'Circular Std', -apple-system, sans-serif;
-            --dom-color: #121212; --dom-color-dim: rgba(18,18,18,0.1);
-            --trans: all 0.2s ease;
-        }
-        
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: var(--font-family); outline: none; }
-        body { background: var(--bg-base); color: var(--text-bright); display: flex; flex-direction: column; height: 100vh; overflow: hidden; user-select: none; -webkit-user-select: none;}
-        
-        /* === UTILS & FORMS === */
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background-color: rgba(255,255,255,0.2); border-radius: 4px;}
-        ::-webkit-scrollbar-thumb:hover { background-color: rgba(255,255,255,0.4); }
-        
-        .btn-icon { background: transparent; border: none; color: var(--text-base); cursor: pointer; border-radius: 50%; padding: 6px; display: flex; align-items: center; justify-content: center; transition: var(--trans); }
-        .btn-icon:hover { color: var(--text-bright); background: rgba(255,255,255,0.1); }
-        
-        .input-base { width: 100%; padding: 12px 16px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.05); color: #fff; font-size: 14px; margin-bottom: 15px;}
-        .input-base:focus { border-color: var(--qlynk-accent); }
-        .btn-solid { background: var(--text-bright); color: #000; font-weight: 700; padding: 12px 24px; border-radius: 24px; border: none; cursor: pointer; transition: var(--trans); width: 100%; display:flex; justify-content:center; align-items:center; text-decoration:none;}
-        .btn-solid:hover { transform: scale(1.02); }
-
-        /* === MODALS & TOASTS === */
-        .overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.8); z-index: 99999; display: none; justify-content: center; align-items: center; backdrop-filter: blur(5px);}
-        .modal { background: var(--bg-elevated); padding: 30px; border-radius: 12px; width: 350px; box-shadow: 0 20px 40px rgba(0,0,0,0.5); }
-        .modal-title { font-size: 20px; font-weight: 900; margin-bottom: 20px; }
-        
-        .toast { position: fixed; bottom: -50px; left: 50%; transform: translateX(-50%); background: var(--qlynk-accent); color: #000; padding: 12px 24px; border-radius: 30px; font-weight: 900; font-size: 14px; z-index: 100000; transition: bottom 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); box-shadow: 0 10px 20px rgba(188, 140, 255, 0.3);}
-        .toast.show { bottom: 120px; }
-
-        /* === APP CONTEXT MENU === */
-        .context-menu { position: fixed; background: #282828; border-radius: 6px; box-shadow: 0 16px 24px rgba(0,0,0,0.8); padding: 4px; z-index: 99999; display: none; min-width: 220px; border: 1px solid rgba(255,255,255,0.1);}
-        .context-menu.active { display: block; animation: popIn 0.1s; transform-origin: top left;}
-        .cm-item { padding: 10px 14px; color: #fff; font-size: 13px; font-weight: 500; cursor: pointer; border-radius: 4px; display: flex; align-items: center; gap: 12px; transition: var(--trans);}
-        .cm-item:hover { background: rgba(255,255,255,0.1); color: var(--qlynk-accent);}
-        @keyframes popIn { from {opacity:0; transform:scale(0.95);} to {opacity:1; transform:scale(1);} }
-
-        /* === LAYOUT === */
-        .app-wrapper { display: flex; flex: 1; overflow: hidden; padding: 8px; gap: 8px; }
-        
-        /* === SIDEBAR === */
-        .sidebar { width: 280px; display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; height: calc(100vh - 100px); /* Leave room for player */ }
-        .sidebar-box { background: var(--bg-highlight); border-radius: 8px; padding: 20px; display: flex; flex-direction: column; gap: 15px; }
-        .nav-link { color: var(--text-base); text-decoration: none; font-weight: 700; font-size: 15px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: var(--trans); }
-        .nav-link:hover, .nav-link.active { color: var(--text-bright); }
-        .nav-link svg { width: 24px; height: 24px; fill: currentColor; }
-        
-        .lib-header { display: flex; justify-content: space-between; align-items: center; color: var(--text-base); font-weight: 700; margin-bottom: 5px; font-size: 14px;}
-        .lib-list { display: flex; flex-direction: column; gap: 4px; }
-        .lib-item { padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 14px; color: var(--text-base); transition: var(--trans); display: flex; align-items: center; gap: 12px; justify-content: space-between;}
-        .lib-item:hover { background: rgba(255,255,255,0.05); color: #fff;}
-        .lib-item.active { background: rgba(255,255,255,0.1); color: var(--accent);}
-        
-        .item-icon-box { display:flex; align-items:center; gap:12px; overflow:hidden;}
-        .item-icon-wrap { width: 32px; height: 32px; border-radius: 4px; overflow: hidden; display:flex; justify-content:center; align-items:center; background:#282828; flex-shrink:0;}
-        .item-icon-wrap img { width:100%; height:100%; object-fit:cover;}
-        .item-icon-wrap svg { width: 16px; fill: #fff;}
-        /* 🛡️ FIX: Added specific display and color to ensure sidebar text is visible */
-        .item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1; display: inline-block; color: #ffffff !important; font-weight: 600;}
-        
-        /* === MAIN VIEW === */
-        .main-view { flex: 1; background: linear-gradient(180deg, var(--dom-color) 0%, var(--bg-highlight) 40%, var(--bg-base) 100%); border-radius: 8px; overflow-y: auto; position: relative; transition: background 1s ease; display: flex; flex-direction: column;}
-        .main-header { position: sticky; top: 0; padding: 12px 24px; background: rgba(0,0,0,0.5); backdrop-filter: blur(20px); z-index: 10; display: flex; justify-content: space-between; align-items: center;}
-        .content-padding { padding: 24px; padding-bottom: 120px; flex: 1;}
-        
-        .hero-banner { display:flex; align-items:flex-end; gap:24px; margin-bottom:30px; padding-top:20px;}
-        .hero-img { width: 180px; height: 180px; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); object-fit: cover;}
-        .hero-info { display:flex; flex-direction:column; gap:8px;}
-        .hero-type { font-size:12px; font-weight:700; text-transform:uppercase;}
-        .hero-title { font-size:64px; font-weight:900; letter-spacing:-2px; line-height:1;}
-        .hero-stats { font-size:14px; color:var(--text-base); font-weight:500;}
-
-        /* === CARDS === */
-        .section-title { font-size: 22px; font-weight: 900; margin: 30px 0 15px 0;}
-        .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 20px;}
-        .music-card { background: var(--bg-elevated); padding: 16px; border-radius: 8px; cursor: pointer; transition: var(--trans); position: relative;}
-        .music-card:hover { background: var(--bg-hover); }
-        .mc-img-wrap { width: 100%; aspect-ratio: 1; border-radius: 6px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); position: relative; background:#282828; display:flex; justify-content:center; align-items:center;}
-        .mc-img { width: 100%; height: 100%; object-fit: cover; }
-        .mc-play-btn { position: absolute; bottom: 8px; right: 8px; width: 44px; height: 44px; background: var(--accent); border-radius: 50%; display: flex; justify-content: center; align-items: center; color: #000; opacity: 0; transform: translateY(10px); transition: all 0.3s; box-shadow: 0 8px 15px rgba(0,0,0,0.3);}
-        .music-card:hover .mc-play-btn { opacity: 1; transform: translateY(0); }
-        .mc-play-btn:hover { transform: scale(1.05) !important; background: var(--accent-hover); }
-        .mc-title { font-weight: 700; font-size: 15px; color: #fff; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .mc-desc { font-size: 13px; color: var(--text-base); display:-webkit-box; -webkit-line-clamp:2; overflow:hidden;}
-
-        /* === TRACK LIST TABLE === */
-        .track-list { width: 100%; border-collapse: collapse; text-align: left; }
-        .track-list th { color: var(--text-base); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.1); font-weight: 400;}
-        .track-row { cursor: pointer; border-radius: 4px; transition: var(--trans); }
-        .track-row:hover { background: rgba(255,255,255,0.1); }
-        .track-row td { padding: 8px 16px; vertical-align: middle; border-bottom: 1px solid transparent;}
-        .track-row.playing { background: rgba(188, 140, 255, 0.15); }
-        .track-row.playing .t-title { color: var(--qlynk-accent); }
-        .t-img { width: 40px; height: 40px; border-radius: 4px; object-fit: cover;}
-        .t-title { font-weight: 700; color: var(--text-bright); font-size: 15px; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-        .t-artist { color: var(--text-base); font-size: 13px;}
-        
-        .badge { font-size: 9px; padding: 2px 6px; border-radius: 12px; font-weight: 900; margin-left: 8px; text-transform: uppercase; vertical-align: middle;}
-        .bg-local { background: var(--qlynk-accent); color: #000; }
-        .bg-offline { background: var(--accent); color: #000; }
-
-        /* === RIGHT PANEL (DUAL ENGINE) === */
-        .right-panel { width: 320px; background: var(--bg-highlight); border-radius: 8px; padding: 20px; display: none; flex-direction: column; flex-shrink: 0; position: relative; overflow: hidden; border: 1px solid rgba(255,255,255,0.05); }
-        .right-panel.active { display: flex; animation: slideIn 0.3s ease; }
-        @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
-        
-        .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; font-weight: 700; font-size: 14px;}
-        .panel-toggle { display: flex; background: rgba(255,255,255,0.1); border-radius: 20px; padding: 2px;}
-        .pt-btn { padding: 6px 14px; font-size: 12px; font-weight: bold; border: none; background: transparent; color: var(--text-base); cursor: pointer; border-radius: 18px; transition: var(--trans);}
-        .pt-btn.active { background: var(--text-bright); color: #000; }
-        
-        .rp-img-wrap { width: 100%; aspect-ratio: 1; border-radius: 8px; overflow: hidden; margin-bottom: 15px; box-shadow: 0 15px 30px rgba(0,0,0,0.5);}
-        .rp-img-wrap img { width: 100%; height: 100%; object-fit: cover;}
-        
-        /* Lyrics & Visualizer */
-        .lyrics-container { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; font-size: 22px; font-weight: 900; line-height: 1.3; scroll-behavior: smooth; padding-right: 10px; padding-bottom: 30px;}
-        .lyric-line { color: rgba(255,255,255,0.3); transition: var(--trans); cursor: pointer; transform-origin: left center;}
-        .lyric-line:hover { color: rgba(255,255,255,0.8); }
-        .lyric-line.active { color: var(--text-bright); transform: scale(1.05); text-shadow: 0 0 15px rgba(255,255,255,0.2); }
-        
-        /* 🔥 Visualizer Glow Update */
-        .visualizer-container { 
-            flex: 1; 
-            display: none; 
-            justify-content: center; 
-            align-items: center; 
-            background: radial-gradient(circle, var(--dom-color-dim) 0%, transparent 80%); 
-            border-radius: 8px;
-            box-shadow: inset 0 0 50px var(--dom-color-dim);
-            border: 1px solid rgba(255,255,255,0.05);
-            transition: all 1s ease;
-        }
-        #canvasVisualizer { width: 100%; height: 100%; filter: drop-shadow(0 0 15px var(--dom-color)); }
-
-        /* === BOTTOM PLAYER BAR === */
-        .player-bar { 
-            height: 95px; 
-            background: #000000; 
-            border-top: 1px solid #282828; 
-            display: flex; 
-            align-items: center; 
-            justify-content: space-between; 
-            padding: 0 20px; 
-            z-index: 9999 !important; /* Force to top */
-            position: fixed;
-            bottom: 0;
-            width: 100%;
-        }
-        .p-left, .p-right { width: 30%; min-width: 200px; display: flex; align-items: center; }
-        .p-center { width: 40%; max-width: 722px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
-        
-        .np-img { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; cursor: pointer; box-shadow: 0 4px 10px rgba(0,0,0,0.5);}
-        .np-info { margin-left: 14px; display: flex; flex-direction: column; justify-content: center; overflow:hidden;}
-        .np-title { font-size: 14px; font-weight: 700; color: #fff; white-space: nowrap; text-overflow: ellipsis; overflow:hidden; display:flex; align-items:center; gap:8px;}
-        .np-artist { font-size: 12px; color: var(--text-base); margin-top: 4px; white-space: nowrap;}
-        
-        /* 🛡️ FIX: Enforced flex display and size for player buttons */
-        .p-controls { display: flex !important; align-items: center; gap: 20px; z-index: 10000; }
-        .c-btn { background: transparent; border: none; color: var(--text-base); cursor: pointer; transition: 0.2s; position: relative; display:flex !important; align-items:center; justify-content:center; padding: 5px; min-width: 24px; min-height: 24px;}
-        .c-btn svg { width: 16px; height: 16px; fill: currentColor; display: block; }
-        .c-btn:hover { color: var(--text-bright); transform: scale(1.1);}
-        .c-btn.active { color: var(--accent); }
-        .c-btn.active::after { content: ''; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; background: var(--accent); border-radius: 50%;}
-        
-        .c-btn-play { background: var(--text-bright); color: #000; border-radius: 50%; width: 34px; height: 34px;}
-        .c-btn-play svg { fill: #000; }
-        .c-btn-play:hover { transform: scale(1.05); background: #fff; }
-        
-        .indicator-badge { position: absolute; top: -5px; right: -5px; background: var(--accent); color: #000; font-size: 8px; font-weight: 900; padding: 2px 4px; border-radius: 10px; display: none;}
-        
-        .progress-wrap { width: 100%; display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--text-base); font-weight: 700; font-variant-numeric: tabular-nums;}
-        .prog-bg { flex: 1; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; cursor: pointer; position: relative; display: flex; align-items: center;}
-        .prog-bg:hover .prog-thumb { opacity: 1; transform: scale(1); }
-        .prog-bg:hover .prog-fill { background: var(--accent); }
-        .prog-fill { height: 100%; background: #fff; border-radius: 2px; width: 0%; pointer-events: none;}
-        .prog-thumb { width: 12px; height: 12px; background: #fff; border-radius: 50%; position: absolute; margin-left: -6px; opacity: 0; transform: scale(0); box-shadow: 0 2px 5px rgba(0,0,0,0.5); transition: var(--trans);}
-
-        .vol-bg { width: 90px; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; cursor: pointer; position: relative; display: flex; align-items: center;}
-        .vol-bg:hover .prog-fill { background: var(--accent); }
-        .vol-bg:hover .prog-thumb { opacity: 1; transform: scale(1); }
-        
-        .loader-micro { width: 12px; height: 12px; border: 2px solid rgba(255,255,255,0.2); border-top: 2px solid var(--accent); border-radius: 50%; animation: spin 1s linear infinite; display: inline-block; margin-left:8px; vertical-align:middle;}
-        @keyframes spin { 100% { transform: rotate(360deg); } }
-    </style>
-</head>
-<body>
-
-    <div id="toast" class="toast">Action Successful</div>
-
-    
-    <div class="overlay" id="plModal">
-        <div class="modal">
-            <div class="modal-title">Create Playlist</div>
-            <input type="text" id="plNameInput" class="input-base" placeholder="My Awesome Playlist">
-            
-            <div style="display:flex; gap:10px;">
-                <button class="btn-solid" style="background:transparent; color:#fff; border:1px solid #333;" onclick="document.getElementById('plModal').style.display='none'">Cancel</button>
-                <button class="btn-solid" onclick="createPlaylistAction()">Create</button>
-            </div>
-        </div>
-    </div>
-
-    <div class="context-menu" id="contextMenu">
-        <div class="cm-item" onclick="queueNext()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M12.7 1a.7.7 0 0 0-.7.7v5.15L2.05 1.107A.7.7 0 0 0 1 1.712v12.575a.7.7 0 0 0 1.05.607L12 9.149V14.3a.7.7 0 0 0 1.4 0V1.7a.7.7 0 0 0-.7-.7z"/></svg> Play Next</div>
-        <div class="cm-item" onclick="addToQueue()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M14 11H2v-2h12v2zm0-4H2V5h12v2zM2 15h8v-2H2v2z"/></svg> Add to Queue</div>
-        <hr style="border:none; border-top:1px solid rgba(255,255,255,0.1); margin:4px 0;">
-        <div class="cm-item" onclick="showAddToPlaylistMenu()"><svg style="width:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M14 10H2v2h12v-2zm0-4H2v2h12V6zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zM2 16h8v-2H2v2z"/></svg> Add to Playlist</div>
-        <div class="cm-item" onclick="saveToOfflineContext()"><svg style="width:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 15l-4-4 1.41-1.41L11 14.17V7h2v7.17l2.59-2.59L17 13l-5 5z"/></svg> Save for Offline</div>
-    </div>
-    
-    <div class="context-menu" id="plSubMenu">
-        </div>
-
-    <div class="context-menu" id="genericMenu">
-        <div class="cm-item" onclick="location.reload()"><svg style="width:16px;" viewBox="0 0 24 24"><path fill="currentColor" d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg> Reload Engine</div>
-    </div>
-
-    <div class="app-wrapper">
-        <div class="sidebar">
-            <div class="sidebar-box" style="padding-bottom:10px;">
-                <a class="nav-link active" onclick="renderHomeView()"><svg viewBox="0 0 24 24"><path d="M12 3l10 9h-3v8H5v-8H2l10-9zm-1 12h2v-4h-2v4z"/></svg> Home</a>
-                <a class="nav-link" onclick="renderQueueView()"><svg viewBox="0 0 24 24"><path d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg> Queue</a>
-            </div>
-            
-            <div class="sidebar-box" style="flex: 1; overflow-y: auto; padding-top:10px;">
-                <div class="lib-header">
-                    <span style="display:flex; align-items:center; gap:8px;"><svg style="width:20px; fill:currentColor;" viewBox="0 0 24 24"><path d="M3 3h18v18H3V3zm16 16V5H5v14h14zM7 7h10v2H7V7zm0 4h10v2H7v-2zm0 4h7v2H7v-2z"/></svg> Playlists</span>
-                    <button class="btn-icon" title="Create Playlist" onclick="document.getElementById('plModal').style.display='flex'"><svg style="width:18px;" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></button>
-                </div>
-                <div class="lib-list" id="sidebarPlaylists">
-                    </div>
-                
-                <hr style="border:none; border-top:1px solid rgba(255,255,255,0.1); margin:15px 0;">
-                
-                <div class="lib-header">
-                    <span style="display:flex; align-items:center; gap:8px;"><svg style="width:20px; fill:currentColor;" viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> Local Edge</span>
-                    <button class="btn-icon" title="Add Folder" onclick="linkLocalFolder()"><svg style="width:18px;" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg></button>
-                </div>
-                <div class="lib-list" id="sidebarLocalFolders">
-                    <div style="font-size:12px; color:var(--text-dim); padding:0 10px;">No folders added.</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="main-view" id="mainView">
-            <div class="main-header">
-                <div style="display:flex; gap:10px;">
-                    <button class="btn-icon" style="background:rgba(0,0,0,0.7); width:32px; height:32px;" onclick="renderHomeView()">❮</button>
-                    <button class="btn-icon" style="background:rgba(0,0,0,0.7); width:32px; height:32px;" onclick="renderQueueView()">❯</button>
-                </div>
-                <div style="width:36px; height:36px; border-radius:50%; background:var(--qlynk-accent); color:#000; display:flex; justify-content:center; align-items:center; font-weight:900;">Q</div>
-            </div>
-
-            <div class="content-padding" id="dynamicContent">
-                <h1 style="font-size:40px; font-weight:900; margin-top:50px;">Initializing Qlynktify V6...</h1>
-            </div>
-        </div>
-
-        <div class="right-panel" id="rightPanel">
-            <div class="panel-header">
-                <span>Now Playing</span>
-                <div class="panel-toggle">
-                    <button class="pt-btn active" onclick="switchRightPanel('lyrics')">Lyrics</button>
-                    <button class="pt-btn" onclick="switchRightPanel('visuals')">Visuals</button>
-                </div>
-                <button class="btn-icon" onclick="toggleRightPanel()">✖</button>
-            </div>
-            
-            <div class="rp-img-wrap"><img id="rp-cover" src="https://qlynk.vercel.app/quicklink-logo.png"></div>
-            <div style="font-size:22px; font-weight:900; margin-bottom:4px;" id="rp-title">Not Playing</div>
-            <div style="font-size:14px; color:var(--text-base); font-weight:700; margin-bottom:20px;" id="rp-artist">Qlynk Architecture</div>
-
-            <div class="lyrics-container" id="lyricsContainer">
-                <div style="text-align:center; color:var(--text-dim); font-size:14px; margin-top:50px;">Lyrics will appear here.</div>
-            </div>
-            
-            <div class="visualizer-container" id="visualsContainer">
-                <canvas id="canvasVisualizer"></canvas>
-            </div>
-        </div>
-    </div>
-
-    <div class="player-bar">
-        <div class="p-left">
-            <img src="https://qlynk.vercel.app/quicklink-logo.png" class="np-img" id="bp-cover" onclick="toggleRightPanel()">
-            <div class="np-info">
-                <div class="np-title">
-                    <span id="bp-title" title="No Track Selected">No Track Selected</span>
-                    <div class="loader-micro" id="blob-loader" style="display:none;"></div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 10px; margin-top: 4px;">
-                    <div class="np-artist" id="bp-artist" style="margin-top:0;">Qlynk Node</div>
-                    <button class="btn-icon" style="padding:0; width:16px; height:16px;" onclick="addTrackToPl('Liked Songs')" title="Add to Liked Songs">
-                        <svg viewBox="0 0 24 24" style="width:14px; fill:var(--text-base);"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-        
-        <div class="p-center">
-            <div class="p-controls">
-                <button class="c-btn" id="btn-shuffle" onclick="toggleShuffle()">
-                    <svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M13.151.922a.75.75 0 1 0-1.06 1.06L13.109 3H11.16a3.75 3.75 0 0 0-2.873 1.34l-6.173 7.356A2.25 2.25 0 0 1 .39 12.5H0v1.5h.39a3.75 3.75 0 0 0 2.873-1.34l6.173-7.356a2.25 2.25 0 0 1 1.724-.804h1.947l-1.017 1.018a.75.75 0 0 0 1.06 1.06L15.98 4.5l-2.83-3.578zM.39 3.5H0V2h.39a3.75 3.75 0 0 1 2.873 1.34l1.502 1.791-1.146 1.365L2.115 3.34A2.25 2.25 0 0 0 .39 3.5zM11.16 11.5h1.947l-1.017-1.018a.75.75 0 0 1 1.06-1.06L15.98 13l-2.83 3.578a.75.75 0 1 1-1.06-1.06l1.018-1.018H11.16a3.75 3.75 0 0 1-2.873-1.34l-1.502-1.791 1.146-1.365 1.504 1.791a2.25 2.25 0 0 0 1.725.804z"/></svg>
-                    <span class="indicator-badge" id="shuf-badge">S</span>
-                </button>
-                <button class="c-btn" onclick="playPrev()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M3.3 1a.7.7 0 0 1 .7.7v5.15l9.95-5.744a.7.7 0 0 1 1.05.606v12.575a.7.7 0 0 1-1.05.607L4 9.149V14.3a.7.7 0 0 1-1.4 0V1.7a.7.7 0 0 1 .7-.7z"/></svg></button>
-                <button class="c-btn c-btn-play" id="btn-play" onclick="togglePlay()"><svg id="icon-play" style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/></svg></button>
-                <button class="c-btn" onclick="playNext()"><svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M12.7 1a.7.7 0 0 0-.7.7v5.15L2.05 1.107A.7.7 0 0 0 1 1.712v12.575a.7.7 0 0 0 1.05.607L12 9.149V14.3a.7.7 0 0 0 1.4 0V1.7a.7.7 0 0 0-.7-.7z"/></svg></button>
-                <button class="c-btn" id="btn-repeat" onclick="toggleRepeat()">
-                    <svg style="width:16px;" viewBox="0 0 16 16"><path fill="currentColor" d="M0 4.75A3.75 3.75 0 0 1 3.75 1h8.5A3.75 3.75 0 0 1 16 4.75v5a3.75 3.75 0 0 1-3.75 3.75H9.81l1.018 1.018a.75.75 0 1 1-1.06 1.06L6.939 12.75l2.829-2.828a.75.75 0 1 1 1.06 1.06L9.811 12h2.439a2.25 2.25 0 0 0 2.25-2.25v-5a2.25 2.25 0 0 0-2.25-2.25h-8.5A2.25 2.25 0 0 0 1.5 4.75v5A2.25 2.25 0 0 0 3.75 12H5v1.5H3.75A3.75 3.75 0 0 1 0 9.75v-5z"/></svg>
-                    <span class="indicator-badge" id="rep-badge">1</span>
-                </button>
-            </div>
-            
-            <div class="progress-wrap">
-                <span id="time-current">0:00</span>
-                <div class="prog-bg" id="seek-bg" onclick="seekAudio(event)">
-                    <div class="prog-fill" id="seek-fill"></div>
-                    <div class="prog-thumb" id="seek-thumb"></div>
-                </div>
-                <span id="time-total">0:00</span>
-            </div>
-        </div>
-        
-        <div class="p-right" style="justify-content:flex-end; gap:20px;">
-            <div style="display:flex; align-items:center; gap:8px;">
-                <svg style="width:16px; color:var(--text-base);" viewBox="0 0 16 16"><path fill="currentColor" d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 .75 0zm-6.924 5.3a2.139 2.139 0 0 0-1.049 1.85 2.14 2.14 0 0 0 1.049 1.85l5.958 3.44V2.71L2.817 6.15z"/></svg>
-                <div class="vol-bg" id="vol-bg" onclick="setVolumeClick(event)">
-                    <div class="prog-fill" id="vol-fill" style="width:100%;"></div>
-                    <div class="prog-thumb" id="vol-thumb" style="left:100%;"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <audio id="mainAudio" crossorigin="anonymous"></audio>
-
-    <script>
-        // ==========================================
-        // JS ENGINE V6: TEMPLATE LITERALS ONLY (NO SYNTAX ERRORS)
-        // ==========================================
-        
-        let globalDatabase = []; 
-        let playbackQueue = [];  
-        let currentTrackIndex = -1;
-        let isPlaying = false;
-        
-        let playlists = JSON.parse(localStorage.getItem('qlynktify_pl') || '{"Top Hits": [], "Liked Songs": []}');
-        let localFolders = []; // Holds directory handles
-        
-        let shuffleMode = 0; 
-        let repeatMode = 0;  
-        let contextTrackObj = null; 
-        let currentBlobUrl = null;  
-        
-        const audioEl = document.getElementById('mainAudio');
-        const defaultCover = "https://qlynk.vercel.app/quicklink-logo.png";
-        
-        let audioCtx, analyser, dataArray, visualizerAnimId, parsedLyrics = [];
-
-        // Restore Volume
-        const savedVol = localStorage.getItem('qlynkVol');
-        if(savedVol !== null) {
-            audioEl.volume = parseFloat(savedVol);
-            document.getElementById('vol-fill').style.width = `${audioEl.volume * 100}%`;
-            document.getElementById('vol-thumb').style.left = `${audioEl.volume * 100}%`;
-        }
-
-        function showToast(msg) {
-            const t = document.getElementById('toast');
-            t.innerText = msg; t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 2500);
-        }
-
-        // === CONTEXT MENU LOGIC ===
-        document.addEventListener('contextmenu', e => {
-            e.preventDefault(); closeAllMenus();
-            const trackEl = e.target.closest('.track-row, .music-card');
-            if(trackEl) openContextMenu(e, trackEl.getAttribute('data-id'), 'contextMenu');
-            else openContextMenu(e, null, 'genericMenu');
-        });
-        document.addEventListener('click', e => { if(!e.target.closest('.context-menu')) closeAllMenus(); });
-
-        function openContextMenu(e, trackId, menuId) {
-            if(trackId) contextTrackObj = globalDatabase.find(t => t.track_id === trackId) || playbackQueue.find(t => t.track_id === trackId);
-            const menu = document.getElementById(menuId);
-            menu.style.display = 'block';
-            let x = e.pageX, y = e.pageY;
-            if(x + 220 > window.innerWidth) x = window.innerWidth - 230;
-            if(y + 150 > window.innerHeight) y = window.innerHeight - 160;
-            menu.style.left = `${x}px`; menu.style.top = `${y}px`;
-            menu.classList.add('active');
-        }
-        function closeAllMenus() { document.querySelectorAll('.context-menu').forEach(m => { m.style.display='none'; m.classList.remove('active'); }); }
-
-        function queueNext() {
-            if(!contextTrackObj) return;
-            if(currentTrackIndex === -1) { playSpecificTrack(contextTrackObj.track_id); return; }
-            playbackQueue.splice(currentTrackIndex + 1, 0, contextTrackObj);
-            showToast("Added to Play Next"); closeAllMenus();
-        }
-        function addToQueue() {
-            if(!contextTrackObj) return;
-            playbackQueue.push(contextTrackObj);
-            showToast("Added to Queue"); closeAllMenus();
-        }
-        function saveToOfflineContext() { if(contextTrackObj) saveToOffline(contextTrackObj); closeAllMenus(); }
-        
-        function showAddToPlaylistMenu() {
-            closeAllMenus();
-            const m = document.getElementById('plSubMenu');
-            m.innerHTML = Object.keys(playlists).map(k => `<div class="cm-item" onclick="addTrackToPl('${k}')">📋 ${k}</div>`).join('');
-            m.style.display = 'block';
-            m.classList.add('active');
-            m.style.left = `${window.innerWidth/2}px`; m.style.top = `${window.innerHeight/2}px`;
-        }
-        function addTrackToPl(plName) {
-            if(!contextTrackObj) return;
-            if(!playlists[plName].find(t => t.track_id === contextTrackObj.track_id)) {
-                playlists[plName].push(contextTrackObj);
-                localStorage.setItem('qlynktify_pl', JSON.stringify(playlists));
-                showToast(`Added to ${plName}`);
-            } else { showToast("Already in playlist"); }
-            closeAllMenus();
-        }
-
-        function createPlaylistAction() {
-            const n = document.getElementById('plNameInput').value.trim();
-            if(n && !playlists[n]) {
-                playlists[n] = [];
-                localStorage.setItem('qlynktify_pl', JSON.stringify(playlists));
-                renderSidebarPlaylists();
-                document.getElementById('plModal').style.display = 'none';
-                document.getElementById('plNameInput').value = '';
-                showToast("Playlist Created");
-            }
-        }
-
-        // === INITIALIZATION ===
-        async function initEngine() {
-            try {
-                const res = await fetch('/api/qlynktify/library');
-                if (!res.ok) throw new Error("Auth Failed");
-                const data = await res.json();
-                globalDatabase = data.tracks.map(t => ({...t, source: 'cloud'}));
-                
-                // Sort Top Hits based on play_count (auto playlist)
-                playlists["Top Hits"] = [...globalDatabase].sort((a,b) => (b.play_count || 0) - (a.play_count || 0)).slice(0, 50);
-                
-                playbackQueue = [...globalDatabase];
-                
-                renderSidebarPlaylists();
-                renderHomeView();
-                setupAudioEvents();
-                setupKeyboardShortcuts();
-                
-                // IndexedDB offline track hydration
-                const offline = await getOfflineTracks();
-                offline.forEach(o => {
-                    const m = globalDatabase.find(t => t.slug === o.slug);
-                    if(m) m.offline = true;
-                });
-                
-            } catch(e) { document.getElementById('auth-shield').style.display = 'flex'; }
-        }
-
-        // === VIEWS RENDERING (TEMPLATE LITERALS) ===
-        function renderSidebarPlaylists() {
-            const list = document.getElementById('sidebarPlaylists');
-            list.innerHTML = Object.keys(playlists).map(k => `
-                <div class="lib-item" onclick="renderPlaylistView('${k}')">
-                    <div class="item-icon-box"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M15 6H3v2h12V6zm0 4H3v2h12v-2zM3 16h8v-2H3v2zM17 6v8.18c-.31-.11-.65-.18-1-.18-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3V8h3V6h-5z"/></svg> <span class="item-text">${k}</span></div>
-                </div>
-            `).join('');
-        }
-        
-        function renderSidebarFolders() {
-            const list = document.getElementById('sidebarLocalFolders');
-            if(localFolders.length === 0) { list.innerHTML = `<div style="font-size:12px; color:var(--text-dim); padding:0 10px;">No folders added.</div>`; return; }
-            list.innerHTML = localFolders.map((f, i) => `
-                <div class="lib-item">
-                    <div class="item-icon-box" onclick="renderFolderView(${i})"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg> <span class="item-text">${f.name}</span></div>
-                    <button class="btn-icon" style="padding:2px; color:#ff5555;" onclick="removeFolder(${i})">✖</button>
-                </div>
-            `).join('');
-        }
-
-        function renderHomeView() {
-            const cont = document.getElementById('dynamicContent');
-            const h = new Date().getHours();
-            const gr = h < 12 ? 'Good morning' : (h < 18 ? 'Good afternoon' : 'Good evening');
-            
-            let html = `<h1 style="font-size:36px; font-weight:900; margin-bottom:30px; letter-spacing:-1px;">${gr}</h1>`;
-            
-            // Top Cards
-            html += `<div class="section-title">Your Heavy Rotation</div><div class="card-grid">`;
-            const mix = [...globalDatabase].sort(()=>0.5-Math.random()).slice(0, 6);
-            mix.forEach(t => {
-                const img = (t.meta && t.meta.artwork) ? t.meta.artwork : defaultCover;
-                html += `
-                    <div class="music-card" data-id="${t.track_id}" onclick="playSpecificTrack('${t.track_id}')">
-                        <div class="mc-img-wrap"><img src="${img}" class="mc-img" id="card-img-${t.track_id}">
-                        <div class="mc-play-btn"><svg style="width:24px;" viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg></div></div>
-                        <div class="mc-title">${t.clean_title}</div><div class="mc-desc">${t.artist_guess || 'Vault'}</div>
-                    </div>`;
-            });
-            html += `</div>`;
-
-            html += `<div class="section-title">Vault Additions</div>`;
-            html += generateTrackTable(globalDatabase.slice(0, 50));
-            cont.innerHTML = html;
-        }
-
-        function renderQueueView() {
-            const cont = document.getElementById('dynamicContent');
-            let html = `<h1 style="font-size:36px; font-weight:900; margin-bottom:10px;">Play Queue</h1>`;
-            if(playbackQueue.length === 0) { cont.innerHTML = html + `<div style="color:var(--text-base); margin-top:20px;">Queue empty.</div>`; return; }
-            
-            if(currentTrackIndex !== -1) {
-                html += `<h3>Now Playing</h3>${generateTrackTable([playbackQueue[currentTrackIndex]], true)}`;
-                html += `<h3 style="margin-top:30px; margin-bottom:10px;">Next Up</h3>`;
-                const upNext = playbackQueue.slice(currentTrackIndex + 1);
-                if(upNext.length > 0) html += generateTrackTable(upNext);
-            } else { html += generateTrackTable(playbackQueue); }
-            cont.innerHTML = html;
-        }
-
-        function renderPlaylistView(name) {
-            const cont = document.getElementById('dynamicContent');
-            const arr = playlists[name] || [];
-            playbackQueue = [...arr]; // Set queue Context
-            let html = `
-                <div class="hero-banner">
-                    <img src="${arr.length > 0 && arr[0].meta ? arr[0].meta.artwork : defaultCover}" class="hero-img">
-                    <div class="hero-info">
-                        <span class="hero-type">PLAYLIST</span>
-                        <div class="hero-title">${name}</div>
-                        <span class="hero-stats">${arr.length} tracks in this collection.</span>
-                    </div>
-                </div>
-                <button class="btn-solid" style="width:auto; margin-bottom:30px;" onclick="if(playbackQueue.length>0) playSpecificTrack(playbackQueue[0].track_id)">PLAY ALL</button>
-            `;
-            html += generateTrackTable(arr);
-            cont.innerHTML = html;
-        }
-
-        function generateTrackTable(arr, isNowPlayingBlock = false) {
-            if(arr.length === 0) return `<div style="color:var(--text-dim);">No tracks found.</div>`;
-            let html = `<table class="track-list"><thead><tr><th style="width:50px; text-align:center;">#</th><th>Title</th><th>Album</th><th style="text-align:right;">Plays</th></tr></thead><tbody>`;
-            arr.forEach((t, i) => {
-                const img = (t.meta && t.meta.artwork) ? t.meta.artwork : (t.artwork ? t.artwork : defaultCover);
-                const active = (isNowPlayingBlock || (t.track_id === (playbackQueue[currentTrackIndex] || {}).track_id)) ? 'playing' : '';
-                const bdg = t.source === 'local' ? `<span class="badge bg-local">Local</span>` : (t.offline ? `<span class="badge bg-offline">Offline</span>` : '');
-                
-                html += `
-                    <tr class="track-row ${active}" data-id="${t.track_id}" onclick="playSpecificTrack('${t.track_id}')">
-                        <td style="text-align:center; color:var(--text-dim);">${i+1}</td>
-                        <td><div style="display:flex; align-items:center; gap:16px;">
-                        <img src="${img}" class="t-img" id="tbl-img-${t.track_id}">
-                        <div style="overflow:hidden;"><div class="t-title" title="${t.clean_title}">${t.clean_title} ${bdg}</div><div class="t-artist">${t.artist_guess || 'Vault'}</div></div></div></td>
-                        <td style="color:var(--text-base); font-size:13px;">${t.meta ? t.meta.album : 'Qlynk'}</td>
-                        <td style="text-align:right; color:var(--text-dim); font-size:13px;">${t.play_count || 0}</td>
-                    </tr>`;
-            });
-            return html + `</tbody></table>`;
-        }
-
-        // === THE ULTIMATE ANTI-PIRACY BLOB ENGINE ===
-        async function playSpecificTrack(trackId) {
-            let idx = playbackQueue.findIndex(t => t.track_id === trackId);
-            if(idx === -1) {
-                playbackQueue = [...globalDatabase];
-                if(shuffleMode > 0) applyShuffle();
-                idx = playbackQueue.findIndex(t => t.track_id === trackId);
-            }
-            
-            currentTrackIndex = idx;
-            const track = playbackQueue[currentTrackIndex];
-            
-            // Re-render UI
-            if(document.querySelector('.hero-title')) renderPlaylistView(document.querySelector('.hero-title').innerText);
-            else if(document.querySelector('.section-title')) renderHomeView(); 
-            else renderQueueView();
-
-            // 🛡️ FIX: Auto-open Right Panel (Lyrics/Visualizer) on first play
-            // Add this below the render Queue/Home view line
-            
-            // Auto-open Right Panel for Lyrics and Visualizer!
-            const rp = document.getElementById('rightPanel');
-            if(!rp.classList.contains('active') && window.innerWidth > 900) { toggleRightPanel(); }
-
-            // Use the real title from iTunes if available, else fallback to clean title
-            const displayTitle = track.meta && track.meta.real_title ? track.meta.real_title : track.clean_title;
-            
-            document.getElementById('bp-title').innerText = "Buffering Chunk...";
-            document.getElementById('rp-title').innerText = displayTitle;
-            document.getElementById('blob-loader').style.display = 'inline-block';
-            
-            if(track.meta) updatePlayerMeta(track.meta);
-            else if(track.artwork) updatePlayerMeta({artist: track.artist_guess, artwork: track.artwork});
-            else {
-                document.getElementById('bp-artist').innerText = track.artist_guess || "Unknown";
-                document.getElementById('bp-cover').src = defaultCover;
-                document.getElementById('rp-cover').src = defaultCover;
-                document.documentElement.style.setProperty('--dom-color', '#121212');
-                document.documentElement.style.setProperty('--dom-color-dim', 'rgba(18,18,18,0.1)');
-            }
-
-            audioEl.pause(); audioEl.currentTime = 0;
-            if(currentBlobUrl) { URL.revokeObjectURL(currentBlobUrl); currentBlobUrl = null; }
-            
-            try {
-                if(track.source === 'local') {
-                    const file = await track.handle.getFile();
-                    currentBlobUrl = URL.createObjectURL(file);
-                    audioEl.src = currentBlobUrl;
-                } else if (track.offline) {
-                    const blob = await getOfflineBlob(track.slug);
-                    if(!blob) throw new Error("Offline Corrupt");
-                    currentBlobUrl = URL.createObjectURL(blob);
-                    audioEl.src = currentBlobUrl;
-                } else {
-                    // Fetch 5-Min Token
-                    const tokenRes = await fetch(`/api/qlynktify/generate_stream/${track.slug}`);
-                    if(!tokenRes.ok) throw new Error("Auth Denied");
-                    const tokenData = await tokenRes.json();
-                    
-                    // Assign endpoint to Audio tag. 
-                    // Browser automatically sends Range requests. Backend caps at 512KB (30s).
-                    // Browser fetches next chunk dynamically before ending! RAM saved.
-                    audioEl.src = `/stream/audio/qlynktify/${tokenData.stream_token}`;
-                }
-                
-                audioEl.play().then(() => {
-                    document.getElementById('blob-loader').style.display = 'none';
-                    document.getElementById('bp-title').innerText = track.clean_title;
-                    isPlaying = true; updatePlayIcon();
-                    
-                    // Play Count Increment (Hit API once)
-                    if(track.source === 'cloud') {
-                        setTimeout(() => { fetch(`/api/qlynktify/increment_play/${track.slug}`, {method: 'POST'}); }, 10000);
-                    }
-                }).catch(e => { throw e; });
-                
-                fetchLyrics(track.search_query || track.clean_title);
-                if(document.getElementById('rightPanel').classList.contains('active')) initVisualizer();
-            } catch(e) {
-                console.error("Playback Error:", e);
-                document.getElementById('blob-loader').style.display = 'none';
-                document.getElementById('bp-title').innerText = "Playback Failed";
-                isPlaying = false; updatePlayIcon();
-            }
-        }
-
-        function updatePlayerMeta(meta) {
-            document.getElementById('bp-artist').innerText = meta.artist;
-            document.getElementById('rp-artist').innerText = meta.artist;
-            if(meta.artwork) {
-                document.getElementById('bp-cover').src = meta.artwork;
-                document.getElementById('rp-cover').src = meta.artwork;
-                extractDominantColor(meta.artwork);
-            }
-        }
-
-        // === CONTROLS ===
-        function togglePlay() {
-            if(currentTrackIndex === -1 && playbackQueue.length > 0) { playSpecificTrack(playbackQueue[0].track_id); return; }
-            if(!audioEl.src) return;
-            if(isPlaying) { audioEl.pause(); isPlaying = false; }
-            else { audioEl.play(); isPlaying = true; }
-            updatePlayIcon();
-        }
-
-        function playNext() {
-            if(playbackQueue.length === 0) return;
-            let nextIdx = currentTrackIndex + 1;
-            if(nextIdx >= playbackQueue.length) {
-                if(repeatMode === 1) nextIdx = 0; else return;
-            }
-            playSpecificTrack(playbackQueue[nextIdx].track_id);
-        }
-
-        function playPrev() {
-            if(playbackQueue.length === 0) return;
-            if(audioEl.currentTime > 4) audioEl.currentTime = 0;
-            else {
-                let prevIdx = currentTrackIndex - 1;
-                if(prevIdx < 0) prevIdx = playbackQueue.length - 1;
-                playSpecificTrack(playbackQueue[prevIdx].track_id);
-            }
-        }
-
-        function updatePlayIcon() {
-            const icon = document.getElementById('icon-play');
-            if(isPlaying) icon.innerHTML = '<path fill="currentColor" d="M2.7 1a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7H2.7zm8 0a.7.7 0 0 0-.7.7v12.6a.7.7 0 0 0 .7.7h2.6a.7.7 0 0 0 .7-.7V1.7a.7.7 0 0 0-.7-.7h-2.6z"/>';
-            else icon.innerHTML = '<path fill="currentColor" d="M3 1.713a.7.7 0 0 1 1.05-.607l10.89 6.288a.7.7 0 0 1 0 1.212L4.05 14.894A.7.7 0 0 1 3 14.288V1.713z"/>';
-        }
-
-        function toggleShuffle() {
-            shuffleMode = (shuffleMode + 1) % 3;
-            const btn = document.getElementById('btn-shuffle');
-            const badge = document.getElementById('shuf-badge');
-            if(shuffleMode === 0) { btn.classList.remove('active'); badge.style.display = 'none'; }
-            if(shuffleMode === 1) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = 'N'; }
-            if(shuffleMode === 2) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = 'S'; }
-            applyShuffle();
-        }
-
-        function applyShuffle() {
-            if(playbackQueue.length <= 1) return;
-            const currentTrack = currentTrackIndex > -1 ? playbackQueue[currentTrackIndex] : null;
-            let pool = playbackQueue.filter(t => t !== currentTrack);
-            if(shuffleMode === 0) playbackQueue = [...globalDatabase];
-            else if(shuffleMode === 1) {
-                for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
-                playbackQueue = currentTrack ? [currentTrack, ...pool] : pool;
-            }
-            else if(shuffleMode === 2) {
-                if(currentTrack && currentTrack.artist_guess) {
-                    pool.sort((a,b) => (b.artist_guess === currentTrack.artist_guess ? 1 : 0) - (a.artist_guess === currentTrack.artist_guess ? 1 : 0));
-                }
-                playbackQueue = currentTrack ? [currentTrack, ...pool] : pool;
-            }
-            if(currentTrack) currentTrackIndex = 0; 
-            if(document.querySelector('h1').innerText === 'Play Queue') renderQueueView();
-        }
-
-        function toggleRepeat() {
-            repeatMode = (repeatMode + 1) % 3;
-            const btn = document.getElementById('btn-repeat');
-            const badge = document.getElementById('rep-badge');
-            if(repeatMode === 0) { btn.classList.remove('active'); badge.style.display = 'none'; }
-            if(repeatMode === 1) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = 'Q'; }
-            if(repeatMode === 2) { btn.classList.add('active'); badge.style.display = 'block'; badge.innerText = '1'; }
-        }
-
-        function setupAudioEvents() {
-            audioEl.addEventListener('timeupdate', () => {
-                if(!audioEl.duration) return;
-                const p = (audioEl.currentTime / audioEl.duration) * 100;
-                document.getElementById('seek-fill').style.width = `${p}%`; document.getElementById('seek-thumb').style.left = `${p}%`;
-                document.getElementById('time-current').innerText = formatTime(audioEl.currentTime); document.getElementById('time-total').innerText = formatTime(audioEl.duration);
-                syncLyrics();
-            });
-            audioEl.addEventListener('ended', () => { if(repeatMode === 2) { audioEl.currentTime = 0; audioEl.play(); } else playNext(); });
-            
-            // Native Buffering Events
-            audioEl.addEventListener('waiting', () => document.getElementById('blob-loader').style.display = 'inline-block');
-            audioEl.addEventListener('playing', () => document.getElementById('blob-loader').style.display = 'none');
-        }
-        
-        function seekAudio(e) {
-            if(!audioEl.duration) return;
-            const bg = document.getElementById('seek-bg');
-            audioEl.currentTime = (e.offsetX / bg.offsetWidth) * audioEl.duration;
-        }
-
-        function setVolumeClick(e) {
-            const bg = document.getElementById('vol-bg');
-            let p = Math.max(0, Math.min(1, e.offsetX / bg.offsetWidth));
-            audioEl.volume = p; localStorage.setItem('qlynkVol', p);
-            document.getElementById('vol-fill').style.width = `${p * 100}%`; document.getElementById('vol-thumb').style.left = `${p * 100}%`;
-        }
-        function formatTime(s) { if(!s || isNaN(s)) return "0:00"; let m = Math.floor(s/60); let sec = Math.floor(s%60); return `${m}:${sec<10?"0":""}${sec}`; }
-
-        function setupKeyboardShortcuts() {
-            document.addEventListener('keydown', e => {
-                if(e.target.tagName === 'INPUT') return;
-                let prevent = false;
-                if(e.code === 'Space') { togglePlay(); prevent = true; showToast(isPlaying ? "Play" : "Pause"); }
-                if(e.code === 'ArrowRight') { if(audioEl.duration) audioEl.currentTime += 5; prevent = true; }
-                if(e.code === 'ArrowLeft') { if(audioEl.duration) audioEl.currentTime -= 5; prevent = true; }
-                if(prevent) e.preventDefault();
-            });
-        }
-
-       // === DUAL ENGINE: LYRICS ===
-        async function fetchLyrics(query) {
-            const container = document.getElementById('lyricsContainer');
-            container.innerHTML = '<div style="text-align:center; color:rgba(255,255,255,0.3); margin-top:50px;">Scanning Datacenter...</div>';
-            parsedLyrics = [];
-            
-            try {
-                const res = await fetch(`/api/qlynktify/lyrics?q=${encodeURIComponent(query)}`);
-                if(!res.ok) throw new Error("Lyrics API Error");
-                const data = await res.json();
-                
-                if(data.synced) {
-                    const lines = data.synced.split('\n');
-                    lines.forEach(line => {
-                        const match = line.match(/\[(\d{2}):(\d{2}\.\d{2})\](.*)/);
-                        if(match) {
-                            const time = parseInt(match[1]) * 60 + parseFloat(match[2]);
-                            const text = match[3].trim();
-                            if(text) parsedLyrics.push({time: time, text: text});
-                        }
-                    });
-                    
-                    if(parsedLyrics.length > 0) {
-                        container.innerHTML = parsedLyrics.map((l, i) => `<div class="lyric-line" id="lyr-${i}" onclick="audioEl.currentTime=${l.time}">${l.text}</div>`).join('');
-                        return;
-                    }
-                }
-                
-                // Fallback UI with Custom Search
-                let fallbackHtml = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; text-align: center; margin-top: 20px;">
-                        <div style="font-size:14px; margin-bottom:15px; color:var(--text-base); font-weight:bold;">Synced lyrics not found. Refine your search query:</div>
-                        <input type="text" id="manualLyricQuery" style="width:100%; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; font-size:14px; margin-bottom:15px; outline:none;" value="${query}">
-                        <button style="background:var(--text-bright); color:#000; font-weight:bold; padding:10px 24px; border-radius:24px; border:none; cursor:pointer;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Search Datacenter</button>
-                    </div>
-                `;
-                
-                if(data.plain) {
-                    fallbackHtml += `<div style="font-size:18px; white-space:pre-wrap; color:var(--text-base); text-align:center; line-height:1.6; margin-top:30px;">${data.plain}</div>`;
-                }
-                container.innerHTML = fallbackHtml;
-                
-            } catch(e) {
-                container.innerHTML = `
-                    <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; text-align: center; margin-top: 20px;">
-                        <div style="font-size:14px; margin-bottom:15px; color:#ff5555; font-weight:bold;">Server error connecting to Lyrics Datacenter.</div>
-                        <input type="text" id="manualLyricQuery" style="width:100%; padding:12px 16px; border-radius:24px; border:1px solid rgba(255,255,255,0.2); background:#121212; color:#fff; font-size:14px; margin-bottom:15px; outline:none;" value="${query}">
-                        <button style="background:var(--text-bright); color:#000; font-weight:bold; padding:10px 24px; border-radius:24px; border:none; cursor:pointer;" onclick="fetchLyrics(document.getElementById('manualLyricQuery').value)">Retry Request</button>
-                    </div>`;
-            }
-        }
-
-        function syncLyrics() {
-            if(parsedLyrics.length === 0) return;
-            const curTime = audioEl.currentTime;
-            for(let i=0; i<parsedLyrics.length; i++) {
-                if(curTime >= parsedLyrics[i].time && (i === parsedLyrics.length - 1 || curTime < parsedLyrics[i+1].time)) {
-                    const activeEl = document.getElementById(`lyr-${i}`);
-                    if(activeEl && !activeEl.classList.contains('active')) {
-                        document.querySelectorAll('.lyric-line').forEach(el => el.classList.remove('active'));
-                        activeEl.classList.add('active');
-                        const c = document.getElementById('lyricsContainer');
-                        c.scrollTo({ top: activeEl.offsetTop - c.offsetTop - (c.clientHeight / 2) + 20, behavior: 'smooth' });
-                    }
-                    break;
-                }
-            }
-        }
-
-        // === VISUALIZER & COLOR ENGINE ===
-        function initVisualizer() {
-            if(visualizerAnimId) cancelAnimationFrame(visualizerAnimId);
-            try {
-                if(!audioCtx) {
-                    const AudioContext = window.AudioContext || window.webkitAudioContext;
-                    audioCtx = new AudioContext();
-                    analyser = audioCtx.createAnalyser();
-                    analyser.fftSize = 256; 
-                    const source = audioCtx.createMediaElementSource(audioEl);
-                    source.connect(analyser);
-                    analyser.connect(audioCtx.destination);
-                    dataArray = new Uint8Array(analyser.frequencyBinCount);
-                }
-                if(audioCtx.state === 'suspended') audioCtx.resume();
-            } catch(e) { console.log("Visualizer Error:", e); return; }
-            
-            const canvas = document.getElementById('canvasVisualizer');
-            const ctx = canvas.getContext('2d');
-            
-            function draw() {
-                visualizerAnimId = requestAnimationFrame(draw);
-                
-                // 🛡️ FIX: Force canvas dimensions dynamically to prevent rendering collapse
-                const container = canvas.parentElement;
-                if(canvas.width !== container.clientWidth) canvas.width = container.clientWidth;
-                if(canvas.height !== container.clientHeight) canvas.height = container.clientHeight;
-                
-                analyser.getByteFrequencyData(dataArray);
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                const barWidth = (canvas.width / dataArray.length) * 2.5; // Wider bars
-                const centerY = canvas.height / 2;
-                let x = 0;
-                
-                for(let i = 0; i < dataArray.length; i++) {
-                    const barHeight = (dataArray[i] / 255) * (canvas.height / 2) * 0.9;
-                    const domColor = getComputedStyle(document.documentElement).getPropertyValue('--dom-color').trim() || '#bc8cff';
-                    
-                    ctx.fillStyle = domColor;
-                    // Mirror draw
-                    ctx.fillRect(x, centerY - barHeight, barWidth - 1, barHeight); 
-                    ctx.fillRect(x, centerY, barWidth - 1, barHeight); 
-                    x += barWidth;
-                }
-            }
-            draw();
-        }
-
-        function extractDominantColor(imgSrc) {
-            const img = new Image(); img.crossOrigin = "Anonymous"; img.src = imgSrc;
-            img.onload = () => {
-                const c = document.createElement('canvas'); const ctx = c.getContext('2d');
-                c.width = img.width; c.height = img.height; ctx.drawImage(img, 0, 0);
-                try {
-                    const data = ctx.getImageData(0,0,c.width,c.height).data; let r=0,g=0,b=0, count=0;
-                    for(let i=0; i<data.length; i+=16) { r+=data[i]; g+=data[i+1]; b+=data[i+2]; count++; }
-                    const R = ~~(r/count), G = ~~(g/count), B = ~~(b/count);
-                    document.documentElement.style.setProperty('--dom-color', `rgb(${R},${G},${B})`);
-                    document.documentElement.style.setProperty('--dom-color-dim', `rgba(${R},${G},${B}, 0.25)`);
-                } catch(e) {}
-            };
-        }
-
-        function toggleRightPanel() {
-            const panel = document.getElementById('rightPanel'); panel.classList.toggle('active');
-            if(panel.classList.contains('active')) { if(document.querySelector('.pt-btn:nth-child(2)').classList.contains('active')) initVisualizer(); } 
-            else if(visualizerAnimId) cancelAnimationFrame(visualizerAnimId);
-        }
-
-        function switchRightPanel(mode) {
-            const btnLyr = document.querySelector('.pt-btn:nth-child(1)'); const btnVis = document.querySelector('.pt-btn:nth-child(2)');
-            const lyrC = document.getElementById('lyricsContainer'); const visC = document.getElementById('visualsContainer');
-            if(mode === 'lyrics') {
-                btnLyr.classList.add('active'); btnVis.classList.remove('active');
-                lyrC.style.display = 'flex'; visC.style.display = 'none';
-                if(visualizerAnimId) cancelAnimationFrame(visualizerAnimId);
-            } else {
-                btnVis.classList.add('active'); btnLyr.classList.remove('active');
-                visC.style.display = 'flex'; lyrC.style.display = 'none';
-                initVisualizer();
-            }
-        }
-
-        // === LOCAL EDGE ENGINE WITH ID3 ARTWORK (jsmediatags) ===
-        async function linkLocalFolder() {
-            try {
-                if(!('showDirectoryPicker' in window)) return alert("Use HTTPS.");
-                const dirHandle = await window.showDirectoryPicker();
-                localFolders.push(dirHandle); renderSidebarFolders();
-                showToast("Scanning folder...");
-                
-                let added = 0;
-                for await (const entry of dirHandle.values()) {
-                    if(entry.kind === 'file' && entry.name.match(/\.(mp3|wav|m4a|ogg|flac)$/i)) {
-                        const file = await entry.getFile();
-                        let trackObj = {
-                            track_id: `loc-${Math.random().toString(36).substr(2, 9)}`,
-                            clean_title: entry.name.replace(/\.[^/.]+$/, "").replace(/_/g, " "),
-                            artist_guess: "Local System",
-                            source: 'local', handle: entry, play_count: 0
-                        };
-
-                        if(window.jsmediatags) {
-                            jsmediatags.read(file, {
-                                onSuccess: function(tag) {
-                                    const tags = tag.tags;
-                                    if(tags.title) trackObj.clean_title = tags.title;
-                                    if(tags.artist) trackObj.artist_guess = tags.artist;
-                                    if(tags.picture) {
-                                        let b64 = ""; for (let i = 0; i < tags.picture.data.length; i++) b64 += String.fromCharCode(tags.picture.data[i]);
-                                        trackObj.artwork = `data:${tags.picture.format};base64,${window.btoa(b64)}`;
-                                    }
-                                    globalDatabase.unshift(trackObj); playbackQueue.unshift(trackObj);
-                                    if(document.querySelector('.section-title')) renderHomeView();
-                                },
-                                onError: function() { globalDatabase.unshift(trackObj); playbackQueue.unshift(trackObj); if(document.querySelector('.section-title')) renderHomeView(); }
-                            });
-                        } else { globalDatabase.unshift(trackObj); playbackQueue.unshift(trackObj); if(document.querySelector('.section-title')) renderHomeView(); }
-                        added++;
-                    }
-                }
-                showToast(`Added ${added} local tracks`);
-            } catch(e) {}
-        }
-        
-        function removeFolder(idx) {
-            localFolders.splice(idx, 1);
-            // Remove local tracks from memory (Simplified: removes all local for safety)
-            globalDatabase = globalDatabase.filter(t => t.source !== 'local');
-            playbackQueue = [...globalDatabase];
-            renderSidebarFolders(); renderHomeView();
-            showToast("Local edge disconnected");
-        }
-
-        // === OFFLINE DRM STORAGE ===
-        const dbName = "QlynktifyOfflineDB";
-        let dbPromise = new Promise((resolve, reject) => {
-            const req = indexedDB.open(dbName, 1);
-            req.onupgradeneeded = e => { e.target.result.createObjectStore("tracks", { keyPath: "slug" }); };
-            req.onsuccess = e => resolve(e.target.result);
-            req.onerror = () => reject();
-        });
-
-        async function saveToOffline(track) {
-            if(track.source === 'local' || track.offline) { showToast("Already Offline/Local"); return; }
-            showToast("Downloading to DRM Storage...");
-            try {
-                const tokenRes = await fetch(`/api/qlynktify/generate_stream/${track.slug}`);
-                if(!tokenRes.ok) throw new Error("Auth");
-                const tokenData = await tokenRes.json();
-                
-                const blobRes = await fetch(`/stream/audio/qlynktify/${tokenData.stream_token}`);
-                if(!blobRes.ok) throw new Error("Download");
-                const blob = await blobRes.blob();
-                
-                const db = await dbPromise;
-                const tx = db.transaction("tracks", "readwrite");
-                tx.objectStore("tracks").put({ slug: track.slug, blob: blob });
-                
-                track.offline = true;
-                if(document.querySelector('.section-title')) renderHomeView(); else renderQueueView();
-                showToast("✅ Saved Offline!");
-            } catch(e) { showToast("Download Failed"); }
-        }
-
-        async function getOfflineTracks() {
-            try {
-                const db = await dbPromise;
-                return new Promise(res => {
-                    const req = db.transaction("tracks").objectStore("tracks").getAll();
-                    req.onsuccess = () => res(req.result || []); req.onerror = () => res([]);
-                });
-            } catch(e) { return []; }
-        }
-        async function getOfflineBlob(slug) {
-            try {
-                const db = await dbPromise;
-                return new Promise(res => {
-                    const req = db.transaction("tracks").objectStore("tracks").get(slug);
-                    req.onsuccess = () => res(req.result ? req.result.blob : null); req.onerror = () => res(null);
-                });
-            } catch(e) { return null; }
-        }
-
-        // Boot Engine
-        initEngine();
-    </script>
-</body>
-</html>
-"""
-
-@app.get("/qlynk-tify", response_class=HTMLResponse)
-async def serve_qlynktify(request: Request):
-    # .strip() lagane se end ka saara kachra aur '\n' delete ho jayega
-    clean_html = QLYNKTIFY_HTML.strip()
-    return HTMLResponse(content=clean_html)
-
-# ==========================================
-# END OF QLYNK ARCHITECTURE V6 (TITAN)
-# ==========================================
-
-# ==========================================
-# END OF QLYNK ARCHITECTURE V5 (BLOB ENGINE)
-# ==========================================
-
-# ==========================================
-# END OF FILE
-# --- SYSTEM HIBERNATION INITIATED ---
-# Developer Status: Offline. 
-# Mission: IIT Kharagpur CSE. 
-# Last Update: 19:20-28pm || 13 April 2026 IST || 20:02-18--32---50 pm
-# ==========================================
 # ==========================================
 # END OF QLYNK ARCHITECTURE V2
 # ==========================================
@@ -7365,8 +6452,8 @@ async def serve_qlynktify(request: Request):
 # END OF FILE
 # --- SYSTEM HIBERNATION INITIATED ---
 # Developer Status: Offline. 
-# Mission: IIT Kharagpur CSE. 
-# Last Update: 13:59pm || 13 April 2026 IST
+# Mission: IIT Kharagpur CSE.
+# Last Update: 22:22pm || 14 April 2026 IST
 # GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
 # ==========================================
 
