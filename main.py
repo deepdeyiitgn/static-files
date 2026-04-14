@@ -8777,14 +8777,21 @@ QLYNKTIFY_HTML_V7 = """
 
     function setupVisualizer() {
       const canvas = el.viz;
+            if (!canvas) return;
       const ctx = canvas.getContext('2d');
       state.visualizer.ctx = ctx;
-      const ro = new ResizeObserver(() => {
-        const r = canvas.getBoundingClientRect();
-        canvas.width = Math.max(1, Math.floor(r.width));
-        canvas.height = Math.max(1, Math.floor(r.height));
-      });
-      ro.observe(canvas);
+            if (window.ResizeObserver) {
+                const ro = new ResizeObserver(() => {
+                    const r = canvas.getBoundingClientRect();
+                    canvas.width = Math.max(1, Math.floor(r.width));
+                    canvas.height = Math.max(1, Math.floor(r.height));
+                });
+                ro.observe(canvas);
+            } else {
+                const r = canvas.getBoundingClientRect();
+                canvas.width = Math.max(1, Math.floor(r.width || 300));
+                canvas.height = Math.max(1, Math.floor(r.height || 160));
+            }
 
             try {
                 const ac = new (window.AudioContext || window.webkitAudioContext)();
@@ -9218,16 +9225,21 @@ QLYNKTIFY_HTML_V7 = """
     }
 
     function wireEvents() {
-      document.getElementById('nav-home').addEventListener('click', async () => {
+            const navHomeBtn = document.getElementById('nav-home');
+            if (navHomeBtn) navHomeBtn.addEventListener('click', async () => {
         const topSpotify = await loadSpotifyTopTracks();
                 const recSpotify = await loadSpotifyRecommendations(topSpotify.map(t => t.track_id));
         state.mode = 'home';
                 renderHome(topSpotify, recSpotify);
       });
-      document.getElementById('nav-search').addEventListener('click', async () => { state.mode = 'search'; await renderSearch(); });
-      document.getElementById('nav-queue').addEventListener('click', () => { state.mode = 'queue'; renderQueueView(); });
-      document.getElementById('nav-right').addEventListener('click', () => el.right.classList.toggle('open'));
-      document.getElementById('toggle-sidebar').addEventListener('click', () => document.getElementById('app').classList.toggle('collapsed'));
+            const navSearchBtn = document.getElementById('nav-search');
+            if (navSearchBtn) navSearchBtn.addEventListener('click', async () => { state.mode = 'search'; await renderSearch(); });
+            const navQueueBtn = document.getElementById('nav-queue');
+            if (navQueueBtn) navQueueBtn.addEventListener('click', () => { state.mode = 'queue'; renderQueueView(); });
+            const navRightBtn = document.getElementById('nav-right');
+            if (navRightBtn) navRightBtn.addEventListener('click', () => el.right.classList.toggle('open'));
+            const toggleSidebarBtn = document.getElementById('toggle-sidebar');
+            if (toggleSidebarBtn) toggleSidebarBtn.addEventListener('click', () => document.getElementById('app').classList.toggle('collapsed'));
             if (el.openSettings) el.openSettings.addEventListener('click', () => openSettingsModal('general'));
             if (el.closeSettings) el.closeSettings.addEventListener('click', closeSettingsModal);
             if (el.settingsOverlay) {
@@ -9243,25 +9255,27 @@ QLYNKTIFY_HTML_V7 = """
             if (setTabLyrics) setTabLyrics.addEventListener('click', () => setActiveTab('lyrics'));
             if (setTabVisuals) setTabVisuals.addEventListener('click', () => setActiveTab('visuals'));
 
-      document.getElementById('spotify-connect').addEventListener('click', () => { window.location.href = '/api/spotify/login'; });
-      document.getElementById('spotify-refresh').addEventListener('click', spotifyRefresh);
-            el.createPlaylistBtn.addEventListener('click', createCustomPlaylist);
-            el.syncPlaylistBtn.addEventListener('click', syncCustomPlaylistsToBackend);
-            el.addCurrentBtn.addEventListener('click', addCurrentToCustomPlaylist);
-            el.navOffline.addEventListener('click', async () => {
+      const spotifyConnectBtn = document.getElementById('spotify-connect');
+      if (spotifyConnectBtn) spotifyConnectBtn.addEventListener('click', () => { window.location.href = '/api/spotify/login'; });
+      const spotifyRefreshBtn = document.getElementById('spotify-refresh');
+      if (spotifyRefreshBtn) spotifyRefreshBtn.addEventListener('click', spotifyRefresh);
+            if (el.createPlaylistBtn) el.createPlaylistBtn.addEventListener('click', createCustomPlaylist);
+            if (el.syncPlaylistBtn) el.syncPlaylistBtn.addEventListener('click', syncCustomPlaylistsToBackend);
+            if (el.addCurrentBtn) el.addCurrentBtn.addEventListener('click', addCurrentToCustomPlaylist);
+            if (el.navOffline) el.navOffline.addEventListener('click', async () => {
                 state.mode = 'offline';
                 await renderOfflineLibrary();
             });
-            el.presenceSelf.addEventListener('change', async () => {
+            if (el.presenceSelf) el.presenceSelf.addEventListener('change', async () => {
                 state.identity.name = el.presenceSelf.value || 'Admin';
                 await syncPresenceIdentity();
             });
-            el.presenceToggle.addEventListener('click', () => {
+            if (el.presenceToggle) el.presenceToggle.addEventListener('click', () => {
                 state.presence.hidden = !state.presence.hidden;
                 el.presenceToggle.textContent = state.presence.hidden ? 'Show' : 'Hide';
                 el.friendsShell?.classList.toggle('hidden', state.presence.hidden);
             });
-            el.sleepCancel.addEventListener('click', cancelSleepTimer);
+            if (el.sleepCancel) el.sleepCancel.addEventListener('click', cancelSleepTimer);
 
             document.querySelectorAll('[data-sleep]').forEach(btn => {
                 btn.addEventListener('click', () => startSleepTimer(Number(btn.getAttribute('data-sleep') || '0')));
@@ -9270,22 +9284,22 @@ QLYNKTIFY_HTML_V7 = """
                 btn.addEventListener('click', () => setCrossfadeProfile(btn.getAttribute('data-xfade') || 'off'));
             });
 
-            el.shuffleBtn.addEventListener('click', () => {
+            if (el.shuffleBtn) el.shuffleBtn.addEventListener('click', () => {
                 state.shuffleMode = (state.shuffleMode + 1) % 3;
                 applyShuffleMode();
             });
-            el.repeatBtn.addEventListener('click', () => {
+            if (el.repeatBtn) el.repeatBtn.addEventListener('click', () => {
                 state.repeatMode = (state.repeatMode + 1) % 3;
                 applyRepeatMode();
             });
 
-      el.search.addEventListener('keydown', e => {
+            if (el.search) el.search.addEventListener('keydown', e => {
         if (e.key === 'Enter') renderSearch();
       });
 
       Array.from(document.querySelectorAll('.tab')).forEach(t => t.addEventListener('click', () => setActiveTab(t.getAttribute('data-tab'))));
 
-      el.play.addEventListener('click', async () => {
+    if (el.play) el.play.addEventListener('click', async () => {
         if (!state.currentTrack && state.queue.length) return playQueueAt(0);
         if (!state.currentTrack) return;
 
@@ -9310,10 +9324,10 @@ QLYNKTIFY_HTML_V7 = """
         }
       });
 
-    el.prev.addEventListener('click', () => playQueueAt((state.queueIndex > 0 ? state.queueIndex : 0) - 1));
-    el.next.addEventListener('click', () => playQueueAt((state.queueIndex >= 0 ? state.queueIndex : -1) + 1));
+    if (el.prev) el.prev.addEventListener('click', () => playQueueAt((state.queueIndex > 0 ? state.queueIndex : 0) - 1));
+    if (el.next) el.next.addEventListener('click', () => playQueueAt((state.queueIndex >= 0 ? state.queueIndex : -1) + 1));
 
-      el.audio.addEventListener('timeupdate', () => {
+    if (el.audio) el.audio.addEventListener('timeupdate', () => {
         const c = el.audio.currentTime || 0;
         const d = el.audio.duration || 0;
         el.cur.textContent = fmt(c);
@@ -9333,9 +9347,9 @@ QLYNKTIFY_HTML_V7 = """
                 }
       });
 
-    el.audio.addEventListener('play', () => { setFooterPlayButton(true); });
-    el.audio.addEventListener('pause', () => { if (state.currentTrack?.source !== 'spotify') setFooterPlayButton(false); });
-            el.audio.addEventListener('ended', () => {
+        if (el.audio) el.audio.addEventListener('play', () => { setFooterPlayButton(true); });
+        if (el.audio) el.audio.addEventListener('pause', () => { if (state.currentTrack?.source !== 'spotify') setFooterPlayButton(false); });
+            if (el.audio) el.audio.addEventListener('ended', () => {
                 if (state.crossfade.inProgress) return;
                 if (state.repeatMode === 2) {
                     el.audio.currentTime = 0;
@@ -9353,7 +9367,7 @@ QLYNKTIFY_HTML_V7 = """
                 }
             });
 
-      el.seek.addEventListener('click', e => {
+    if (el.seek) el.seek.addEventListener('click', e => {
         const rect = el.seek.getBoundingClientRect();
         const p = (e.clientX - rect.left) / rect.width;
         if (state.currentTrack?.source === 'spotify') {
@@ -9364,13 +9378,13 @@ QLYNKTIFY_HTML_V7 = """
         }
       });
 
-      el.vol.addEventListener('input', () => {
+    if (el.vol) el.vol.addEventListener('input', () => {
         const v = Number(el.vol.value);
         el.audio.volume = v;
         if (state.spotify.player) state.spotify.player.setVolume(v).catch(() => null);
       });
 
-      el.pickFolder.addEventListener('click', async () => {
+    if (el.pickFolder) el.pickFolder.addEventListener('click', async () => {
         try {
           if (!('showDirectoryPicker' in window)) {
             notify('Browser does not support File System Access API');
@@ -9423,7 +9437,7 @@ QLYNKTIFY_HTML_V7 = """
                 }
             });
 
-      wireDropZone();
+    if (el.dropzone) wireDropZone();
             bindContextMenuActions();
     }
 
@@ -9447,8 +9461,8 @@ QLYNKTIFY_HTML_V7 = """
             applyShuffleMode();
             applyRepeatMode();
             setFooterPlayButton(false);
-      setupVisualizer();
       wireEvents();
+    setupVisualizer();
     await syncPresenceIdentity();
     setCrossfadeProfile(state.crossfade.profile || 'smooth');
         updateSettingsSnapshot();
@@ -9828,6 +9842,15 @@ async def try_now_onboarding():
 
 # ==========================================
 # END OF QLYNK ARCHITECTURE V6 (TITAN)
+# ==========================================
+
+# ==========================================
+# END OF FILE
+# --- SYSTEM HIBERNATION INITIATED ---
+# Developer Status: Offline. 
+# Mission: IIT Kharagpur CSE. 
+# Last Update: 19:20pm || 14 April 2026 IST
+# GO STUDY! ANNUAL EXAMS AND JEE ARE COMING. NO MORE COMMITS. 🚀📚
 # ==========================================
 
 # ==========================================
