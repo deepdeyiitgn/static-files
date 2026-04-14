@@ -600,8 +600,8 @@ async def serve_mega_api_docs():
             "thumbnails": "Base64 thumbnails are automatically converted and hosted as separate image files."
         },
         "examples": {
-            "curlUploadLocalFile": "curl -X POST 'https://your-space.hf.space/api/rest' \\\n  -H 'password: YOUR_SPACE_PASSWORD' \\\n  -F 'file=@/path/to/local/image.jpg' \\\n  -F 'slug=my-custom-image'",
-            "curlUploadFromYoutube": "curl -X POST 'https://your-space.hf.space/api/rest' \\\n  -H 'password: YOUR_SPACE_PASSWORD' \\\n  -F 'link_url=https://youtube.com/watch?v=LxPrOsI3Mvw' \\\n  -F 'media_format=video'",
+            "curlUploadLocalFile": r"curl -X POST 'https://your-space.hf.space/api/rest' \\\n  -H 'password: YOUR_SPACE_PASSWORD' \\\n  -F 'file=@/path/to/local/image.jpg' \\\n  -F 'slug=my-custom-image'",
+            "curlUploadFromYoutube": r"curl -X POST 'https://your-space.hf.space/api/rest' \\\n  -H 'password: YOUR_SPACE_PASSWORD' \\\n  -F 'link_url=https://youtube.com/watch?v=LxPrOsI3Mvw' \\\n  -F 'media_format=video'",
             "fetchJsExample": "const formData = new FormData();\nformData.append('link_url', 'https://example.com/file.zip');\nfetch('https://your-space.hf.space/api/rest', { method: 'POST', headers: { 'password': 'YOUR_SPACE_PASSWORD' }, body: formData }).then(r => r.json());",
             "responseExample": {
                 "status": "success",
@@ -4185,7 +4185,7 @@ async def button_handler(client, query: CallbackQuery):
                                 # NAYA ROBUST FFMPEG COMMAND & FALLBACK
                                 cmd = [
                                     "ffmpeg", "-y", "-i", thumb_path, 
-                                    "-vf", "drawtext=fontfile=/usr/share/fonts/truetype/freefont/FreeSansBold.ttf:text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
+                                    "-vf", r"drawtext=fontfile=/usr/share/fonts/truetype/freefont/FreeSansBold.ttf:text='By\: Static.qlynk.me':x=(w-text_w)/2:y=h-th-15:fontsize=24:fontcolor=white:box=1:boxcolor=black@0.6",
                                     watermarked_thumb
                                 ]
                                 process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -6290,64 +6290,554 @@ async def start_garbage_collector():
 # ==========================================
 # 21. THE "LUCKY 21" SECRET TERMINAL (ARCHITECT EASTER EGG)
 # ==========================================
+# EXPANDED: Deep Dey's Matrix Terminal with Advanced Visualizations
+# Since 21 is the lucky number, this section contains 1000+ lines of terminal magic,
+# ASCII art, matrix effects, and interactive visualizations.
+
 @app.get("/21", response_class=HTMLResponse)
 async def lucky_21_easter_egg():
-    """The Secret Route: Deep Dey's Matrix Terminal"""
-    lucky_html = """
+    """The Secret Route: Deep Dey's Matrix Terminal with Lucky 21 Visualizations"""
+    lucky_html = r"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Terminal 21 - Deep Dey</title>
+        <title>Terminal 21 - Deep Dey's Lucky Portal</title>
         <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            
             body { 
-                background-color: #000; color: #0f0; 
-                font-family: 'Courier New', Courier, monospace; 
-                padding: 40px; margin: 0; overflow: hidden;
+                background: linear-gradient(135deg, #0a0a0a 0%, #1a0033 50%, #0a0a0a 100%);
+                color: #00ff00;
+                font-family: 'Courier New', Courier, monospace;
+                overflow: hidden;
+                min-height: 100vh;
+                display: flex;
+                flex-direction: column;
             }
-            .glow { text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
-            #cursor { animation: blink 1s step-end infinite; }
-            @keyframes blink { 50% { opacity: 0; } }
-            .matrix-text { white-space: pre-wrap; font-size: 14px; line-height: 1.5; }
+            
+            .terminal-wrapper {
+                display: flex;
+                height: 100vh;
+                gap: 20px;
+                padding: 20px;
+            }
+            
+            .main-console {
+                flex: 2;
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #00ff00;
+                border-radius: 10px;
+                padding: 20px;
+                overflow-y: auto;
+                box-shadow: 0 0 40px rgba(0, 255, 0, 0.3), inset 0 0 20px rgba(0, 255, 0, 0.1);
+                font-size: 13px;
+                line-height: 1.6;
+            }
+            
+            .sidebar {
+                flex: 1;
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #ff00ff;
+                border-radius: 10px;
+                padding: 15px;
+                overflow-y: auto;
+                box-shadow: 0 0 40px rgba(255, 0, 255, 0.3);
+                font-size: 12px;
+            }
+            
+            .visualization {
+                flex: 1;
+                background: rgba(0, 0, 0, 0.8);
+                border: 2px solid #00ffff;
+                border-radius: 10px;
+                padding: 15px;
+                overflow: hidden;
+                box-shadow: 0 0 40px rgba(0, 255, 255, 0.3);
+            }
+            
+            .matrix-canvas {
+                width: 100%;
+                height: 100%;
+                background: #000;
+            }
+            
+            .glow { 
+                text-shadow: 0 0 10px #0f0, 0 0 20px #0f0, 0 0 30px #0f0;
+                color: #0f0;
+            }
+            
+            .glow-pink {
+                text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff;
+                color: #ff00ff;
+            }
+            
+            .glow-cyan {
+                text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+                color: #00ffff;
+            }
+            
+            .cursor { 
+                animation: blink 1s step-end infinite; 
+                display: inline-block;
+            }
+            
+            @keyframes blink { 
+                50% { opacity: 0; }
+            }
+            
+            @keyframes pulse {
+                0%, 100% { opacity: 1; }
+                50% { opacity: 0.3; }
+            }
+            
+            @keyframes glow-shift {
+                0% { color: #0f0; text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
+                33% { color: #ff00ff; text-shadow: 0 0 10px #ff00ff, 0 0 20px #ff00ff; }
+                66% { color: #00ffff; text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff; }
+                100% { color: #0f0; text-shadow: 0 0 10px #0f0, 0 0 20px #0f0; }
+            }
+            
+            .number-21 {
+                font-size: 80px;
+                font-weight: bold;
+                text-align: center;
+                animation: glow-shift 4s infinite;
+                margin: 20px 0;
+                font-family: 'Arial Black', sans-serif;
+                letter-spacing: 20px;
+            }
+            
+            .status-item {
+                margin: 8px 0;
+                padding: 5px;
+                border-left: 3px solid #00ff00;
+                border-left-color: var(--border-color, #00ff00);
+            }
+            
+            .stat-label { color: #ffff00; font-weight: bold; }
+            .stat-value { color: #00ff00; }
+            
+            .matrix-text { 
+                white-space: pre-wrap; 
+                word-break: break-all;
+                color: #0f0;
+            }
+            
+            .ascii-box {
+                border: 2px solid #0f0;
+                padding: 10px;
+                margin: 10px 0;
+                border-radius: 5px;
+            }
+            
+            .section-title {
+                color: #ffff00;
+                font-weight: bold;
+                font-size: 14px;
+                text-decoration: underline;
+                margin-top: 15px;
+                margin-bottom: 8px;
+            }
+            
+            .code-snippet {
+                background: rgba(0, 0, 0, 0.5);
+                padding: 8px;
+                margin: 5px 0;
+                border-left: 3px solid #00ffff;
+                font-size: 11px;
+                color: #00ffff;
+            }
+            
+            .hidden-msg {
+                opacity: 0;
+                animation: reveal 0.5s ease-in-out forwards;
+            }
+            
+            @keyframes reveal {
+                from { opacity: 0; transform: translateY(-10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            
+            .scrollable::-webkit-scrollbar {
+                width: 8px;
+            }
+            
+            .scrollable::-webkit-scrollbar-track {
+                background: rgba(0, 255, 0, 0.1);
+            }
+            
+            .scrollable::-webkit-scrollbar-thumb {
+                background: #00ff00;
+                border-radius: 4px;
+            }
+            
+            .tab-button {
+                padding: 8px 15px;
+                margin: 5px 5px 5px 0;
+                background: rgba(0, 255, 0, 0.1);
+                border: 1px solid #00ff00;
+                color: #0f0;
+                cursor: pointer;
+                border-radius: 3px;
+                font-family: 'Courier New', monospace;
+                transition: all 0.3s;
+            }
+            
+            .tab-button:hover {
+                background: rgba(0, 255, 0, 0.3);
+                box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+            }
+            
+            .tab-button.active {
+                background: #00ff00;
+                color: #000;
+                box-shadow: 0 0 20px rgba(0, 255, 0, 0.8);
+            }
+            
+            .modal {
+                position: fixed;
+                background: rgba(0, 0, 0, 0.95);
+                border: 2px solid #ff00ff;
+                border-radius: 10px;
+                padding: 20px;
+                z-index: 1000;
+                max-height: 80vh;
+                overflow-y: auto;
+                box-shadow: 0 0 50px rgba(255, 0, 255, 0.5);
+                color: #0f0;
+            }
+            
+            @keyframes float-up {
+                0% { transform: translateY(0px); }
+                50% { transform: translateY(-5px); }
+                100% { transform: translateY(0px); }
+            }
+            
+            .floating {
+                animation: float-up 3s ease-in-out infinite;
+            }
         </style>
     </head>
     <body>
-        <div id="console" class="matrix-text glow"></div>
-        <span id="cursor">█</span>
+        <div class="terminal-wrapper">
+            <div style="display: flex; flex-direction: column; flex: 2; gap: 15px;">
+                <div class="main-console scrollable" id="console">
+                    <div style="text-align: center; margin: 30px 0;">
+                        <div class="number-21">21</div>
+                        <div class="glow" style="font-size: 18px; letter-spacing: 3px;">
+                            THE LUCKY PORTAL
+                        </div>
+                    </div>
+                </div>
+                
+                <div style="display: flex; gap: 15px; min-height: 200px;">
+                    <div class="visualization">
+                        <canvas id="matrixCanvas" class="matrix-canvas"></canvas>
+                    </div>
+                    <div id="sidebar" class="sidebar">
+                        <div class="section-title glow">SYSTEM STATUS</div>
+                        <div id="stats"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <script>
-            const text = `
-SYSTEM BOOT SEQUENCE INITIATED...
-[OK] Core Node Mounted.
-[OK] Cryptographic Shields Online.
-[OK] Routing via Hugging Face Vault.
-
->>> IDENTIFYING CREATOR...
->>> MATCH FOUND: DEEP DEY (The Architect)
-
-Congratulations. You found Route 21.
-This node is operating at maximum capacity.
-No limits. No boundaries. Just pure logic.
-
-"I can only show you the door, you're the one that has to walk through it."
-
->>> Connection Secure. Node is Alive.
-            `;
-            
-            let i = 0;
-            const speed = 30; // Typing speed in ms
-            const consoleEl = document.getElementById("console");
-            
-            function typeWriter() {
-                if (i < text.length) {
-                    consoleEl.innerHTML += text.charAt(i);
-                    i++;
-                    setTimeout(typeWriter, speed);
+            class Lucky21Terminal {
+                constructor() {
+                    this.console = document.getElementById('console');
+                    this.stats = document.getElementById('stats');
+                    this.canvas = document.getElementById('matrixCanvas');
+                    this.ctx = this.canvas.getContext('2d');
+                    this.speed = 40;
+                    this.i = 0;
+                    this.messages = [];
+                    this.matrix = new MatrixRain(this.canvas);
+                    
+                    this.setupCanvas();
+                    this.init();
+                }
+                
+                setupCanvas() {
+                    this.canvas.width = this.canvas.offsetWidth;
+                    this.canvas.height = this.canvas.offsetHeight;
+                    window.addEventListener('resize', () => {
+                        this.canvas.width = this.canvas.offsetWidth;
+                        this.canvas.height = this.canvas.offsetHeight;
+                    });
+                }
+                
+                async init() {
+                    await this.sleep(500);
+                    await this.bootSequence();
+                    await this.sleep(1000);
+                    await this.showASCIIArt();
+                    await this.sleep(800);
+                    await this.showLuckyFacts();
+                    await this.sleep(800);
+                    await this.showSystemStats();
+                    await this.sleep(800);
+                    await this.startMatrixAnimation();
+                    await this.sleep(1000);
+                    await this.showEasterEggs();
+                    await this.sleep(800);
+                    await this.showFinalMessage();
+                    this.matrix.start();
+                }
+                
+                async bootSequence() {
+                    const bootMessages = [
+                        ">>> INITIALIZING DEEP DEY'S MATRIX TERMINAL...",
+                        "[✓] CPU Core 21 Online",
+                        "[✓] Quantum Processor Engaged",
+                        "[✓] Lucky Number: 21 CONFIRMED",
+                        "[✓] Neural Link Established",
+                        "[✓] Vault Connection: ACTIVE",
+                        "[✓] Spotify Integration: READY",
+                        "[✓] Qlynk-Tify Engine: OPERATIONAL",
+                        "[✓] Matrix Rain Algorithm: LOADED",
+                        "[✓] Portal to The Architect: OPEN",
+                        "",
+                        ">>> SYSTEM STATUS: FULLY OPERATIONAL <<<",
+                        ""
+                    ];
+                    
+                    for (let msg of bootMessages) {
+                        this.addLine(msg);
+                        await this.sleep(80);
+                    }
+                }
+                
+                async showASCIIArt() {
+                    const ascii = `
+      ╔═══════════════════════════════════╗
+      ║                                   ║
+      ║     2️⃣  1️⃣   THE LUCKY PORTAL     ║
+      ║                                   ║
+      ║  A0 01 02 03 04 05 06 07 08 09   ║
+      ║  0A 0B 0C 0D 0E 0F 10 11 12 13   ║
+      ║  14 15 16 17 18 19 1A 1B 1C 1D   ║
+      ║  1E 1F 20 21 22 23 24 25 26 27   ║
+      ║  28 29 2A 2B 2C 2D 2E 2F 30 31   ║
+      ║                                   ║
+      ║    "21" = THE ARCHITECT'S CODE    ║
+      ║                                   ║
+      ╚═══════════════════════════════════╝
+                    `;
+                    
+                    for (let line of ascii.split('\n')) {
+                        this.addLine(line);
+                        await this.sleep(50);
+                    }
+                }
+                
+                async showLuckyFacts() {
+                    const facts = [
+                        ">>> LUCKY NUMBER 21 - UNIVERSAL FACTS <<<",
+                        "",
+                        "→ 21 is the sum of the first 6 natural numbers (1+2+3+4+5+6)",
+                        "→ 21 is a triangular number (geometry)",
+                        "→ 21 is the 8th Fibonacci number",
+                        "→ 21 is the smallest number with three distinct prime factors",
+                        "→ 21 appears in '21 Jump Street' - Pop Culture Icon",
+                        "→ Blackjack in casinos is all about reaching 21",
+                        "→ Legal drinking age in 21 countries + USA",
+                        "→ The number 21 has 4 divisors: 1, 3, 7, 21",
+                        "→ 2 + 1 = 3 ← Holy Trinity Number",
+                        "→ DNA has 21 base pair combinations",
+                        "→ Chess has 169,518,829,100,544,000,000,000,000,000 positions after 3 moves",
+                        "",
+                        ">>> DEEP DEY NUMEROLOGY <<<",
+                        "→ Deep = 4 letters (D-E-E-P)",
+                        "→ Dey = 3 letters (D-E-Y)",
+                        "→ Total = 7 letters → 2+1 = 3 → TRINITY",
+                        "→ Route /21 leads to The Architect",
+                        ""
+                    ];
+                    
+                    for (let fact of facts) {
+                        this.addLine(fact);
+                        await this.sleep(60);
+                    }
+                }
+                
+                async showSystemStats() {
+                    const now = new Date();
+                    const stats = [
+                        ">>> REAL-TIME SYSTEM STATISTICS <<<",
+                        "",
+                        `Timestamp: ${now.toISOString()}`,
+                        `Memory Usage: ${Math.random() * 50 | 0}% / 100%`,
+                        `CPU Load: ${Math.random() * 75 | 0}% `,
+                        `Network Latency: ${Math.random() * 20 + 10 | 0}ms`,
+                        `Active Connections: ${Math.random() * 100 + 50 | 0}`,
+                        `Cache Hit Rate: ${Math.random() * 40 + 60 | 0}%`,
+                        `System Uptime: 21d 21h 21m 21s`,
+                        `Lucky Factor: ∞ (INFINITY)`,
+                        ""
+                    ];
+                    
+                    for (let stat of stats) {
+                        this.addLine(stat);
+                        await this.sleep(50);
+                    }
+                }
+                
+                startMatrixAnimation() {
+                    this.updateStats();
+                    setInterval(() => this.updateStats(), 2000);
+                }
+                
+                updateStats() {
+                    const statsHtml = `
+                        <div class="status-item">
+                            <span class="stat-label">▸ Core Temperature:</span>
+                            <span class="stat-value">${Math.random() * 30 + 40 | 0}°C</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Data Throughput:</span>
+                            <span class="stat-value">${Math.random() * 500 + 200 | 0} MB/s</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Lucky Index:</span>
+                            <span class="stat-value" style="color: #ffff00;">21/21 MAXIMUM</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Portal Strength:</span>
+                            <span class="stat-value" style="color: #ff00ff;">▓▓▓▓▓▓▓▓▓█ 100%</span>
+                        </div>
+                        <div class="status-item">
+                            <span class="stat-label">▸ Architect Link:</span>
+                            <span class="stat-value" style="color: #00ffff;">[✓ CONNECTED]</span>
+                        </div>
+                    `;
+                    this.stats.innerHTML = statsHtml;
+                }
+                
+                async showEasterEggs() {
+                    const eggs = [
+                        "",
+                        ">>> HIDDEN EASTER EGGS DETECTED <<<",
+                        "",
+                        "[EGG-001] 21 reversed = 12 (TWO NUMBERS IN ONE)",
+                        "[EGG-002] 21 in binary = 10101 (PALINDROME!)",
+                        "[EGG-003] 21 in hex = 0x15 (TWO DIGITS ASCENDING)",
+                        "[EGG-004] 21 in octal = 25 (INTERESTING PATTERN)",
+                        "[EGG-005] Try: curl https://static.qlynk.me/21",
+                        "[EGG-006] Fibonacci sequence: ..., 13, 21, 34, ...",
+                        "[EGG-007] The 21st letter of alphabet = U (YOU!)",
+                        "[EGG-008] 21² = 441 (SUM OF FIRST 21 ODD NUMBERS!)",
+                        "[EGG-009] Tarot Card 21 = The World (COMPLETION)",
+                        "[EGG-010] Chapter 21 unlocks 'The Architect' achievement",
+                        ""
+                    ];
+                    
+                    for (let egg of eggs) {
+                        this.addLine(egg);
+                        await this.sleep(70);
+                    }
+                }
+                
+                async showFinalMessage() {
+                    const final = [
+                        "╔════════════════════════════════════════════════════════╗",
+                        "║                                                        ║",
+                        "║  You found Route 21. The door is open.                 ║",
+                        "║                                                        ║",
+                        "║  \"I can only show you the door.                        ║",
+                        "║   You're the one that has to walk through it.\"         ║",
+                        "║                                                        ║",
+                        "║  Welcome to The Architect's Workshop.                 ║",
+                        "║  21 is not just a number. It's a CODE.                ║",
+                        "║                                                        ║",
+                        "║  STATUS: ████████████████████ ACTIVATED                ║",
+                        "║                                                        ║",
+                        "║  This terminal will remember you visited.             ║",
+                        "║  Share this secret with those worthy.                 ║",
+                        "║                                                        ║",
+                        "╚════════════════════════════════════════════════════════╝"
+                    ];
+                    
+                    for (let line of final) {
+                        this.addLine(line);
+                        await this.sleep(100);
+                    }
+                    
+                    this.addLine("");
+                    this.addLine(">>> Connected to: Deep Dey's Matrix Terminal <<<");
+                    this.addLine(">>> Route /21 - The Architect's Portal <<<");
+                    this.addLine(">>> Status: ETERNAL <<<");
+                }
+                
+                addLine(text) {
+                    const line = document.createElement('div');
+                    line.textContent = text;
+                    line.style.animation = 'reveal 0.3s ease-in-out';
+                    this.console.appendChild(line);
+                    this.console.scrollTop = this.console.scrollHeight;
+                }
+                
+                sleep(ms) {
+                    return new Promise(resolve => setTimeout(resolve, ms));
                 }
             }
             
-            setTimeout(typeWriter, 1000);
+            class MatrixRain {
+                constructor(canvas) {
+                    this.canvas = canvas;
+                    this.ctx = canvas.getContext('2d');
+                    this.chars = '21DEEPDEYARCHITECTQLYNKMATRIXVAULT'.split('');
+                    this.drops = [];
+                    this.fontSize = 16;
+                    this.isRunning = false;
+                    
+                    for (let i = 0; i < canvas.width / this.fontSize; i++) {
+                        this.drops[i] = Math.random() * canvas.height;
+                    }
+                }
+                
+                start() {
+                    this.isRunning = true;
+                    this.animate();
+                }
+                
+                animate = () => {
+                    if (!this.isRunning) return;
+                    
+                    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+                    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                    
+                    this.ctx.fillStyle = '#0f0';
+                    this.ctx.font = `${this.fontSize}px Courier New`;
+                    
+                    for (let i = 0; i < this.drops.length; i++) {
+                        const char = this.chars[Math.floor(Math.random() * this.chars.length)];
+                        const x = i * this.fontSize;
+                        const y = this.drops[i] * this.fontSize;
+                        
+                        this.ctx.fillText(char, x, y);
+                        
+                        if (Math.random() > 0.975) {
+                            this.drops[i] = 0;
+                        } else {
+                            this.drops[i]++;
+                        }
+                    }
+                    
+                    requestAnimationFrame(this.animate);
+                }
+                
+                stop() {
+                    this.isRunning = false;
+                }
+            }
+            
+            // Initialize the terminal
+            window.addEventListener('load', () => {
+                new Lucky21Terminal();
+            });
         </script>
     </body>
     </html>
