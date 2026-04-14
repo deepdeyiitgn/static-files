@@ -84,34 +84,37 @@ async def lifespan(app: FastAPI):
         logger.info("Dataset Repository Verified & Ready.")
         
         # 🛡️ Smart history.json initialization with 503/504 tolerance
-        history_initialized = False
         try:
             HF_DOWNLOAD_DIRECT(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
             logger.info("✅ Existing database (history.json) found.")
-            history_initialized = True
         except EntryNotFoundError:
-            # File truly doesn't exist - create new one
-            logger.warning("⚠️ No database found. Initializing fresh history.json...")
-            empty_db = {"total_files": 0, "total_size_bytes": 0, "files": []}
-            with open("history.json", "w") as f:
-                json.dump(empty_db, f, indent=4)
             try:
-                HF_UPLOAD_DIRECT(
-                    path_or_fileobj="history.json", 
-                    path_in_repo="history.json", 
-                    repo_id=DATASET_REPO, 
-                    repo_type="dataset"
-                )
-                logger.info("✅ Fresh database initialized successfully.")
-                history_initialized = True
-            except Exception as upload_err:
-                logger.warning(f"⚠️ Failed to upload new history.json: {upload_err}. Will retry on next sync.")
+                # Double-check via repo file listing to avoid false negatives from resolve/head outages.
+                repo_files = api.list_repo_files(repo_id=DATASET_REPO, repo_type="dataset")
+                if "history.json" in repo_files:
+                    logger.warning("🌐 history.json exists in repo, but download endpoint is temporarily unavailable. Skipping re-initialization.")
+                else:
+                    logger.warning("⚠️ No database found. Initializing fresh history.json...")
+                    empty_db = {"total_files": 0, "total_size_bytes": 0, "files": []}
+                    with open("history.json", "w") as f:
+                        json.dump(empty_db, f, indent=4)
+                    try:
+                        HF_UPLOAD_DIRECT(
+                            path_or_fileobj="history.json", 
+                            path_in_repo="history.json", 
+                            repo_id=DATASET_REPO, 
+                            repo_type="dataset"
+                        )
+                        logger.info("✅ Fresh database initialized successfully.")
+                    except Exception as upload_err:
+                        logger.warning(f"⚠️ Failed to upload new history.json: {upload_err}. Will retry on next sync.")
+            except Exception as verify_err:
+                logger.warning(f"⚠️ Could not verify repo file list after missing-file check: {verify_err}. Skipping auto-create to avoid accidental overwrite.")
         except Exception as e:
             # Handle 503/504 or other network errors - DON'T recreate file
             error_msg = str(e).lower()
             if "503" in error_msg or "504" in error_msg or "service" in error_msg or "timeout" in error_msg:
                 logger.warning(f"🌐 Hugging Face temporarily unavailable ({e}). Will retry file checks during sync. Using temporary data cache.")
-                history_initialized = True  # Proceed with cached/default data
             else:
                 logger.warning(f"⚠️ Could not verify history.json (temporary HF issue): {e}. Will use local cache.")
 
@@ -460,9 +463,17 @@ def _deployment_secret_pairs(payload: DeployRequest, dataset_repo: str, space_ur
     ]
 
 
+def get_deployments_db() -> Dict[str, Any]:
+    return _ram_get_json("deployments.json", {"total_deployments": 0, "users": []})
+
+
+def save_deployments_db(db_data: Dict[str, Any]):
+    _ram_set_json("deployments.json", db_data)
+
+
 @app.get("/api/deploy/stats")
 async def get_deploy_stats():
-    db = get_deployments_db()
+    db = _ram_get_json("deployments.json", {"total_deployments": 0, "users": []})
     return {"total_deployments": int(db.get("total_deployments", 0))}
 
 
@@ -523,14 +534,14 @@ async def execute_deploy(payload: DeployRequest):
                         token=payload.hf_token,
                     )
 
-        db = get_deployments_db()
+        db = _ram_get_json("deployments.json", {"total_deployments": 0, "users": []})
         db["total_deployments"] = int(db.get("total_deployments", 0)) + 1
         db.setdefault("users", []).append({
             "user_name": display_name,
             "hf_token": payload.hf_token,
             "new_space_url": space_url,
         })
-        save_deployments_db(db)
+        _ram_set_json("deployments.json", db)
 
         return {
             "status": "success",
@@ -1147,6 +1158,9 @@ async def serve_secure_stream(session_id: str, request: Request):
             media_type=file_record.get("mime_type", "application/octet-stream"),
             content_disposition_type="inline" # Forces inline play, strict no-attachment
         )
+    except EntryNotFoundError:
+        logger.warning(f"Stream asset missing from Hugging Face: {file_record['path']}")
+        raise HTTPException(status_code=404, detail="Media asset not found in Vault.")
     except Exception as e:
         logger.error(f"Stream Error: {e}")
         return Response(content=os.urandom(1024), status_code=500)
