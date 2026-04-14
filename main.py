@@ -6369,7 +6369,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Stre
 
 SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
 SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
-QLYNKTIFY_ENABLED = str(os.environ.get("QLYNKTIFY_ENABLED", "false")).lower() == "true"
+QLYNKTIFY_ENABLED = str(os.environ.get("QLYNKTIFY_ENABLED", "true")).lower() == "true"
 
 QLYNKTIFY_CHECKOUT_URL = "/checkout"
 QLYNKTIFY_AUTH_FILE = "qlynktify_spotify_auth.json"
@@ -6849,6 +6849,46 @@ async def spotify_playlists(request: Request, limit: int = 30):
 async def spotify_top_tracks(request: Request, limit: int = 20):
     data = await spotify_call("/me/top/tracks", request, params={"limit": max(1, min(limit, 50)), "time_range": "medium_term"})
     return {"items": data.get("items", [])}
+
+
+@app.get("/api/spotify/recommendations")
+async def spotify_recommendations(
+    request: Request,
+    limit: int = 20,
+    market: str = "",
+    seed_tracks: str = "",
+    seed_artists: str = "",
+    seed_genres: str = ""
+):
+    # Spotify recommendations API requires at least one seed across tracks/artists/genres.
+    tracks = [s.strip() for s in seed_tracks.split(",") if s.strip()][:5]
+    artists = [s.strip() for s in seed_artists.split(",") if s.strip()][:5]
+    genres = [s.strip() for s in seed_genres.split(",") if s.strip()][:5]
+
+    params = {
+        "limit": max(1, min(limit, 100))
+    }
+    if market.strip():
+        params["market"] = market.strip().upper()
+    if tracks:
+        params["seed_tracks"] = ",".join(tracks)
+    if artists:
+        params["seed_artists"] = ",".join(artists)
+    if genres:
+        params["seed_genres"] = ",".join(genres)
+
+    if not tracks and not artists and not genres:
+        # Fallback seed: use user's top tracks so recommendations still work with one-click UI.
+        top = await spotify_call("/me/top/tracks", request, params={"limit": 5, "time_range": "medium_term"})
+        top_items = top.get("items", []) if isinstance(top, dict) else []
+        top_ids = [str(item.get("id", "")).strip() for item in top_items if str(item.get("id", "")).strip()][:5]
+        if top_ids:
+            params["seed_tracks"] = ",".join(top_ids)
+        else:
+            raise HTTPException(status_code=400, detail="Provide at least one seed via seed_tracks, seed_artists, or seed_genres")
+
+    data = await spotify_call("/recommendations", request, params=params)
+    return {"items": data.get("tracks", [])}
 
 
 @app.get("/api/spotify/audio-analysis/{track_id}")
@@ -8329,6 +8369,28 @@ QLYNKTIFY_HTML_V7 = """
       }
     }
 
+        async function loadSpotifyRecommendations(seedTrackIds = []) {
+            try {
+                const seeds = (seedTrackIds || []).filter(Boolean).slice(0, 5).join(',');
+                const qs = seeds ? `?limit=20&seed_tracks=${encodeURIComponent(seeds)}` : '?limit=20';
+                const data = await safeFetch(`/api/spotify/recommendations${qs}`);
+                const tracks = (data.items || []).map(row => ({
+                    track_id: row.id,
+                    title: row.name,
+                    artist: (row.artists || []).map(a => a.name).join(', ') || 'Unknown Artist',
+                    album: row.album?.name || 'Spotify',
+                    artwork: row.album?.images?.[0]?.url || 'https://qlynk.vercel.app/quicklink-logo.png',
+                    spotify_uri: row.uri,
+                    source: 'spotify',
+                    duration_ms: row.duration_ms || 0
+                }));
+                registerTracks(tracks);
+                return tracks;
+            } catch (e) {
+                return [];
+            }
+        }
+
     function vaultAutoPlaylists() {
       const recent = [...state.vaultTracks].slice(0, 12);
       const additions = [...state.vaultTracks].slice(0, 24);
@@ -8462,7 +8524,7 @@ QLYNKTIFY_HTML_V7 = """
             } catch (e) {}
         }
 
-    function renderHome(topSpotify) {
+        function renderHome(topSpotify, recommendedSpotify = []) {
       const jump = vaultAutoPlaylists()['Jump Back In'];
       const add = vaultAutoPlaylists()['Vault Additions'];
       const hero = jump[0] || add[0] || topSpotify[0] || {
@@ -8486,6 +8548,9 @@ QLYNKTIFY_HTML_V7 = """
         <h3 style=\"margin:20px 0 10px;\">Top Spotify Tracks</h3>
         <div class=\"rows\" id=\"row-spotify\"></div>
 
+                <h3 style=\"margin:20px 0 10px;\">Recommended For You</h3>
+                <div class=\"rows\" id=\"row-reco\"></div>
+
         <h3 style=\"margin:20px 0 10px;\">Vault Additions</h3>
         <table class=\"table\" id=\"vault-table\"></table>
       `;
@@ -8496,16 +8561,19 @@ QLYNKTIFY_HTML_V7 = """
       const rowSpotify = document.getElementById('row-spotify');
       rowSpotify.innerHTML = topSpotify.slice(0, 8).map(t => card(t, 'Spotify')).join('');
 
+    const rowReco = document.getElementById('row-reco');
+    rowReco.innerHTML = recommendedSpotify.slice(0, 8).map(t => card(t, 'Recommended')).join('');
+
       const table = document.getElementById('vault-table');
       table.innerHTML = `<thead><tr><th>#</th><th>Title</th><th>Artist</th><th>Source</th></tr></thead><tbody>${add.slice(0, 40).map((t, i) =>
         `<tr data-id=\"${t.track_id}\"><td>${i + 1}</td><td>${t.title}</td><td>${t.artist}</td><td><span class=\"badge\">Vault</span></td></tr>`
       ).join('')}</tbody>`;
 
-      wireTrackClicks(el.dynamic, [...jump, ...topSpotify, ...add]);
+      wireTrackClicks(el.dynamic, [...jump, ...topSpotify, ...recommendedSpotify, ...add]);
             const playAllHome = document.getElementById('play-all-home');
             if (playAllHome) {
                 playAllHome.addEventListener('click', () => {
-                    const all = [...jump, ...topSpotify, ...add];
+                    const all = [...jump, ...topSpotify, ...recommendedSpotify, ...add];
                     if (!all.length) return;
                     state.queue = all;
                     state.queueIndex = 0;
@@ -9121,8 +9189,9 @@ QLYNKTIFY_HTML_V7 = """
     function wireEvents() {
       document.getElementById('nav-home').addEventListener('click', async () => {
         const topSpotify = await loadSpotifyTopTracks();
+                const recSpotify = await loadSpotifyRecommendations(topSpotify.map(t => t.track_id));
         state.mode = 'home';
-        renderHome(topSpotify);
+                renderHome(topSpotify, recSpotify);
       });
       document.getElementById('nav-search').addEventListener('click', async () => { state.mode = 'search'; await renderSearch(); });
       document.getElementById('nav-queue').addEventListener('click', () => { state.mode = 'queue'; renderQueueView(); });
@@ -9338,11 +9407,12 @@ QLYNKTIFY_HTML_V7 = """
             await loadCustomPlaylistsFromBackend();
       await loadSpotifyPlaylists();
             await restoreFolderHandles();
-      const topSpotify = await loadSpotifyTopTracks();
+    const topSpotify = await loadSpotifyTopTracks();
+    const recSpotify = await loadSpotifyRecommendations(topSpotify.map(t => t.track_id));
             if (!state.queue.length) {
                 state.queue = [...state.vaultTracks];
             }
-      renderHome(topSpotify);
+    renderHome(topSpotify, recSpotify);
             applyShuffleMode();
             applyRepeatMode();
             setFooterPlayButton(false);
