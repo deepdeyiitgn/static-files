@@ -1370,6 +1370,10 @@ async def serve_footer_extras_js():
         return FileResponse("footer-extras.js", media_type="application/javascript")
     raise HTTPException(status_code=404, detail="File not found")    
 
+@app.get("/favicon.ico")
+async def serve_favicon():
+    return RedirectResponse(url="https://qlynk.vercel.app/quicklink-logo.png", status_code=307)
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend_ui():
     with open("index.html", "r", encoding="utf-8") as f:
@@ -7163,6 +7167,8 @@ QLYNKTIFY_HTML_V7 = """
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1\" />
   <title>Qlynk-tify V7 - Trinity Engine</title>
+    <link rel=\"icon\" href=\"https://qlynk.vercel.app/quicklink-logo.png\" />
+    <script>window.onSpotifyWebPlaybackSDKReady = window.onSpotifyWebPlaybackSDKReady || function(){};</script>
   <script src=\"https://sdk.scdn.co/spotify-player.js\"></script>
   <script src=\"https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js\"></script>
   <style>
@@ -7369,9 +7375,11 @@ QLYNKTIFY_HTML_V7 = """
             background: #171717;
         }
         .eq-band input[type=range] {
-            writing-mode: bt-lr;
-            -webkit-appearance: slider-vertical;
-            width: 20px;
+            writing-mode: vertical-lr;
+            direction: rtl;
+            appearance: none;
+            -webkit-appearance: none;
+            width: 18px;
             height: 110px;
         }
         .friends-shell,
@@ -7624,7 +7632,7 @@ QLYNKTIFY_HTML_V7 = """
   <div id=\"mesh\"></div>
   <div class=\"app\" id=\"app\">
     <aside class=\"sidebar\" id=\"sidebar\">
-      <h2 class=\"logo\">Qlynk-<span>tify V7</span></h2>
+            <h2 class=\"logo\"><img src=\"https://qlynk.vercel.app/quicklink-logo.svg\" alt=\"QLYNK\" style=\"width:18px;height:18px;vertical-align:-3px;margin-right:6px;\">QLYNK <span>Tify</span></h2>
       <button class=\"nav-btn active\" id=\"nav-home\">Home</button>
       <button class=\"nav-btn\" id=\"nav-search\">Search</button>
       <button class=\"nav-btn\" id=\"nav-queue\">Queue</button>
@@ -7651,6 +7659,7 @@ QLYNKTIFY_HTML_V7 = """
 
       <div class=\"section-title\">Local Edge</div>
       <button class=\"btn\" id=\"pick-folder\">Add Folder</button>
+    <input id=\"pick-folder-fallback\" type=\"file\" webkitdirectory directory multiple style=\"display:none\" />
       <div class=\"dropzone\" id=\"dropzone\">Drop MP3 folder or files here</div>
       <div class=\"list\" id=\"local-folders\" style=\"margin-top:10px;\"></div>
     </aside>
@@ -7886,7 +7895,8 @@ QLYNKTIFY_HTML_V7 = """
                 sleepStatus: document.getElementById('sleep-status'),
                 sleepCancel: document.getElementById('sleep-cancel'),
                 navOffline: document.getElementById('nav-offline'),
-                presenceSelf: document.getElementById('presence-self')
+                presenceSelf: document.getElementById('presence-self'),
+                pickFolderFallback: document.getElementById('pick-folder-fallback')
     };
 
         const qlynktifyPlayIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:18px;height:18px;display:block;fill:currentColor;"><path d="M8 5v14l11-7z"/></svg>';
@@ -7906,7 +7916,12 @@ QLYNKTIFY_HTML_V7 = """
     }
 
         function resolveTrackArtwork(track) {
-            return track?.artwork || track?.thumbnail || 'https://qlynk.vercel.app/quicklink-logo.png';
+            const raw = String(track?.artwork || track?.thumbnail || '').trim();
+            if (!raw) return 'https://qlynk.vercel.app/quicklink-logo.png';
+            if (raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:image/') || raw.startsWith('/')) {
+                return raw;
+            }
+            return `/f/${encodeURIComponent(raw)}`;
         }
 
     function notify(msg) {
@@ -8564,7 +8579,7 @@ QLYNKTIFY_HTML_V7 = """
 
       el.dynamic.innerHTML = `
         <section class=\"hero\">
-          <img src=\"${hero.artwork || 'https://qlynk.vercel.app/quicklink-logo.png'}\" />
+                    <img src=\"${resolveTrackArtwork(hero)}\" onerror=\"this.onerror=null;this.src='https://qlynk.vercel.app/quicklink-logo.png'\" />
           <div>
             <div class=\"small\">QLYNK-TIFY V7</div>
             <h1 style=\"margin:4px 0 6px;\">Trinity Engine Home</h1>
@@ -8615,7 +8630,7 @@ QLYNKTIFY_HTML_V7 = """
     }
 
     function card(t, src) {
-      return `<div class=\"card\" data-id=\"${t.track_id}\"><img src=\"${t.artwork || 'https://qlynk.vercel.app/quicklink-logo.png'}\"><div><div style=\"font-size:13px;font-weight:700;line-height:1.25;\">${t.title}</div><div class=\"small\">${t.artist}</div><div style=\"margin-top:6px;\"><span class=\"badge\">${src}</span></div></div></div>`;
+            return `<div class=\"card\" data-id=\"${t.track_id}\"><img src=\"${resolveTrackArtwork(t)}\" onerror=\"this.onerror=null;this.src='https://qlynk.vercel.app/quicklink-logo.png'\"><div><div style=\"font-size:13px;font-weight:700;line-height:1.25;\">${t.title}</div><div class=\"small\">${t.artist}</div><div style=\"margin-top:6px;\"><span class=\"badge\">${src}</span></div></div></div>`;
     }
 
     function wireTrackClicks(root, allTracks) {
@@ -9387,13 +9402,43 @@ QLYNKTIFY_HTML_V7 = """
     if (el.pickFolder) el.pickFolder.addEventListener('click', async () => {
         try {
           if (!('showDirectoryPicker' in window)) {
-            notify('Browser does not support File System Access API');
+                        if (el.pickFolderFallback) el.pickFolderFallback.click();
             return;
           }
           const handle = await window.showDirectoryPicker();
           await linkFolderHandle(handle);
         } catch (e) {}
       });
+
+            if (el.pickFolderFallback) el.pickFolderFallback.addEventListener('change', async () => {
+                const files = Array.from(el.pickFolderFallback.files || []).filter(f => f.name.match(/\.(mp3|m4a|ogg|wav|flac)$/i));
+                if (!files.length) return;
+                const folderName = (files[0].webkitRelativePath || '').split('/')[0] || 'Local Folder';
+                let count = 0;
+                for (const file of files) {
+                    const track = {
+                        track_id: `fallback-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+                        title: file.name.replace(/\.[^/.]+$/, ''),
+                        artist: 'Local Edge',
+                        album: folderName,
+                        artwork: '',
+                        source: 'local',
+                        file
+                    };
+                    state.localTracks.push(track);
+                    count += 1;
+                }
+                const box = document.createElement('div');
+                box.className = 'item';
+                box.innerHTML = `<div class=\"avatar\"></div><div><div style=\"font-size:12px;font-weight:700;\">${folderName}</div><div class=\"small\">${count} local tracks</div></div><span class=\"badge\">Local</span>`;
+                box.addEventListener('click', () => {
+                    state.queue = [...state.localTracks.filter(t => t.album === folderName)];
+                    savePlaybackState();
+                    renderQueueView();
+                });
+                if (el.localFolders) el.localFolders.prepend(box);
+                showToast(`Linked local folder: ${folderName}`);
+            });
 
             document.addEventListener('keydown', e => {
                 const activeTag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
