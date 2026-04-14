@@ -83,21 +83,37 @@ async def lifespan(app: FastAPI):
         api.create_repo(repo_id=DATASET_REPO, repo_type="dataset", private=True, exist_ok=True)
         logger.info("Dataset Repository Verified & Ready.")
         
+        # 🛡️ Smart history.json initialization with 503/504 tolerance
+        history_initialized = False
         try:
             HF_DOWNLOAD_DIRECT(repo_id=DATASET_REPO, filename="history.json", repo_type="dataset", token=HF_TOKEN)
-            logger.info("Existing database (history.json) found.")
+            logger.info("✅ Existing database (history.json) found.")
+            history_initialized = True
         except EntryNotFoundError:
-            logger.warning("No database found. Initializing fresh history.json...")
+            # File truly doesn't exist - create new one
+            logger.warning("⚠️ No database found. Initializing fresh history.json...")
             empty_db = {"total_files": 0, "total_size_bytes": 0, "files": []}
             with open("history.json", "w") as f:
                 json.dump(empty_db, f, indent=4)
-            HF_UPLOAD_DIRECT(
-                path_or_fileobj="history.json", 
-                path_in_repo="history.json", 
-                repo_id=DATASET_REPO, 
-                repo_type="dataset"
-            )
-            logger.info("Fresh database initialized successfully.")
+            try:
+                HF_UPLOAD_DIRECT(
+                    path_or_fileobj="history.json", 
+                    path_in_repo="history.json", 
+                    repo_id=DATASET_REPO, 
+                    repo_type="dataset"
+                )
+                logger.info("✅ Fresh database initialized successfully.")
+                history_initialized = True
+            except Exception as upload_err:
+                logger.warning(f"⚠️ Failed to upload new history.json: {upload_err}. Will retry on next sync.")
+        except Exception as e:
+            # Handle 503/504 or other network errors - DON'T recreate file
+            error_msg = str(e).lower()
+            if "503" in error_msg or "504" in error_msg or "service" in error_msg or "timeout" in error_msg:
+                logger.warning(f"🌐 Hugging Face temporarily unavailable ({e}). Will retry file checks during sync. Using temporary data cache.")
+                history_initialized = True  # Proceed with cached/default data
+            else:
+                logger.warning(f"⚠️ Could not verify history.json (temporary HF issue): {e}. Will use local cache.")
 
         # RAM-first preload (single cloud read at startup).
         _load_json_from_cloud_once("history.json", {"total_files": 0, "total_size_bytes": 0, "files": []})
@@ -287,9 +303,23 @@ def _load_json_from_cloud_once(filename: str, default_data: Dict[str, Any]) -> D
         downloaded = HF_DOWNLOAD_DIRECT(repo_id=DATASET_REPO, filename=filename, repo_type="dataset", token=HF_TOKEN)
         with open(downloaded, "r", encoding="utf-8") as f:
             RAM_VAULT[filename] = json.load(f)
-    except Exception:
+            logger.info(f"✅ Loaded {filename} from cloud.")
+    except EntryNotFoundError:
+        # File genuinely missing - use default
         RAM_VAULT[filename] = json.loads(json.dumps(default_data))
         _mark_json_dirty(filename)
+        logger.warning(f"⚠️ {filename} not found. Using default data (will be created on sync).")
+    except Exception as e:
+        # Handle temporary HF issues (503/504) - use cache without recreating
+        error_msg = str(e).lower()
+        if "503" in error_msg or "504" in error_msg or "service" in error_msg or "timeout" in error_msg or "gateway" in error_msg:
+            RAM_VAULT[filename] = json.loads(json.dumps(default_data))
+            logger.warning(f"🌐 HF temporarily unavailable for {filename} ({e}). Using temporary data cache. Will verify on next sync.")
+        else:
+            # Other errors - use default but mark for retry
+            RAM_VAULT[filename] = json.loads(json.dumps(default_data))
+            _mark_json_dirty(filename)
+            logger.warning(f"⚠️ Could not load {filename}: {e}. Using default data.")
     return RAM_VAULT[filename]
 
 
